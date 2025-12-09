@@ -1,5 +1,5 @@
 import User from "../models/user.models.js";
-import Rider from "../models/rider.models.js"; // Assuming you have this model
+import Rider from "../models/riders.models.js"; // Assuming you have this model
 import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 
@@ -10,36 +10,22 @@ import mongoose from "mongoose";
  */
 export const getMyProfile = async (req, res, next) => {
   try {
-    const user = req.user.toObject();
+    // req.user is already a plain object
+    const user = { ...req.user };
     
-    // Populate additional data based on role
-    let populatedUser = user;
-    
-    if (user.role === 'rider') {
-      // Populate rider profile
-      populatedUser = await User.findById(user._id)
-        .populate({
-          path: 'riderProfile',
-          select: '-_id vehicleType plateNumber isAvailable currentStatus rating'
-        })
-        .select('-password -refreshToken');
-    } else if (user.role === 'company_admin') {
-      // Populate company details
-      populatedUser = await User.findById(user._id)
-        .populate('companyId', 'name slug city status')
-        .select('-password -refreshToken');
-    }
+    // Remove sensitive data
+    delete user.password;
+    delete user.refreshToken;
 
     res.status(200).json({
       success: true,
       message: "Profile fetched successfully",
-      data: populatedUser,
+      data: user,
     });
   } catch (error) {
     next(error);
   }
 };
-
 /**
  * -------------------------------
  * UPDATE MY PROFILE

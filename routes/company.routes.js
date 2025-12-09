@@ -4,7 +4,7 @@ import {
   getCompanyRiders,
   deleteRider
 } from "../controllers/user.controller.js"; 
-import { authorize } from "../middlewares/authorize.js";
+import  authorize  from "../middlewares/authorize.js";
 import { isCompanyAdmin } from "../middlewares/isCompanyAdmin.js";
 
 const router = Router();

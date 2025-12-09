@@ -6,7 +6,7 @@ import {
   logout, 
   logoutAll 
 } from "../controllers/auth.controller.js";
-import authorize from "../middleware/authorize.js";
+import authorize from "../middlewares/authorize.js";
 
 const router = express.Router();
 

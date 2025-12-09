@@ -224,8 +224,7 @@ UserSchema.pre('save', function(next) {
       this.isVerified = true;
     }
   }
-  
-  next();
+ 
 });
 
 UserSchema.pre('find', function() {

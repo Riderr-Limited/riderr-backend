@@ -1,16 +1,18 @@
 import User from "../models/user.models.js";
+import Company from "../models/company.models.js"; // Add this import
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken"; // Add this import
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
-
+import mongoose from 'mongoose'
 /**
  * -------------------------------
- * SIGN UP
+ * SIGN UP (for customers and company registration)
  * -------------------------------
  */
 export const signUp = async (req, res, next) => {
   try {
     const { name, email, password, role, phone } = req.body;
-    const { companyId } = req.params; // from URL
+    const { companyId } = req.params; // from URL (for riders only)
 
     // 1. Check missing fields
     if (!name || !email || !password || !role || !phone) {
@@ -19,16 +21,16 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 2. Validate role
-    const validRoles = ["customer", "company_admin", "rider"];
+    // 2. Validate role - company registration is now allowed
+    const validRoles = ["customer", "company", "rider"];
     if (!validRoles.includes(role)) {
-      const error = new Error("Invalid role. Must be customer, company_admin, or rider");
+      const error = new Error("Invalid role. Must be customer, company, or rider");
       error.statusCode = 400;
       throw error;
     }
 
     // 3. Prevent admin creation via signup
-    if (role === "admin") {
+    if (role === "admin" || role === "company_admin") {
       const error = new Error("Admin users cannot be created via signup");
       error.statusCode = 403;
       throw error;
@@ -71,73 +73,164 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 8. Enforce companyId for riders
-    if (role === "rider") {
-      if (!companyId) {
-        const error = new Error("Riders must belong to a company");
-        error.statusCode = 400;
-        throw error;
-      }
-    }
+    // Start transaction for company registration
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // 9. For company_admin role, validate companyId from body if needed
-    if (role === "company_admin" && !req.body.companyId) {
-      const error = new Error("Company admins must have a companyId");
-      error.statusCode = 400;
+    try {
+      let newUser;
+      let company = null;
+
+      if (role === "company") {
+        // 8. For company registration, create company first
+        const { companyName, address, city, lga, contactPhone, contactEmail, lat, lng } = req.body.companyDetails;
+
+        if (!companyName || !city || !contactPhone) {
+          const error = new Error("Company name, city, and contact phone are required");
+          error.statusCode = 400;
+          throw error;
+        }
+
+        // Check if company already exists
+        const existingCompany = await Company.findOne({
+          $or: [
+            { name: companyName },
+            { contactEmail: contactEmail || email },
+            { contactPhone: contactPhone || phone }
+          ]
+        }).session(session);
+
+        if (existingCompany) {
+          const error = new Error("Company with this name, email or phone already exists");
+          error.statusCode = 409;
+          throw error;
+        }
+
+        // Create company
+        company = await Company.create([{
+          name: companyName,
+          address,
+          city,
+          lga,
+          contactPhone: contactPhone || phone,
+          contactEmail: contactEmail || email,
+          lat,
+          lng,
+          status: "pending" // Company needs admin approval
+        }], { session });
+
+        // Create company user with company_admin role
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
+        newUser = await User.create([{
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          password: hashedPassword,
+          phone,
+          role: "company_admin",
+          companyId: company[0]._id,
+          isVerified: false, // Needs admin verification
+          isActive: true,
+        }], { session });
+
+      } else if (role === "rider") {
+        // 9. Enforce companyId for riders
+        if (!companyId) {
+          const error = new Error("Riders must belong to a company");
+          error.statusCode = 400;
+          throw error;
+        }
+
+        // Verify company exists
+        const companyExists = await Company.findById(companyId).session(session);
+        if (!companyExists) {
+          const error = new Error("Company not found");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create rider user
+        newUser = await User.create([{
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          password: hashedPassword,
+          phone,
+          role: "rider",
+          companyId,
+          isVerified: false,
+          isActive: true,
+        }], { session });
+
+      } else {
+        // 10. For customer registration
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        newUser = await User.create([{
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          password: hashedPassword,
+          phone,
+          role: "customer",
+          companyId: null,
+          isVerified: true, // Customers auto-verified
+          isActive: true,
+        }], { session });
+      }
+
+      // 11. Generate tokens
+      const accessToken = generateAccessToken({ 
+        userId: newUser[0]._id, 
+        role: newUser[0].role 
+      });
+      
+      const refreshToken = generateRefreshToken({ 
+        userId: newUser[0]._id 
+      });
+
+      // 12. Save refresh token
+      newUser[0].refreshToken = refreshToken;
+      await newUser[0].save({ session });
+
+      // 13. Remove sensitive info
+      const userResponse = newUser[0].toObject();
+      delete userResponse.password;
+      delete userResponse.refreshToken;
+
+      // Add company info if created
+      if (company) {
+        userResponse.company = company[0];
+      }
+
+      // Commit transaction
+      await session.commitTransaction();
+
+      // 14. Send response
+      res.status(201).json({
+        success: true,
+        message: role === "company" ? "Company registration submitted for approval" : "User created successfully",
+        data: {
+          accessToken,
+          refreshToken,
+          user: userResponse
+        }
+      });
+
+    } catch (error) {
+      await session.abortTransaction();
       throw error;
+    } finally {
+      session.endSession();
     }
-
-    // 10. Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // 11. Create user
-    const newUser = await User.create({
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      password: hashedPassword,
-      phone,
-      role,
-      companyId: role === "rider" ? companyId : (role === "company_admin" ? req.body.companyId : null),
-      isVerified: role === "rider" ? false : true,
-      isActive: true,
-    });
-
-    // 12. Generate tokens
-    const accessToken = generateAccessToken({ 
-      userId: newUser._id, 
-      role: newUser.role 
-    });
-    
-    const refreshToken = generateRefreshToken({ 
-      userId: newUser._id 
-    });
-
-    // 13. Save refresh token
-    newUser.refreshToken = refreshToken;
-    await newUser.save();
-
-    // 14. Remove sensitive info
-    const userResponse = newUser.toObject();
-    delete userResponse.password;
-    delete userResponse.refreshToken;
-
-    // 15. Send response
-    res.status(201).json({
-      success: true,
-      message: "User created successfully",
-      data: {
-        accessToken,
-        refreshToken,
-        user: userResponse
-      }
-    });
 
   } catch (error) {
     next(error);
   }
 };
 
-/**
+ /**
  * -------------------------------
  * SIGN IN
  * -------------------------------

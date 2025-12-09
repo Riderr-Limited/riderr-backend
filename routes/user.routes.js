@@ -10,8 +10,8 @@ import {
   getAllUsers,
   updateUserStatus
 } from "../controllers/user.controller.js";
-import authorize from "../middleware/authorize.js";
-import authorizeRole from "../middleware/authorizeRole.js";
+import authorize from "../middlewares/authorize.js";
+import authorizeRole from "../middlewares/authorizeRole.js";
 
 const router = express.Router();
 
