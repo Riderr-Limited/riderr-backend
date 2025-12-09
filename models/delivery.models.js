@@ -109,4 +109,5 @@ const DeliverySchema = new mongoose.Schema(
 DeliverySchema.index({ "pickup.lat": 1, "pickup.lng": 1 });
 DeliverySchema.index({ "dropoff.lat": 1, "dropoff.lng": 1 });
 
-module.exports = mongoose.model("Delivery", DeliverySchema);
+const Delivery = mongoose.model("Delivery", DeliverySchema);
+export default Delivery;

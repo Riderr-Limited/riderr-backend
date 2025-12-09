@@ -59,4 +59,5 @@ const RiderSchema = new mongoose.Schema(
 
 RiderSchema.index({ "location": "2dsphere" });
 
-module.exports = mongoose.model("Rider", RiderSchema);
+const Rider = mongoose.model("Rider", RiderSchema);
+export default Rider;

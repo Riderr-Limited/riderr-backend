@@ -51,4 +51,5 @@ const CompanySchema = new mongoose.Schema(
 
 CompanySchema.index({ lat: 1, lng: 1 });
 
-module.exports = mongoose.model("Company", CompanySchema);
+const Company = mongoose.model("Company", CompanySchema);
+export default Company;
