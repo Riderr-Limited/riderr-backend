@@ -6,7 +6,7 @@ import morgan from "morgan";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import companyRegistrationRoutes from "./routes/companyRegistration.routes.js";
-import companyRoutes from "./routes/company.routes.js"; // Add this
+
 
 dotenv.config();
 
@@ -18,7 +18,11 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URL || "mongodb://localhost:27017/riderr_db")
+mongoose.connect(process.env.MONGODB_URL || "mongodb://localhost:27017/riderr_db", {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+})
   .then(() => console.log("✅ MongoDB connected successfully"))
   .catch(err => {
     console.error("❌ MongoDB connection failed:", err.message);
@@ -29,7 +33,7 @@ mongoose.connect(process.env.MONGODB_URL || "mongodb://localhost:27017/riderr_db
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/company-registrations", companyRegistrationRoutes);
-app.use("/api/companies", companyRoutes);  
+  
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({

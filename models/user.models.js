@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
-import validator from "validator"; // Install with: npm install validator
+import validator from "validator";
+import crypto from "crypto";
 
 const UserSchema = new mongoose.Schema(
   {
@@ -245,7 +246,6 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
 };
 
 UserSchema.methods.generatePasswordResetToken = function() {
-  const crypto = require('crypto');
   const resetToken = crypto.randomBytes(32).toString('hex');
   
   this.passwordResetToken = crypto
@@ -259,7 +259,6 @@ UserSchema.methods.generatePasswordResetToken = function() {
 };
 
 UserSchema.methods.generateEmailVerificationToken = function() {
-  const crypto = require('crypto');
   const verificationToken = crypto.randomBytes(32).toString('hex');
   
   this.emailVerificationToken = crypto

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-MONGODB_URL = process.env.MONGODB_URL;
+const MONGODB_URL = process.env.MONGODB_URL;
 
 
 if(!MONGODB_URL){
