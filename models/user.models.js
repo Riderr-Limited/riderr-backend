@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import validator from "validator"; // Install with: npm install validator
+import validator from "validator";  
 
 const UserSchema = new mongoose.Schema(
   {
