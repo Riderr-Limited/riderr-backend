@@ -1,6 +1,7 @@
 import express from "express";
 import authRoutes from "./auth.routes.js";
 import userRoutes from "./user.routes.js";
+import deliveryRoutes from "./delivery.routes.js";
 
 const router = express.Router();
 
@@ -44,6 +45,16 @@ router.get("/", (req, res) => {
         getUser: "GET /api/users/:id",
         getRiders: "GET /api/users/companies/:companyId/riders (company_admin)",
         getAllUsers: "GET /api/users (admin only)"
+      },
+      deliveries: {
+        create: "POST /api/deliveries (customer)",
+        getMyDeliveries: "GET /api/deliveries/my (customer)",
+        getRiderDeliveries: "GET /api/deliveries/rider (rider)",
+        getCompanyDeliveries: "GET /api/deliveries/company/:companyId (company_admin)",
+        assignDelivery: "PATCH /api/deliveries/:id/assign (company_admin)",
+        updateStatus: "PATCH /api/deliveries/:id/status (rider)",
+        getById: "GET /api/deliveries/:id",
+        getAllDeliveries: "GET /api/deliveries (admin)"
       }
     }
   });
@@ -52,6 +63,7 @@ router.get("/", (req, res) => {
 // Mount route modules
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
+router.use("/deliveries", deliveryRoutes);
 
 /**
  * @route   ALL /api/*

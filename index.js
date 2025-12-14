@@ -6,7 +6,8 @@ import morgan from "morgan";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import companyRegistrationRoutes from "./routes/companyRegistration.routes.js";
-import companyRoutes from "./routes/company.routes.js"; // Add this
+import companyRoutes from "./routes/company.routes.js";
+import deliveryRoutes from "./routes/delivery.routes.js";
 
 dotenv.config();
 
@@ -29,7 +30,8 @@ mongoose.connect(process.env.MONGODB_URL || "mongodb://localhost:27017/riderr_db
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/company-registrations", companyRegistrationRoutes);
-app.use("/api/companies", companyRoutes);  
+app.use("/api/companies", companyRoutes);
+app.use("/api/deliveries", deliveryRoutes);  
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({
@@ -51,6 +53,7 @@ app.get("/api", (req, res) => {
       users: "/api/users",
       company_registrations: "/api/company-registrations",
       companies: "/api/companies",
+      deliveries: "/api/deliveries",
       health: "/api/health"
     }
   });

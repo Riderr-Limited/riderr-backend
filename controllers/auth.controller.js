@@ -329,7 +329,7 @@ export const refreshToken = async (req, res, next) => {
     // Verify refresh token
     let decoded;
     try {
-      decoded = jwt.verify(oldRefreshToken, process.env.JWT_REFRESH_SECRET);
+      decoded = jwt.verify(oldRefreshToken, process.env.JWT_REFRESH_SECRET || process.env.REFRESH_SECRET);
     } catch (err) {
       const error = new Error("Invalid or expired refresh token");
       error.statusCode = 401;
