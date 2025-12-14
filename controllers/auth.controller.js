@@ -1,12 +1,13 @@
 import User from "../models/user.models.js";
-import Company from "../models/company.models.js"; // Add this import
+import Company from "../models/company.models.js";
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken"; // Add this import
+import jwt from "jsonwebtoken";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
+
 /**
  * -------------------------------
- * SIGN UP (for customers and company registration)
+ * SIGN UP (for customers, company, rider, and admin registration)
  * -------------------------------
  */
 export const signUp = async (req, res, next) => {
@@ -21,22 +22,15 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 2. Validate role - company registration is now allowed
-    const validRoles = ["customer", "company", "rider"];
+    // 2. Validate role
+    const validRoles = ["customer", "company", "rider", "admin"];
     if (!validRoles.includes(role)) {
-      const error = new Error("Invalid role. Must be customer, company, or rider");
+      const error = new Error("Invalid role. Must be customer, company, rider, or admin");
       error.statusCode = 400;
       throw error;
     }
 
-    // 3. Prevent admin creation via signup
-    if (role === "admin" || role === "company_admin") {
-      const error = new Error("Admin users cannot be created via signup");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    // 4. Validate email format
+    // 3. Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       const error = new Error("Invalid email format");
@@ -44,7 +38,7 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 5. Validate phone format
+    // 4. Validate phone format
     const phoneRegex = /^[+]?[\d\s\-\(\)]{10,}$/;
     if (!phoneRegex.test(phone)) {
       const error = new Error("Invalid phone number format");
@@ -52,7 +46,7 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 6. Password strength validation
+    // 5. Password strength validation
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
     if (!passwordRegex.test(password)) {
       const error = new Error(
@@ -62,7 +56,7 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // 7. Check if user already exists
+    // 6. Check if user already exists
     const existingUser = await User.findOne({
       $or: [{ email }, { phone }]
     });
@@ -73,7 +67,7 @@ export const signUp = async (req, res, next) => {
       throw error;
     }
 
-    // Start transaction for company registration
+    // Start transaction
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -82,7 +76,7 @@ export const signUp = async (req, res, next) => {
       let company = null;
 
       if (role === "company") {
-        // 8. For company registration, create company first
+        // 7. For company registration
         const { companyName, address, city, lga, contactPhone, contactEmail, lat, lng } = req.body.companyDetails;
 
         if (!companyName || !city || !contactPhone) {
@@ -116,7 +110,7 @@ export const signUp = async (req, res, next) => {
           contactEmail: contactEmail || email,
           lat,
           lng,
-          status: "pending" // Company needs admin approval
+          status: "pending"
         }], { session });
 
         // Create company user with company_admin role
@@ -129,12 +123,12 @@ export const signUp = async (req, res, next) => {
           phone,
           role: "company_admin",
           companyId: company[0]._id,
-          isVerified: false, // Needs admin verification
+          isVerified: false,
           isActive: true,
         }], { session });
 
       } else if (role === "rider") {
-        // 9. Enforce companyId for riders
+        // 8. For rider registration
         if (!companyId) {
           const error = new Error("Riders must belong to a company");
           error.statusCode = 400;
@@ -165,22 +159,25 @@ export const signUp = async (req, res, next) => {
         }], { session });
 
       } else {
-        // 10. For customer registration
+        // 9. For customer and admin registration
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // Determine verification based on role
+        const isVerified = role === "customer" || role === "admin" ? true : false;
+        
         newUser = await User.create([{
           name: name.trim(),
           email: email.trim().toLowerCase(),
           password: hashedPassword,
           phone,
-          role: "customer",
+          role: role, // Use the role from request body
           companyId: null,
-          isVerified: true, // Customers auto-verified
+          isVerified: isVerified,
           isActive: true,
         }], { session });
       }
 
-      // 11. Generate tokens
+      // 10. Generate tokens
       const accessToken = generateAccessToken({ 
         userId: newUser[0]._id, 
         role: newUser[0].role 
@@ -190,11 +187,11 @@ export const signUp = async (req, res, next) => {
         userId: newUser[0]._id 
       });
 
-      // 12. Save refresh token
+      // 11. Save refresh token
       newUser[0].refreshToken = refreshToken;
       await newUser[0].save({ session });
 
-      // 13. Remove sensitive info
+      // 12. Remove sensitive info
       const userResponse = newUser[0].toObject();
       delete userResponse.password;
       delete userResponse.refreshToken;
@@ -207,10 +204,17 @@ export const signUp = async (req, res, next) => {
       // Commit transaction
       await session.commitTransaction();
 
-      // 14. Send response
+      // 13. Send response
+      let message = "User created successfully";
+      if (role === "company") {
+        message = "Company registration submitted for approval";
+      } else if (role === "admin") {
+        message = "Admin account created successfully";
+      }
+
       res.status(201).json({
         success: true,
-        message: role === "company" ? "Company registration submitted for approval" : "User created successfully",
+        message: message,
         data: {
           accessToken,
           refreshToken,
@@ -230,7 +234,7 @@ export const signUp = async (req, res, next) => {
   }
 };
 
- /**
+/**
  * -------------------------------
  * SIGN IN
  * -------------------------------
@@ -252,7 +256,7 @@ export const signIn = async (req, res, next) => {
         { email: emailOrPhone },
         { phone: emailOrPhone }
       ]
-    });
+    }).select('+password');
 
     if (!user) {
       const error = new Error("Invalid credentials");

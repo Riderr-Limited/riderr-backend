@@ -6,9 +6,9 @@ import morgan from "morgan";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import companyRegistrationRoutes from "./routes/companyRegistration.routes.js";
-import companyRoutes from "./routes/company.routes.js";
+ import companyRoutes from "./routes/company.routes.js";
 import deliveryRoutes from "./routes/delivery.routes.js";
-
+  
 dotenv.config();
 
 const app = express();
