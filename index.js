@@ -7,6 +7,7 @@ import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import companyRegistrationRoutes from "./routes/companyRegistration.routes.js";
 import companyRoutes from "./routes/company.routes.js"; 
+ 
 
 dotenv.config();
 
@@ -30,6 +31,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/company-registrations", companyRegistrationRoutes);
 app.use("/api/companies", companyRoutes);  
+ 
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({
@@ -41,6 +44,8 @@ app.get("/api/health", (req, res) => {
 });
 
 // API info
+
+// Update API info endpoint
 app.get("/api", (req, res) => {
   res.json({
     success: true,
@@ -48,6 +53,7 @@ app.get("/api", (req, res) => {
     version: "1.0.0",
     endpoints: {
       auth: "/api/auth",
+      verification: "/api/verification",
       users: "/api/users",
       company_registrations: "/api/company-registrations",
       companies: "/api/companies",
@@ -55,7 +61,6 @@ app.get("/api", (req, res) => {
     }
   });
 });
-
 // Root
 app.get("/", (req, res) => {
   res.json({ 
