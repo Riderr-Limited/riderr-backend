@@ -37,9 +37,9 @@ const UserSchema = new mongoose.Schema(
       index: true,
       validate: {
         validator: function(value) {
-          return /^[0-9]{10,15}$/.test(value.replace(/[\s\-\(\)]/g, ''));
+          return /^[+]?[\d\s\-\(\)]{10,}$/.test(value);
         },
-        message: "Please provide a valid phone number (10-15 digits)"
+        message: "Please provide a valid phone number"
       }
     },
 
@@ -85,6 +85,22 @@ const UserSchema = new mongoose.Schema(
       default: Date.now
     },
 
+    // Phone verification
+    phoneVerificationCode: {
+      type: String,
+      default: null
+    },
+
+    phoneVerificationExpires: {
+      type: Date,
+      default: null
+    },
+
+    phoneVerifiedAt: {
+      type: Date,
+      default: null
+    },
+
     // Email verification
     emailVerificationToken: {
       type: String,
@@ -123,22 +139,22 @@ UserSchema.pre('save', async function(next) {
     // Trim strings
     if (this.name) this.name = this.name.trim();
     if (this.email) this.email = this.email.trim().toLowerCase();
-    if (this.phone) this.phone = this.phone.replace(/[\s\-\(\)]/g, '');
+    if (this.phone) this.phone = this.phone.trim();
     
     // Set defaults based on role
     if (this.isNew) {
       if (this.role === 'admin') {
         this.isVerified = true;
         this.isActive = true;
-        this.emailVerificationToken = null;
-        this.emailVerificationExpires = null;
       }
     }
     
+    // Call next if it's a function
     if (next && typeof next === 'function') {
       next();
     }
   } catch (error) {
+    // If next is not a function, just continue
     console.log('Pre-save middleware completed');
   }
 });
