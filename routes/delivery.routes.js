@@ -1,16 +1,18 @@
 import express from "express";
+import authorize from "../middlewares/authorize.js";
+import authorizeRole from "../middlewares/authorizeRole.js";
+
+// Import delivery controller functions
 import {
   createDelivery,
   getMyDeliveries,
   getCompanyDeliveries,
-  assignDelivery,
-  updateDeliveryStatus,
   getRiderDeliveries,
   getDeliveryById,
-  getAllDeliveries
+  getAllDeliveries,
+  assignDelivery,
+  updateDeliveryStatus
 } from "../controllers/delivery.controller.js";
-import authorize from "../middlewares/authorize.js";
-import authorizeRole from "../middlewares/authorizeRole.js";
 
 const router = express.Router();
 
@@ -64,42 +66,6 @@ router.get("/company/:companyId", authorizeRole(["company_admin"]), getCompanyDe
  * @access  Private (company_admin only)
  */
 router.patch("/:deliveryId/assign", authorizeRole(["company_admin"]), assignDelivery);
-
-/**
- * @route   PATCH /api/deliveries/:deliveryId/cancel
- * @desc    Cancel delivery
- * @access  Private (customer, company_admin, admin)
- */
-router.patch("/:deliveryId/cancel", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Cancel delivery endpoint - to be implemented"
-  });
-});
-
-/**
- * @route   PATCH /api/deliveries/:deliveryId/match
- * @desc    Match delivery to company
- * @access  Private (admin only)
- */
-router.patch("/:deliveryId/match", authorizeRole(["admin"]), (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Match delivery endpoint - to be implemented"
-  });
-});
-
-/**
- * @route   POST /api/deliveries/:deliveryId/rating
- * @desc    Rate delivery (customer rates rider/company)
- * @access  Private (customer only)
- */
-router.post("/:deliveryId/rating", authorizeRole(["customer"]), (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Rate delivery endpoint - to be implemented"
-  });
-});
 
 // ================== ADMIN ROUTES ==================
 

@@ -1,68 +1,108 @@
-import Delivery from "../models/delivery.models.js";
 import User from "../models/user.models.js";
-import Rider from "../models/riders.models.js";
+import Rider from "../models/ride.model.js";
+import Company from "../models/company.models.js";
 import mongoose from "mongoose";
 
 /**
- * CREATE DELIVERY (Customer only)
+ * @desc    Create a new delivery
+ * @route   POST /api/deliveries
+ * @access  Private (Customer)
  */
-export const createDelivery = async (req, res, next) => {
+export const createDelivery = async (req, res) => {
   try {
     const customer = req.user;
     
     if (customer.role !== "customer") {
-      const error = new Error("Only customers can create deliveries");
-      error.statusCode = 403;
-      throw error;
+      return res.status(403).json({
+        success: false,
+        message: "Only customers can create deliveries"
+      });
     }
 
     const {
-      pickup, dropoff, type, weightKg, price, companyId,
-      estimatedDistanceMeters, estimatedDurationSec, payment
+      pickupAddress, pickupLat, pickupLng, pickupLandmark, pickupInstructions,
+      dropoffAddress, dropoffLat, dropoffLng, dropoffLandmark, dropoffInstructions,
+      itemType, itemDescription, itemWeight, itemValue,
+      customerName, customerPhone, recipientName, recipientPhone,
+      estimatedDistance, estimatedDuration, deliveryInstructions,
+      specialRequests, requiresReturn, returnInstructions
     } = req.body;
 
     // Validate required fields
-    if (!pickup?.address || !pickup?.lat || !pickup?.lng ||
-        !dropoff?.address || !dropoff?.lat || !dropoff?.lng ||
-        !type) {
-      const error = new Error("Pickup, dropoff locations and delivery type are required");
-      error.statusCode = 400;
-      throw error;
+    if (!pickupAddress || !pickupLat || !pickupLng ||
+        !dropoffAddress || !dropoffLat || !dropoffLng ||
+        !itemType || !customerName || !customerPhone || !recipientName || !recipientPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields"
+      });
     }
 
-    // Generate reference ID
-    const referenceId = `DEL-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-
-    const delivery = await Delivery.create({
-      referenceId,
+    // Create delivery
+    const delivery = new Delivery({
       customerId: customer._id,
-      companyId: companyId || null,
-      pickup,
-      dropoff,
-      type,
-      weightKg,
-      price,
-      estimatedDistanceMeters,
-      estimatedDurationSec,
-      payment: payment || { method: "cod", status: "pending" },
-      status: "created"
+      customerName,
+      customerPhone,
+      recipientName,
+      recipientPhone,
+      pickup: {
+        address: pickupAddress,
+        location: {
+          type: 'Point',
+          coordinates: [parseFloat(pickupLng), parseFloat(pickupLat)]
+        },
+        landmark: pickupLandmark,
+        instructions: pickupInstructions
+      },
+      dropoff: {
+        address: dropoffAddress,
+        location: {
+          type: 'Point',
+          coordinates: [parseFloat(dropoffLng), parseFloat(dropoffLat)]
+        },
+        landmark: dropoffLandmark,
+        instructions: dropoffInstructions
+      },
+      itemType,
+      itemDescription,
+      itemWeight: itemWeight || 1,
+      itemValue: itemValue || 0,
+      estimatedDistance: estimatedDistance || 5000,
+      estimatedDuration: estimatedDuration || 600,
+      deliveryInstructions,
+      specialRequests: specialRequests || [],
+      requiresReturn: requiresReturn || false,
+      returnInstructions,
+      status: 'pending',
+      metadata: {
+        platform: req.headers['x-platform'] || 'web',
+        ipAddress: req.ip
+      }
     });
+
+    await delivery.save();
 
     res.status(201).json({
       success: true,
-      message: "Delivery created successfully",
+      message: "Delivery request created successfully",
       data: delivery
     });
 
   } catch (error) {
-    next(error);
+    console.error("Create delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
   }
 };
 
 /**
- * GET MY DELIVERIES (Customer)
+ * @desc    Get customer's deliveries
+ * @route   GET /api/deliveries/my
+ * @access  Private (Customer)
  */
-export const getMyDeliveries = async (req, res, next) => {
+export const getMyDeliveries = async (req, res) => {
   try {
     const customer = req.user;
     const page = parseInt(req.query.page) || 1;
@@ -75,6 +115,258 @@ export const getMyDeliveries = async (req, res, next) => {
 
     const [deliveries, total] = await Promise.all([
       Delivery.find(query)
+        .populate('companyId', 'name contactPhone')
+        .populate({
+          path: 'riderId',
+          populate: { 
+            path: 'userId', 
+            select: 'name phone avatarUrl' 
+          }
+        })
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 }),
+      Delivery.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPrevPage: page > 1
+      }
+    });
+
+  } catch (error) {
+    console.error("Get my deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
+  }
+};
+
+/**
+ * @desc    Get company's deliveries
+ * @route   GET /api/deliveries/company/:companyId
+ * @access  Private (Company Admin)
+ */
+export const getCompanyDeliveries = async (req, res) => {
+  try {
+    const admin = req.user;
+    const { companyId } = req.params;
+    
+    if (admin.role !== "company_admin" && admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+    
+    if (admin.role === "company_admin" && admin.companyId?.toString() !== companyId) {
+      return res.status(403).json({
+        success: false,
+        message: "Cannot access another company's deliveries"
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const status = req.query.status;
+
+    const query = { companyId };
+    if (status) query.status = status;
+
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate('customerId', 'name phone')
+        .populate({
+          path: 'riderId',
+          populate: { path: 'userId', select: 'name phone' }
+        })
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 }),
+      Delivery.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error("Get company deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
+  }
+};
+
+/**
+ * @desc    Get rider's deliveries
+ * @route   GET /api/deliveries/rider
+ * @access  Private (Rider)
+ */
+export const getRiderDeliveries = async (req, res) => {
+  try {
+    const riderUser = req.user;
+    
+    if (riderUser.role !== "rider") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+
+    const rider = await Rider.findOne({ userId: riderUser._id });
+    if (!rider) {
+      return res.status(404).json({
+        success: false,
+        message: "Rider profile not found"
+      });
+    }
+
+    const status = req.query.status;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const query = { riderId: rider._id };
+    if (status) query.status = status;
+
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate('customerId', 'name phone')
+        .populate('companyId', 'name')
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 }),
+      Delivery.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error("Get rider deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
+  }
+};
+
+/**
+ * @desc    Get delivery by ID
+ * @route   GET /api/deliveries/:deliveryId
+ * @access  Private
+ */
+export const getDeliveryById = async (req, res) => {
+  try {
+    const user = req.user;
+    const { deliveryId } = req.params;
+
+    const delivery = await Delivery.findById(deliveryId)
+      .populate('customerId', 'name phone email')
+      .populate('companyId', 'name contactPhone')
+      .populate({
+        path: 'riderId',
+        populate: { path: 'userId', select: 'name phone' }
+      });
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found"
+      });
+    }
+
+    // Check access permissions
+    let hasAccess = false;
+
+    if (user.role === "admin") {
+      hasAccess = true;
+    } else if (user.role === "customer" && delivery.customerId._id.toString() === user._id.toString()) {
+      hasAccess = true;
+    } else if (user.role === "rider") {
+      const rider = await Rider.findOne({ userId: user._id });
+      if (rider && delivery.riderId?._id.toString() === rider._id.toString()) {
+        hasAccess = true;
+      }
+    } else if (user.role === "company_admin" && delivery.companyId?._id.toString() === user.companyId?.toString()) {
+      hasAccess = true;
+    }
+
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: delivery
+    });
+
+  } catch (error) {
+    console.error("Get delivery by ID error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
+  }
+};
+
+/**
+ * @desc    Get all deliveries (Admin)
+ * @route   GET /api/deliveries
+ * @access  Private (Admin)
+ */
+export const getAllDeliveries = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin access required"
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    const status = req.query.status;
+    const companyId = req.query.companyId;
+
+    const query = {};
+    if (status) query.status = status;
+    if (companyId) query.companyId = companyId;
+
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate('customerId', 'name phone')
         .populate('companyId', 'name')
         .populate({
           path: 'riderId',
@@ -90,321 +382,246 @@ export const getMyDeliveries = async (req, res, next) => {
       success: true,
       data: deliveries,
       pagination: {
-        total, page, limit,
+        total,
+        page,
+        limit,
         pages: Math.ceil(total / limit)
       }
     });
 
   } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * GET COMPANY DELIVERIES (Company Admin)
- */
-export const getCompanyDeliveries = async (req, res, next) => {
-  try {
-    const admin = req.user;
-    const { companyId } = req.params;
-    
-    if (admin.role !== "company_admin" || admin.companyId.toString() !== companyId) {
-      const error = new Error("Access denied");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    const [deliveries, total] = await Promise.all([
-      Delivery.find({ companyId })
-        .populate('customerId', 'name phone')
-        .populate({
-          path: 'riderId',
-          populate: { path: 'userId', select: 'name phone' }
-        })
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 }),
-      Delivery.countDocuments({ companyId })
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: deliveries,
-      pagination: { total, page, limit, pages: Math.ceil(total / limit) }
+    console.error("Get all deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
     });
-
-  } catch (error) {
-    next(error);
   }
 };
 
 /**
- * ASSIGN DELIVERY TO RIDER (Company Admin)
+ * @desc    Assign delivery to rider
+ * @route   PATCH /api/deliveries/:deliveryId/assign
+ * @access  Private (Company Admin)
  */
-export const assignDelivery = async (req, res, next) => {
+export const assignDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const admin = req.user;
     const { deliveryId } = req.params;
     const { riderId } = req.body;
 
     const delivery = await Delivery.findById(deliveryId).session(session);
     
     if (!delivery) {
-      const error = new Error("Delivery not found");
-      error.statusCode = 404;
-      throw error;
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found"
+      });
     }
 
-    if (admin.role !== "company_admin" || 
-        admin.companyId.toString() !== delivery.companyId?.toString()) {
-      const error = new Error("Access denied");
-      error.statusCode = 403;
-      throw error;
+    if (delivery.status !== 'pending') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Delivery cannot be assigned"
+      });
     }
 
-    // Verify rider belongs to company
-    const rider = await Rider.findOne({ 
-      _id: riderId, 
-      companyId: admin.companyId 
-    }).session(session);
-
+    const rider = await Rider.findById(riderId).session(session);
     if (!rider) {
-      const error = new Error("Rider not found in your company");
-      error.statusCode = 404;
-      throw error;
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Rider not found"
+      });
     }
 
-    // Update delivery
+    if (!rider.isAvailable) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Rider is not available"
+      });
+    }
+
+    // Check if rider is in same company (if delivery has company assigned)
+    if (delivery.companyId && rider.companyId?.toString() !== delivery.companyId.toString()) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Rider does not belong to this company"
+      });
+    }
+
+    // Assign delivery to rider
     delivery.riderId = riderId;
-    delivery.status = "assigned";
+    if (!delivery.companyId && rider.companyId) {
+      delivery.companyId = rider.companyId;
+    }
+    delivery.status = 'assigned';
+    delivery.assignedAt = new Date();
     await delivery.save({ session });
 
     // Update rider status
-    rider.currentStatus = "assigned";
+    rider.currentDeliveryId = delivery._id;
     rider.isAvailable = false;
     await rider.save({ session });
 
     await session.commitTransaction();
 
+    // Populate delivery data
+    await delivery.populate([
+      { path: 'customerId', select: 'name phone' },
+      { 
+        path: 'riderId',
+        populate: { path: 'userId', select: 'name phone' }
+      }
+    ]);
+
     res.status(200).json({
       success: true,
-      message: "Delivery assigned successfully",
+      message: "Delivery assigned to rider successfully",
       data: delivery
     });
 
   } catch (error) {
     await session.abortTransaction();
-    next(error);
+    console.error("Assign delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
   } finally {
     session.endSession();
   }
 };
 
 /**
- * UPDATE DELIVERY STATUS (Rider)
+ * @desc    Update delivery status
+ * @route   PATCH /api/deliveries/:deliveryId/status
+ * @access  Private (Rider)
  */
-export const updateDeliveryStatus = async (req, res, next) => {
-  try {
-    const rider = req.user;
-    const { deliveryId } = req.params;
-    const { status, proof } = req.body;
+export const updateDeliveryStatus = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    if (rider.role !== "rider") {
-      const error = new Error("Only riders can update delivery status");
-      error.statusCode = 403;
-      throw error;
+  try {
+    const riderUser = req.user;
+    const { deliveryId } = req.params;
+    const { status, location } = req.body;
+
+    if (!['picked_up', 'in_transit', 'delivered', 'returned', 'failed'].includes(status)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status"
+      });
     }
 
-    // Find rider record first
-    const riderRecord = await Rider.findOne({ userId: rider._id });
-    if (!riderRecord) {
-      const error = new Error("Rider profile not found");
-      error.statusCode = 404;
-      throw error;
+    const rider = await Rider.findOne({ userId: riderUser._id }).session(session);
+    if (!rider) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Rider profile not found"
+      });
     }
 
     const delivery = await Delivery.findOne({
       _id: deliveryId,
-      riderId: riderRecord._id
-    });
+      riderId: rider._id
+    }).session(session);
 
     if (!delivery) {
-      const error = new Error("Delivery not found or not assigned to you");
-      error.statusCode = 404;
-      throw error;
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found"
+      });
     }
 
+    // Validate status transition
     const validTransitions = {
-      "created": ["matched", "cancelled"],
-      "matched": ["assigned", "cancelled"],
-      "assigned": ["accepted", "cancelled"],
-      "accepted": ["picked", "cancelled"],
-      "picked": ["in_transit", "cancelled"],
-      "in_transit": ["delivered", "cancelled"]
+      'assigned': ['picked_up', 'cancelled'],
+      'picked_up': ['in_transit', 'returned'],
+      'in_transit': ['delivered', 'failed', 'returned'],
+      'delivered': [],
+      'returned': [],
+      'failed': [],
+      'cancelled': []
     };
 
     if (!validTransitions[delivery.status]?.includes(status)) {
-      const error = new Error(`Cannot change status from ${delivery.status} to ${status}`);
-      error.statusCode = 400;
-      throw error;
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status transition from ${delivery.status} to ${status}`
+      });
     }
 
+    // Update delivery status
     delivery.status = status;
     
-    if (status === "delivered" && proof) {
-      delivery.proof = {
-        ...proof,
-        deliveredAt: new Date()
+    // Update timestamps based on status
+    if (status === 'picked_up') {
+      delivery.pickedUpAt = new Date();
+    } else if (status === 'in_transit') {
+      delivery.inTransitAt = new Date();
+    } else if (status === 'delivered') {
+      delivery.deliveredAt = new Date();
+    } else if (status === 'returned') {
+      delivery.returnedAt = new Date();
+    } else if (status === 'failed') {
+      delivery.failedAt = new Date();
+    }
+
+    // Update tracking location if provided
+    if (location && location.lat && location.lng) {
+      delivery.currentLocation = {
+        type: 'Point',
+        coordinates: [parseFloat(location.lng), parseFloat(location.lat)],
+        timestamp: new Date()
       };
+      delivery.trackingHistory.push(delivery.currentLocation);
     }
 
-    await delivery.save();
+    await delivery.save({ session });
+
+    // If delivery is completed, make rider available again
+    if (['delivered', 'returned', 'failed'].includes(status)) {
+      rider.currentDeliveryId = null;
+      rider.isAvailable = true;
+      rider.totalDeliveries = (rider.totalDeliveries || 0) + 1;
+      await rider.save({ session });
+    }
+
+    await session.commitTransaction();
 
     res.status(200).json({
       success: true,
-      message: "Delivery status updated successfully",
+      message: `Delivery status updated to ${status}`,
       data: delivery
     });
 
   } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * GET RIDER DELIVERIES (Rider)
- */
-export const getRiderDeliveries = async (req, res, next) => {
-  try {
-    const rider = req.user;
-    
-    if (rider.role !== "rider") {
-      const error = new Error("Only riders can access this endpoint");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    const status = req.query.status;
-    // Find rider record first
-    const riderRecord = await Rider.findOne({ userId: rider._id });
-    if (!riderRecord) {
-      const error = new Error("Rider profile not found");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    const query = { riderId: riderRecord._id };
-    if (status) query.status = status;
-
-    const deliveries = await Delivery.find(query)
-      .populate('customerId', 'name phone')
-      .populate('companyId', 'name')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      data: deliveries
+    await session.abortTransaction();
+    console.error("Update delivery status error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
     });
-
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * GET DELIVERY BY ID
- */
-export const getDeliveryById = async (req, res, next) => {
-  try {
-    const user = req.user;
-    const { deliveryId } = req.params;
-
-    const delivery = await Delivery.findById(deliveryId)
-      .populate('customerId', 'name phone')
-      .populate('companyId', 'name')
-      .populate({
-        path: 'riderId',
-        populate: { path: 'userId', select: 'name phone' }
-      });
-
-    if (!delivery) {
-      const error = new Error("Delivery not found");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    // Check access permissions
-    let isRiderOwner = false;
-    if (delivery.riderId && user.role === "rider") {
-      const riderRecord = await Rider.findOne({ _id: delivery.riderId, userId: user._id });
-      isRiderOwner = !!riderRecord;
-    }
-
-    const hasAccess = 
-      user.role === "admin" ||
-      delivery.customerId._id.toString() === user._id.toString() ||
-      isRiderOwner ||
-      (user.role === "company_admin" && delivery.companyId?._id.toString() === user.companyId?.toString());
-
-    if (!hasAccess) {
-      const error = new Error("Access denied");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    res.status(200).json({
-      success: true,
-      data: delivery
-    });
-
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * ADMIN: GET ALL DELIVERIES
- */
-export const getAllDeliveries = async (req, res, next) => {
-  try {
-    if (req.user.role !== "admin") {
-      const error = new Error("Admin access required");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    const [deliveries, total] = await Promise.all([
-      Delivery.find()
-        .populate('customerId', 'name phone')
-        .populate('companyId', 'name')
-        .populate({
-          path: 'riderId',
-          populate: { path: 'userId', select: 'name phone' }
-        })
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 }),
-      Delivery.countDocuments()
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: deliveries,
-      pagination: { total, page, limit, pages: Math.ceil(total / limit) }
-    });
-
-  } catch (error) {
-    next(error);
+  } finally {
+    session.endSession();
   }
 };

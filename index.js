@@ -1,99 +1,108 @@
-import express from "express";
-import dotenv from "dotenv";
-import mongoose from "mongoose";
-import cors from "cors";
-import morgan from "morgan";
-import authRoutes from "./routes/auth.routes.js";
-import userRoutes from "./routes/user.routes.js";
-import companyRegistrationRoutes from "./routes/companyRegistration.routes.js";
- import companyRoutes from "./routes/company.routes.js";
-import deliveryRoutes from "./routes/delivery.routes.js";
-  
+import mongoose from 'mongoose';
+import app from './app.js';
+import dotenv from 'dotenv';
+
+// Load environment variables
 dotenv.config();
 
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(morgan("dev"));
-
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URL || "mongodb://localhost:27017/riderr_db")
-  .then(() => console.log("✅ MongoDB connected successfully"))
-  .catch(err => {
-    console.error("❌ MongoDB connection failed:", err.message);
-    process.exit(1);
-  });
-
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/company-registrations", companyRegistrationRoutes);
-app.use("/api/companies", companyRoutes);
-app.use("/api/deliveries", deliveryRoutes);  
-// Health check
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
-    message: "API is healthy",
-    timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
-  });
-});
-
-// API info
-
-// Update API info endpoint
-app.get("/api", (req, res) => {
-  res.json({
-    success: true,
-    message: "Delivery Service API",
-    version: "1.0.0",
-    endpoints: {
-      auth: "/api/auth",
-      verification: "/api/verification",
-      users: "/api/users",
-      company_registrations: "/api/company-registrations",
-      companies: "/api/companies",
-      deliveries: "/api/deliveries",
-      health: "/api/health"
-    }
-  });
-});
-// Root
-app.get("/", (req, res) => {
-  res.json({ 
-    success: true,
-    message: "Riderr Backend API", 
-    version: "1.0.0",
-    documentation: "/api"
-  });
-});
-
-  
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error("Error:", err);
-  
-  const statusCode = err.statusCode || 500;
-  const message = err.message || "Internal server error";
-  
-  res.status(statusCode).json({
-    success: false,
-    message,
-    ...(process.env.NODE_ENV === 'development' && { error: err.stack })
-  });
-});
-
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () =>
-  console.log(`
-🚀 Server running on port ${PORT}
-🌍 Environment: ${process.env.NODE_ENV || 'development'}
-🔗 Local: http://localhost:${PORT}
-🔗 API: http://localhost:${PORT}/api
-🔗 Health: http://localhost:${PORT}/api/health
-`)
-);
+const MONGODB_URL = process.env.MONGODB_URL || 'mongodb://localhost:27017/riderr';
+
+/**
+ * Connect to MongoDB
+ */
+const connectDB = async () => {
+  try {
+    const conn = await mongoose.connect(MONGODB_URL);
+    
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    console.log(`📊 Database: ${conn.connection.name}`);
+    
+    // Handle connection events
+    mongoose.connection.on('error', (err) => {
+      console.error('❌ MongoDB connection error:', err);
+    });
+    
+    mongoose.connection.on('disconnected', () => {
+      console.warn('⚠️ MongoDB disconnected');
+    });
+    
+    mongoose.connection.on('reconnected', () => {
+      console.log('🔄 MongoDB reconnected');
+    });
+    
+  } catch (error) {
+    console.error('❌ MongoDB Connection Error:', error);
+    console.error('💡 Make sure MongoDB is running and accessible');
+    process.exit(1);
+  }
+};
+/**
+ * Graceful shutdown
+ */
+const gracefulShutdown = async () => {
+  console.log('🛑 Received shutdown signal, closing connections...');
+  
+  try {
+    await mongoose.connection.close();
+    console.log('✅ MongoDB connection closed');
+    
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
+/**
+ * Start Server
+ */
+const startServer = async () => {
+  try {
+    // Connect to database
+    await connectDB();
+    
+    // Start the server
+    const server = app.listen(PORT, () => {
+      console.log('\n' + '='.repeat(50));
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`📡 API available at: http://localhost:${PORT}/api`);
+      console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
+      console.log('='.repeat(50) + '\n');
+    });
+    
+    // Handle server errors
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use`);
+      } else {
+        console.error('❌ Server error:', error);
+      }
+      process.exit(1);
+    });
+    
+    // Handle graceful shutdown
+    process.on('SIGTERM', gracefulShutdown);
+    process.on('SIGINT', gracefulShutdown);
+    
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+  console.error('❌ Unhandled Rejection:', error);
+  process.exit(1);
+});
+
+// Start the server
+startServer();

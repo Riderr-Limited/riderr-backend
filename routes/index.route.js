@@ -1,8 +1,8 @@
-import express from "express";
+import express from 'express'
 import authRoutes from "./auth.routes.js";
 import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
-
+import rideRoutes from "./ride.routes.js"; 
 const router = express.Router();
 
 /**
@@ -46,6 +46,16 @@ router.get("/", (req, res) => {
         getRiders: "GET /api/users/companies/:companyId/riders (company_admin)",
         getAllUsers: "GET /api/users (admin only)"
       },
+      rides: {
+        createRide: "POST /api/rides",
+        myRides: "GET /api/rides/my-rides",
+        activeRide: "GET /api/rides/active",
+        getRideById: "GET /api/rides/:id",
+        acceptRide: "POST /api/rides/:rideId/accept",
+        startRide: "POST /api/rides/:rideId/start",
+        completeRide: "POST /api/rides/:rideId/complete",
+        cancelRide: "POST /api/rides/:rideId/cancel"
+      },
       deliveries: {
         create: "POST /api/deliveries (customer)",
         getMyDeliveries: "GET /api/deliveries/my (customer)",
@@ -63,20 +73,13 @@ router.get("/", (req, res) => {
 // Mount route modules
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
+router.use("/rides", rideRoutes); // Added this line
 router.use("/deliveries", deliveryRoutes);
 
 /**
- * @route   ALL /api/*
+ * @route   ALL *
  * @desc    404 handler for undefined API routes
  * @access  Public
  */
-router.use("*", (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "API endpoint not found",
-    path: req.originalUrl,
-    suggestion: "Check /api for available endpoints"
-  });
-});
-
+ 
 export default router;
