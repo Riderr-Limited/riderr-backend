@@ -303,14 +303,15 @@ export const signUp = async (req, res) => {
 
     if (role === "company_admin") {
       // Company registration
-      const { companyName, address, city, state, lga, businessLicense, taxId } = req.body;
+      const { companyName, address, city, state, lga, businessLicense, taxId, 
+              bankName, accountName, accountNumber, companyPhone } = req.body; // Added companyPhone
 
-      if (!companyName || !city || !state || !businessLicense || !taxId) {
+      if (!companyName || !city || !state || !businessLicense || !taxId || !companyPhone) {
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
           success: false,
-          message: "Company details required: name, city, state, business license, tax ID"
+          message: "Company details required: name, city, state, business license, tax ID, company phone"
         });
       }
 
@@ -341,10 +342,15 @@ export const signUp = async (req, res) => {
         lga,
         businessLicense,
         taxId,
-        contactPhone: phone,
+        contactPhone: companyPhone, // Use separate company phone
         contactEmail: email,
         password: hashedPassword,
-        status: "pending"
+        status: "pending",
+        bankDetails: {
+          bankName,
+          accountName,
+          accountNumber
+        }
       }], { session });
 
       // Create company admin user

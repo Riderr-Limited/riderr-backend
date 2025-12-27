@@ -229,6 +229,17 @@ const CompanySchema = new mongoose.Schema(
       }
     },
     
+    // Banking Information
+    bankDetails: {
+      accountName: String,
+      accountNumber: String,
+      bankName: String,
+      verified: {
+        type: Boolean,
+        default: false
+      }
+    },
+    
     // Account status
     isActive: {
       type: Boolean,
