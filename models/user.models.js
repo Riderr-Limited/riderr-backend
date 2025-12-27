@@ -247,12 +247,7 @@ UserSchema.pre('save', async function(next) {
       this.phone = this.phone.trim().replace(/[\s\-\(\)]/g, '');
     }
     
-    // Hash password if modified
-    if (this.isModified('password')) {
-      const salt = await bcrypt.genSalt(10);
-      this.password = await bcrypt.hash(this.password, salt);
-    }
-    
+     
     // Set defaults based on role
     if (this.isNew) {
       if (this.role === 'admin') {

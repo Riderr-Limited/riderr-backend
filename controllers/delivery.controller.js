@@ -1,6 +1,7 @@
 import User from "../models/user.models.js";
 import Rider from "../models/ride.model.js";
 import Company from "../models/company.models.js";
+import Delivery from "../models/delivery.models.js";
 import mongoose from "mongoose";
 
 /**

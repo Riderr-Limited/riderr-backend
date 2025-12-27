@@ -541,14 +541,21 @@ export const signUp = async (req, res) => {
  * @route   POST /api/auth/login
  * @access  Public
  */
+/**
+ * @desc    Sign in user
+ * @route   POST /api/auth/login
+ * @access  Public
+ */
 export const signIn = async (req, res) => {
   try {
-    console.log('🔑 Login request:', req.body);
+    console.log('🔑 Login request body:', JSON.stringify(req.body, null, 2));
     
     const { email, phone, password, emailOrPhone } = req.body;
 
-    // Handle both formats
+    // Determine the identifier - FIXED LOGIC
     let userIdentifier;
+    
+    // Priority: Use emailOrPhone if provided
     if (emailOrPhone) {
       userIdentifier = emailOrPhone;
     } else if (email) {
@@ -558,45 +565,87 @@ export const signIn = async (req, res) => {
     }
 
     if (!userIdentifier || !password) {
+      console.log('❌ Missing credentials:', { userIdentifier, hasPassword: !!password });
       return res.status(400).json({
         success: false,
         message: "Email/Phone and password are required"
       });
     }
 
-    console.log('🔍 Looking for user:', userIdentifier);
+    console.log('🔍 Looking for user with identifier:', userIdentifier);
 
-    // Find user by email or phone
-    let user;
-    if (userIdentifier.includes('@')) {
-      user = await User.findOne({ email: userIdentifier.toLowerCase() }).select('+password');
-    } else {
-      user = await User.findOne({ phone: userIdentifier }).select('+password');
-    }
+    // Find user by email or phone - IMPROVED SEARCH
+    const query = {
+      $or: [
+        { email: userIdentifier.toLowerCase().trim() },
+        { phone: userIdentifier.trim() }
+      ]
+    };
 
+    console.log('📋 Search query:', JSON.stringify(query, null, 2));
+
+    const user = await User.findOne(query).select('+password +failedLoginAttempts +isLocked');
+    
     if (!user) {
-      console.log('❌ User not found:', userIdentifier);
+      console.log('❌ User not found with query:', query);
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password"
+        message: "Invalid email or password",
+        debug: process.env.NODE_ENV === 'development' ? { query } : undefined
       });
     }
 
-    console.log('✅ User found:', user.email);
+    console.log('✅ User found:', {
+      _id: user._id,
+      email: user.email,
+      phone: user.phone,
+      isActive: user.isActive,
+      isLocked: user.isLocked,
+      isVerified: user.isVerified,
+      failedLoginAttempts: user.failedLoginAttempts
+    });
+
+    // Check if account is locked
+    if (user.isLocked) {
+      console.log('🔒 Account is locked for user:', user.email);
+      return res.status(403).json({
+        success: false,
+        message: "Account is locked due to too many failed attempts"
+      });
+    }
 
     // Check if account is active
     if (!user.isActive) {
+      console.log('❌ Account is deactivated for user:', user.email);
       return res.status(403).json({
         success: false,
         message: "Account is deactivated"
       });
     }
 
-    // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log('🔐 Password valid:', isPasswordValid);
+    // Log password comparison for debugging
+    console.log('🔐 Password check:', {
+      providedPasswordLength: password.length,
+      storedPasswordLength: user.password?.length,
+      storedPasswordHash: user.password?.substring(0, 10) + '...'
+    });
+
+    // Check password with better error handling
+    let isPasswordValid;
+    try {
+      isPasswordValid = await bcrypt.compare(password, user.password);
+      console.log('🔐 Password comparison result:', isPasswordValid);
+    } catch (bcryptError) {
+      console.error('❌ Bcrypt comparison error:', bcryptError);
+      return res.status(500).json({
+        success: false,
+        message: "Authentication error"
+      });
+    }
     
     if (!isPasswordValid) {
+      console.log('❌ Invalid password for user:', user.email);
+      
       // Increment failed attempts
       user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
       user.lastFailedLogin = new Date();
@@ -604,15 +653,23 @@ export const signIn = async (req, res) => {
       // Lock account after 5 failed attempts
       if (user.failedLoginAttempts >= 5) {
         user.isLocked = true;
+        console.log('🔒 Account locked after 5 failed attempts:', user.email);
       }
       
       await user.save();
       
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password"
+        message: "Invalid email or password",
+        debug: process.env.NODE_ENV === 'development' ? { 
+          failedAttempts: user.failedLoginAttempts,
+          isLocked: user.isLocked 
+        } : undefined
       });
     }
+
+    // ✅ Password is valid!
+    console.log('✅ Password validated for user:', user.email);
 
     // Reset failed attempts on successful login
     user.failedLoginAttempts = 0;
@@ -624,6 +681,7 @@ export const signIn = async (req, res) => {
     if (user.role === "company_admin" && user.companyId) {
       const company = await Company.findById(user.companyId);
       if (!company || company.status !== "approved") {
+        console.log('⚠️ Company not approved:', company?.status);
         return res.status(403).json({
           success: false,
           message: "Company not approved yet",
@@ -632,12 +690,12 @@ export const signIn = async (req, res) => {
       }
     }
 
-    // Check email verification status (ONLY EMAIL VERIFICATION)
-    const isVerified = !!user.emailVerifiedAt;
+    // Check email verification status
+    const isEmailVerified = !!user.emailVerifiedAt;
 
-    if (!isVerified) {
-      console.log('⚠️ Email not verified:', user.email);
-      return res.status(200).json({
+    if (!isEmailVerified) {
+      console.log('⚠️ Email not verified for user:', user.email);
+      return res.status(403).json({
         success: true,
         message: 'Email verification required',
         requiresVerification: true,
@@ -682,7 +740,8 @@ export const signIn = async (req, res) => {
           phone: user.phone,
           role: user.role,
           isVerified: true,
-          companyId: user.companyId
+          companyId: user.companyId,
+          
         }
       }
     });
@@ -696,7 +755,6 @@ export const signIn = async (req, res) => {
     });
   }
 };
-
 /**
  * @desc    Verify email (ONLY EMAIL VERIFICATION)
  * @route   POST /api/auth/verify-email
@@ -1057,4 +1115,68 @@ export const testEndpoint = async (req, res) => {
     message: "Auth endpoint is working!",
     timestamp: new Date().toISOString()
   });
+};
+/**
+ * @desc    Emergency password reset (development only)
+ * @route   POST /api/auth/reset-password-admin
+ * @access  Public (TEMPORARY - REMOVE IN PRODUCTION)
+ */
+export const resetPasswordAdmin = async (req, res) => {
+  try {
+    // ONLY ALLOW IN DEVELOPMENT
+    if (process.env.NODE_ENV !== 'development') {
+      return res.status(403).json({
+        success: false,
+        message: "This endpoint is only available in development"
+      });
+    }
+    
+    const { email, newPassword } = req.body;
+    
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and new password required"
+      });
+    }
+    
+    console.log('🔧 Admin password reset for:', email);
+    
+    const user = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    // Update user
+    user.password = hashedPassword;
+    user.failedLoginAttempts = 0;
+    user.isLocked = false;
+    await user.save();
+    
+    console.log('✅ Password reset successful for:', email);
+    
+    res.status(200).json({
+      success: true,
+      message: "Password reset successful",
+      data: {
+        email: user.email,
+        passwordHashPreview: hashedPassword.substring(0, 20) + '...'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Password reset error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Password reset failed",
+      error: error.message
+    });
+  }
 };
