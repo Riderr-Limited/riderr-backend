@@ -8,31 +8,123 @@ import mongoose from "mongoose";
  * @route   GET /api/users/me
  * @access  Private
  */
+ /**
+ * @desc    Get current user with complete data
+ * @route   GET /api/auth/me
+ * @access  Private
+ */
 export const getMyProfile = async (req, res) => {
   try {
-    const userId = req.user._id;
-
-    const user = await User.findById(userId)
-      .select("-password -refreshToken")
-      .populate("companyId", "name city status");
-
+    // Get fresh user data from database
+    const user = await User.findById(req.user._id)
+      .populate('companyId')
+      .select('-password -refreshToken -emailVerificationToken -resetPasswordToken');
+    
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
+        message: "User not found"
+      });
+    }
+
+    console.log('👤 Get current user:', user.email);
+
+    // Convert to object
+    const userObject = user.toObject();
+
+    // For drivers, fetch driver profile
+    let driverProfile = null;
+    if (user.role === "driver") {
+      driverProfile = await Driver.findOne({ 
+        userId: user._id,
+        companyId: user.companyId 
       });
     }
 
     res.status(200).json({
       success: true,
-      message: "Profile fetched successfully",
-      data: user,
+      data: {
+        // Complete user data
+        _id: userObject._id,
+        name: userObject.name,
+        email: userObject.email,
+        phone: userObject.phone,
+        role: userObject.role,
+        
+        // Verification Status
+        isVerified: userObject.isVerified,
+        emailVerifiedAt: userObject.emailVerifiedAt,
+        phoneVerifiedAt: userObject.phoneVerifiedAt,
+        
+        // Account Status
+        isActive: userObject.isActive,
+        isLocked: userObject.isLocked,
+        failedLoginAttempts: userObject.failedLoginAttempts,
+        
+        // Company Information
+        companyId: userObject.companyId?._id || userObject.companyId,
+        company: userObject.companyId ? {
+          _id: userObject.companyId._id,
+          name: userObject.companyId.name,
+          address: userObject.companyId.address,
+          city: userObject.companyId.city,
+          state: userObject.companyId.state,
+          contactPhone: userObject.companyId.contactPhone,
+          contactEmail: userObject.companyId.contactEmail,
+          status: userObject.companyId.status
+        } : null,
+        
+        // Driver Profile (for drivers only)
+        driverProfile: driverProfile ? {
+          _id: driverProfile._id,
+          licenseNumber: driverProfile.licenseNumber,
+          licenseExpiry: driverProfile.licenseExpiry,
+          vehicleType: driverProfile.vehicleType,
+          vehicleMake: driverProfile.vehicleMake,
+          vehicleModel: driverProfile.vehicleModel,
+          vehicleYear: driverProfile.vehicleYear,
+          vehicleColor: driverProfile.vehicleColor,
+          plateNumber: driverProfile.plateNumber,
+          approvalStatus: driverProfile.approvalStatus,
+          isOnline: driverProfile.isOnline,
+          isAvailable: driverProfile.isAvailable,
+          currentLocation: driverProfile.currentLocation,
+          rating: driverProfile.rating,
+          totalRides: driverProfile.totalRides,
+          earnings: driverProfile.earnings
+        } : null,
+        
+        // Additional User Fields
+        profileImage: userObject.profileImage || null,
+        dateOfBirth: userObject.dateOfBirth || null,
+        gender: userObject.gender || null,
+        address: userObject.address || null,
+        city: userObject.city || null,
+        state: userObject.state || null,
+        country: userObject.country || null,
+        postalCode: userObject.postalCode || null,
+        
+        // Activity Tracking
+        lastLoginAt: userObject.lastLoginAt,
+        lastFailedLogin: userObject.lastFailedLogin,
+        
+        // Timestamps
+        createdAt: userObject.createdAt,
+        updatedAt: userObject.updatedAt,
+        
+        // Preferences
+        preferences: userObject.preferences || {},
+        notifications: userObject.notifications || {},
+        settings: userObject.settings || {}
+      }
     });
+
   } catch (error) {
-    console.error("Get profile error:", error);
+    console.error('❌ Get me error:', error);
     res.status(500).json({
       success: false,
-      message: error.message || "Server error",
+      message: "Failed to get user data",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

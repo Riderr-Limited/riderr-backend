@@ -546,16 +546,20 @@ export const signUp = async (req, res) => {
  * @route   POST /api/auth/login
  * @access  Public
  */
+/**
+ * @desc    Sign in user with complete user data
+ * @route   POST /api/auth/login
+ * @access  Public
+ */
 export const signIn = async (req, res) => {
   try {
     console.log('🔑 Login request body:', JSON.stringify(req.body, null, 2));
     
     const { email, phone, password, emailOrPhone } = req.body;
 
-    // Determine the identifier - FIXED LOGIC
+    // Determine the identifier
     let userIdentifier;
     
-    // Priority: Use emailOrPhone if provided
     if (emailOrPhone) {
       userIdentifier = emailOrPhone;
     } else if (email) {
@@ -574,7 +578,7 @@ export const signIn = async (req, res) => {
 
     console.log('🔍 Looking for user with identifier:', userIdentifier);
 
-    // Find user by email or phone - IMPROVED SEARCH
+    // Find user by email or phone
     const query = {
       $or: [
         { email: userIdentifier.toLowerCase().trim() },
@@ -584,14 +588,16 @@ export const signIn = async (req, res) => {
 
     console.log('📋 Search query:', JSON.stringify(query, null, 2));
 
-    const user = await User.findOne(query).select('+password +failedLoginAttempts +isLocked');
+    // Find user with password and sensitive fields
+    const user = await User.findOne(query)
+      .select('+password +failedLoginAttempts +isLocked +refreshToken +emailVerificationToken')
+      .populate('companyId'); // Populate company data
     
     if (!user) {
       console.log('❌ User not found with query:', query);
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
-        debug: process.env.NODE_ENV === 'development' ? { query } : undefined
+        message: "Invalid email or password"
       });
     }
 
@@ -599,10 +605,10 @@ export const signIn = async (req, res) => {
       _id: user._id,
       email: user.email,
       phone: user.phone,
+      role: user.role,
       isActive: user.isActive,
       isLocked: user.isLocked,
-      isVerified: user.isVerified,
-      failedLoginAttempts: user.failedLoginAttempts
+      isVerified: user.isVerified
     });
 
     // Check if account is locked
@@ -623,14 +629,7 @@ export const signIn = async (req, res) => {
       });
     }
 
-    // Log password comparison for debugging
-    console.log('🔐 Password check:', {
-      providedPasswordLength: password.length,
-      storedPasswordLength: user.password?.length,
-      storedPasswordHash: user.password?.substring(0, 10) + '...'
-    });
-
-    // Check password with better error handling
+    // Check password
     let isPasswordValid;
     try {
       isPasswordValid = await bcrypt.compare(password, user.password);
@@ -660,11 +659,7 @@ export const signIn = async (req, res) => {
       
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
-        debug: process.env.NODE_ENV === 'development' ? { 
-          failedAttempts: user.failedLoginAttempts,
-          isLocked: user.isLocked 
-        } : undefined
+        message: "Invalid email or password"
       });
     }
 
@@ -722,11 +717,28 @@ export const signIn = async (req, res) => {
     user.refreshToken = refreshToken;
     await user.save();
 
-    // Remove password from response
-    user.password = undefined;
+    // Convert user to object and remove sensitive data
+    const userObject = user.toObject();
+    
+    // Remove sensitive fields
+    delete userObject.password;
+    delete userObject.refreshToken;
+    delete userObject.emailVerificationToken;
+    delete userObject.resetPasswordToken;
+    delete userObject.resetPasswordExpires;
+
+    // For drivers, fetch driver profile
+    let driverProfile = null;
+    if (user.role === "driver") {
+      driverProfile = await Driver.findOne({ 
+        userId: user._id,
+        companyId: user.companyId 
+      });
+    }
 
     console.log('✅ Login successful for:', user.email);
 
+    // Return complete user data
     res.status(200).json({
       success: true,
       message: "Login successful",
@@ -734,14 +746,80 @@ export const signIn = async (req, res) => {
         accessToken,
         refreshToken,
         user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          role: user.role,
-          isVerified: true,
-          companyId: user.companyId,
+          // Basic Information
+          _id: userObject._id,
+          name: userObject.name,
+          email: userObject.email,
+          phone: userObject.phone,
+          role: userObject.role,
           
+          // Verification Status
+          isVerified: userObject.isVerified,
+          emailVerifiedAt: userObject.emailVerifiedAt,
+          phoneVerifiedAt: userObject.phoneVerifiedAt,
+          
+          // Account Status
+          isActive: userObject.isActive,
+          isLocked: userObject.isLocked,
+          failedLoginAttempts: userObject.failedLoginAttempts,
+          
+          // Company Information
+          companyId: userObject.companyId?._id || userObject.companyId,
+          company: userObject.companyId ? {
+            _id: userObject.companyId._id,
+            name: userObject.companyId.name,
+            address: userObject.companyId.address,
+            city: userObject.companyId.city,
+            state: userObject.companyId.state,
+            contactPhone: userObject.companyId.contactPhone,
+            contactEmail: userObject.companyId.contactEmail,
+            status: userObject.companyId.status,
+            businessLicense: userObject.companyId.businessLicense,
+            taxId: userObject.companyId.taxId
+          } : null,
+          
+          // Driver Profile (for drivers only)
+          driverProfile: driverProfile ? {
+            _id: driverProfile._id,
+            licenseNumber: driverProfile.licenseNumber,
+            licenseExpiry: driverProfile.licenseExpiry,
+            vehicleType: driverProfile.vehicleType,
+            vehicleMake: driverProfile.vehicleMake,
+            vehicleModel: driverProfile.vehicleModel,
+            vehicleYear: driverProfile.vehicleYear,
+            vehicleColor: driverProfile.vehicleColor,
+            plateNumber: driverProfile.plateNumber,
+            approvalStatus: driverProfile.approvalStatus,
+            isOnline: driverProfile.isOnline,
+            isAvailable: driverProfile.isAvailable,
+            currentLocation: driverProfile.currentLocation,
+            rating: driverProfile.rating,
+            totalRides: driverProfile.totalRides,
+            earnings: driverProfile.earnings
+          } : null,
+          
+          // Additional User Fields (if they exist in your schema)
+          profileImage: userObject.profileImage || null,
+          dateOfBirth: userObject.dateOfBirth || null,
+          gender: userObject.gender || null,
+          address: userObject.address || null,
+          city: userObject.city || null,
+          state: userObject.state || null,
+          country: userObject.country || null,
+          postalCode: userObject.postalCode || null,
+          
+          // Activity Tracking
+          lastLoginAt: userObject.lastLoginAt,
+          lastFailedLogin: userObject.lastFailedLogin,
+          
+          // Timestamps
+          createdAt: userObject.createdAt,
+          updatedAt: userObject.updatedAt,
+          
+          // Preferences (if you have them)
+          preferences: userObject.preferences || {},
+          notifications: userObject.notifications || {},
+          settings: userObject.settings || {}
         }
       }
     });

@@ -24,9 +24,27 @@ const DeliverySchema = new mongoose.Schema(
 
     riderId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Rider",
+      ref: "Rider", // Changed from "Rider" to match our new model
       default: null,
       index: true,
+    },
+
+    // Customer and Recipient Info (Add these fields)
+    customerName: {
+      type: String,
+      required: true
+    },
+    customerPhone: {
+      type: String,
+      required: true
+    },
+    recipientName: {
+      type: String,
+      required: true
+    },
+    recipientPhone: {
+      type: String,
+      required: true
     },
 
     pickup: {
@@ -51,32 +69,44 @@ const DeliverySchema = new mongoose.Schema(
       notes: String,
     },
 
-    type: {
+    // Item Details (Update field name from 'type' to 'itemType')
+    itemType: {
       type: String,
-      enum: ["small", "food", "document", "heavy"],
+      enum: ["package", "document", "food", "electronics", "other"], // Updated enum values
       required: true,
     },
-
-    weightKg: Number,
-
-    price: Number,
+    itemDescription: String,
+    itemWeight: Number,
+    itemValue: Number,
 
     estimatedDistanceMeters: Number,
     estimatedDurationSec: Number,
+    deliveryInstructions: String,
+
+    // Add timestamps
+    assignedAt: Date,
+    pickedUpAt: Date,
+    inTransitAt: Date,
+    deliveredAt: Date,
+    failedAt: Date,
+    cancelledAt: Date,
+    returnedAt: Date,
 
     status: {
       type: String,
       enum: [
-        "created",
+        "created", // Add 'created' to match your controller
         "matched",
         "assigned",
         "accepted",
-        "picked",
+        "picked_up", // Update to match controller
         "in_transit",
         "delivered",
         "cancelled",
+        "failed", // Add missing statuses
+        "returned"
       ],
-      default: "created",
+      default: "created", // Updated default
       index: true,
     },
 
@@ -108,6 +138,14 @@ const DeliverySchema = new mongoose.Schema(
 
 DeliverySchema.index({ "pickup.lat": 1, "pickup.lng": 1 });
 DeliverySchema.index({ "dropoff.lat": 1, "dropoff.lng": 1 });
+
+// Pre-save middleware to generate reference ID
+DeliverySchema.pre('save', function(next) {
+  if (this.isNew && !this.referenceId) {
+    this.referenceId = `DEL-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+  }
+  next();
+});
 
 const Delivery = mongoose.model("Delivery", DeliverySchema);
 export default Delivery;

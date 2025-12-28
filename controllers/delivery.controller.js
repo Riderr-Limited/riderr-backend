@@ -1,5 +1,5 @@
 import User from "../models/user.models.js";
-import Rider from "../models/ride.model.js";
+import Rider from "../models/rider.model.js"; // Updated import
 import Company from "../models/company.models.js";
 import Delivery from "../models/delivery.models.js";
 import mongoose from "mongoose";
@@ -21,12 +21,11 @@ export const createDelivery = async (req, res) => {
     }
 
     const {
-      pickupAddress, pickupLat, pickupLng, pickupLandmark, pickupInstructions,
-      dropoffAddress, dropoffLat, dropoffLng, dropoffLandmark, dropoffInstructions,
+      pickupAddress, pickupLat, pickupLng,
+      dropoffAddress, dropoffLat, dropoffLng,
       itemType, itemDescription, itemWeight, itemValue,
       customerName, customerPhone, recipientName, recipientPhone,
-      estimatedDistance, estimatedDuration, deliveryInstructions,
-      specialRequests, requiresReturn, returnInstructions
+      estimatedDistance, estimatedDuration, deliveryInstructions
     } = req.body;
 
     // Validate required fields
@@ -39,7 +38,7 @@ export const createDelivery = async (req, res) => {
       });
     }
 
-    // Create delivery
+    // Create delivery - using model field names
     const delivery = new Delivery({
       customerId: customer._id,
       customerName,
@@ -48,34 +47,23 @@ export const createDelivery = async (req, res) => {
       recipientPhone,
       pickup: {
         address: pickupAddress,
-        location: {
-          type: 'Point',
-          coordinates: [parseFloat(pickupLng), parseFloat(pickupLat)]
-        },
-        landmark: pickupLandmark,
-        instructions: pickupInstructions
+        lat: parseFloat(pickupLat),
+        lng: parseFloat(pickupLng)
       },
       dropoff: {
         address: dropoffAddress,
-        location: {
-          type: 'Point',
-          coordinates: [parseFloat(dropoffLng), parseFloat(dropoffLat)]
-        },
-        landmark: dropoffLandmark,
-        instructions: dropoffInstructions
+        lat: parseFloat(dropoffLat),
+        lng: parseFloat(dropoffLng)
       },
-      itemType,
+      itemType: itemType, // This matches the model
       itemDescription,
       itemWeight: itemWeight || 1,
       itemValue: itemValue || 0,
-      estimatedDistance: estimatedDistance || 5000,
-      estimatedDuration: estimatedDuration || 600,
+      estimatedDistanceMeters: estimatedDistance || 5000,
+      estimatedDurationSec: estimatedDuration || 600,
       deliveryInstructions,
-      specialRequests: specialRequests || [],
-      requiresReturn: requiresReturn || false,
-      returnInstructions,
-      status: 'pending',
-      metadata: {
+      status: 'created', // Use 'created' instead of 'pending' to match model enum
+      meta: {
         platform: req.headers['x-platform'] || 'web',
         ipAddress: req.ip
       }
@@ -423,7 +411,7 @@ export const assignDelivery = async (req, res) => {
       });
     }
 
-    if (delivery.status !== 'pending') {
+    if (delivery.status !== 'created') { // Changed from 'pending' to 'created'
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -518,6 +506,7 @@ export const updateDeliveryStatus = async (req, res) => {
     const { deliveryId } = req.params;
     const { status, location } = req.body;
 
+    // Update status validation to match model
     if (!['picked_up', 'in_transit', 'delivered', 'returned', 'failed'].includes(status)) {
       await session.abortTransaction();
       session.endSession();
@@ -551,7 +540,7 @@ export const updateDeliveryStatus = async (req, res) => {
       });
     }
 
-    // Validate status transition
+    // Validate status transition (updated to match model)
     const validTransitions = {
       'assigned': ['picked_up', 'cancelled'],
       'picked_up': ['in_transit', 'returned'],
@@ -589,12 +578,23 @@ export const updateDeliveryStatus = async (req, res) => {
 
     // Update tracking location if provided
     if (location && location.lat && location.lng) {
-      delivery.currentLocation = {
-        type: 'Point',
-        coordinates: [parseFloat(location.lng), parseFloat(location.lat)],
+      // Add tracking location to meta
+      delivery.meta = delivery.meta || {};
+      delivery.meta.trackingLocation = {
+        lat: parseFloat(location.lat),
+        lng: parseFloat(location.lng),
         timestamp: new Date()
       };
-      delivery.trackingHistory.push(delivery.currentLocation);
+      
+      // You might want to add this to a tracking history array
+      if (!delivery.meta.trackingHistory) {
+        delivery.meta.trackingHistory = [];
+      }
+      delivery.meta.trackingHistory.push({
+        lat: parseFloat(location.lat),
+        lng: parseFloat(location.lng),
+        timestamp: new Date()
+      });
     }
 
     await delivery.save({ session });
