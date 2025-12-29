@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import User from "../models/user.models.js";
 
-const authorize = async (req, res, next) => {
+const authenticate = async (req, res, next) => {
   try {
     let token;
 
@@ -45,6 +45,7 @@ const authorize = async (req, res, next) => {
     // Attach user to req object
     req.user = user;
 
+    // Continue
     next();
     
   } catch (error) {
@@ -69,4 +70,4 @@ const authorize = async (req, res, next) => {
   }
 };
 
-export default authorize;
+export default authenticate;

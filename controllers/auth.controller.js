@@ -686,22 +686,9 @@ export const signIn = async (req, res) => {
     }
 
     // Check email verification status
-    const isEmailVerified = !!user.emailVerifiedAt;
+   // const isEmailVerified = !!user.emailVerifiedAt;
 
-    if (!isEmailVerified) {
-      console.log('⚠️ Email not verified for user:', user.email);
-      return res.status(403).json({
-        success: true,
-        message: 'Email verification required',
-        requiresVerification: true,
-        data: {
-          userId: user._id,
-          email: user.email,
-          phone: user.phone,
-          role: user.role
-        }
-      });
-    }
+    
 
     // Generate tokens
     const accessToken = generateAccessToken({ 

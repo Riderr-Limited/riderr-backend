@@ -376,7 +376,7 @@ export const toggleRiderOnlineStatus = async (req, res) => {
 
 /**
  * @desc    Toggle driver online status (for rides)
- * @route   PATCH /api/rider/drivers/online-status
+ * @route   PATCH /api/drivers/online-status
  * @access  Private (Driver)
  */
 export const toggleDriverOnlineStatus = async (req, res) => {

@@ -1,12 +1,11 @@
-// routes/index.js - Complete Routes File
-import express from 'express'
+// routes/index.js
+import express from 'express';
 import authRoutes from "./auth.routes.js";
 import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
-import riderRoutes from './rider.routes.js';
-import companyRoute from './company.routes.js';
-
+import deliveryPersonRoutes from './deliveryPerson.routes.js';
+import companyRoutes from './company.routes.js';
 
 const router = express.Router();
 
@@ -33,7 +32,7 @@ router.get("/health", (req, res) => {
 router.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "Delivery Service API",
+    message: "Delivery & Ride Service API",
     version: "1.0.0",
     endpoints: {
       auth: {
@@ -53,41 +52,39 @@ router.get("/", (req, res) => {
         getRiders: "GET /api/users/companies/:companyId/riders (company_admin)",
         getAllUsers: "GET /api/users (admin only)"
       },
-      rides: {
-        createRide: "POST /api/rides",
-        myRides: "GET /api/rides/my-rides",
-        activeRide: "GET /api/rides/active",
-        getRideById: "GET /api/rides/:id",
-        assignRide: "POST /api/rides/:rideId/assign",
-        acceptRide: "POST /api/rides/:rideId/accept",
-        arriveAtPickup: "POST /api/rides/:rideId/arrive",
-        startRide: "POST /api/rides/:rideId/start",
-        completeRide: "POST /api/rides/:rideId/complete",
-        cancelRide: "POST /api/rides/:rideId/cancel",
-        rateRide: "POST /api/rides/:rideId/rate",
-        getCompanyRides: "GET /api/rides/company/:companyId",
-        getDriverRides: "GET /api/rides/driver",
-        getAllRides: "GET /api/rides (admin)",
-        getRideStatistics: "GET /api/rides/statistics"
-      },
       deliveries: {
         create: "POST /api/deliveries (customer)",
         getMyDeliveries: "GET /api/deliveries/my (customer)",
-        getRiderDeliveries: "GET /api/deliveries/rider (rider)",
+        getDeliveryPersonDeliveries: "GET /api/deliveries/delivery-person (delivery_person)",
         getCompanyDeliveries: "GET /api/deliveries/company/:companyId (company_admin)",
         assignDelivery: "PATCH /api/deliveries/:id/assign (company_admin)",
-        updateStatus: "PATCH /api/deliveries/:id/status (rider)",
+        updateStatus: "PATCH /api/deliveries/:id/status (delivery_person)",
         getById: "GET /api/deliveries/:id",
         getAllDeliveries: "GET /api/deliveries (admin)"
       },
-      rider: {
-        nearbyRiders: "GET /api/rider/nearby",
-        updateLocation: "PATCH /api/rider/location",
-        onlineStatus: "PATCH /api/rider/online-status",
-        getProfile: "GET /api/rider/profile",
-        nearbyDrivers: "GET /api/rider/drivers/nearby",
-        driverLocation: "PATCH /api/rider/drivers/location",
-        driverOnlineStatus: "PATCH /api/rider/drivers/online-status"
+      rides: {
+        createRide: "POST /api/rides (customer)",
+        myRides: "GET /api/rides/my-rides (customer)",
+        activeRide: "GET /api/rides/active",
+        getRideById: "GET /api/rides/:id",
+        assignRide: "POST /api/rides/:rideId/assign",
+        acceptRide: "POST /api/rides/:rideId/accept (delivery_person)",
+        arriveAtPickup: "POST /api/rides/:rideId/arrive (delivery_person)",
+        startRide: "POST /api/rides/:rideId/start (delivery_person)",
+        completeRide: "POST /api/rides/:rideId/complete (delivery_person)",
+        cancelRide: "POST /api/rides/:rideId/cancel (customer, delivery_person)",
+        rateRide: "POST /api/rides/:rideId/rate (customer)",
+        getCompanyRides: "GET /api/rides/company/:companyId (company_admin)",
+        getDeliveryPersonRides: "GET /api/rides/delivery-person (delivery_person)",
+        getAllRides: "GET /api/rides (admin)",
+        getRideStatistics: "GET /api/rides/statistics"
+      },
+      deliveryPersons: {
+        nearby: "GET /api/delivery-persons/nearby",
+        updateLocation: "PATCH /api/delivery-persons/location",
+        onlineStatus: "PATCH /api/delivery-persons/online-status",
+        getProfile: "GET /api/delivery-persons/profile",
+        updateServices: "PATCH /api/delivery-persons/services"
       }
     },
     documentation: "https://api-docs.example.com"
@@ -97,9 +94,10 @@ router.get("/", (req, res) => {
 // Mount route modules
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
-router.use("/rides", rideRoutes);
 router.use("/deliveries", deliveryRoutes);
-router.use("/rider", riderRoutes); // Add this line
+router.use("/rides", rideRoutes);
+router.use("/delivery-persons", deliveryPersonRoutes);
+router.use("/companies", companyRoutes);
 
 /**
  * @route   ALL *

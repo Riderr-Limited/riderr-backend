@@ -1,151 +1,264 @@
 import mongoose from "mongoose";
 
-const DeliverySchema = new mongoose.Schema(
+const deliverySchema = new mongoose.Schema(
   {
-    referenceId: {
-      type: String,
-      unique: true,
-      index: true,
-    },
-
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
+      index: true
     },
-
+    riderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Rider",
+      index: true
+    },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
-      default: null,
-      index: true,
+      index: true
     },
 
-    riderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Rider", // Changed from "Rider" to match our new model
-      default: null,
-      index: true,
-    },
-
-    // Customer and Recipient Info (Add these fields)
+    // Customer Information
     customerName: {
       type: String,
-      required: true
+      required: true,
+      trim: true
     },
     customerPhone: {
       type: String,
-      required: true
+      required: true,
+      trim: true
     },
+
+    // Recipient Information
     recipientName: {
       type: String,
-      required: true
+      required: true,
+      trim: true
     },
     recipientPhone: {
       type: String,
-      required: true
+      required: true,
+      trim: true
     },
 
+    // Pickup Location with Name
     pickup: {
-      address: String,
-      city: String,
-      lga: String,
-      lat: Number,
-      lng: Number,
-      contactName: String,
-      contactPhone: String,
-      notes: String,
+      address: {
+        type: String,
+        required: true
+      },
+      name: {
+        type: String, // Display name like "Home", "Office", "Starbucks", etc.
+        trim: true
+      },
+      lat: {
+        type: Number,
+        required: true
+      },
+      lng: {
+        type: Number,
+        required: true
+      },
+      landmark: {
+        type: String,
+        trim: true
+      },
+      instructions: {
+        type: String,
+        trim: true
+      }
     },
 
+    // Dropoff Location with Name
     dropoff: {
-      address: String,
-      city: String,
-      lga: String,
-      lat: Number,
-      lng: Number,
-      contactName: String,
-      contactPhone: String,
-      notes: String,
+      address: {
+        type: String,
+        required: true
+      },
+      name: {
+        type: String, // Display name like "Home", "Office", "Client Location", etc.
+        trim: true
+      },
+      lat: {
+        type: Number,
+        required: true
+      },
+      lng: {
+        type: Number,
+        required: true
+      },
+      landmark: {
+        type: String,
+        trim: true
+      },
+      instructions: {
+        type: String,
+        trim: true
+      }
     },
 
-    // Item Details (Update field name from 'type' to 'itemType')
+    // Item Information
     itemType: {
       type: String,
-      enum: ["package", "document", "food", "electronics", "other"], // Updated enum values
       required: true,
+      enum: ['document', 'package', 'food', 'electronics', 'clothing', 'other']
     },
-    itemDescription: String,
-    itemWeight: Number,
-    itemValue: Number,
+    itemDescription: {
+      type: String,
+      trim: true
+    },
+    itemWeight: {
+      type: Number, // in kg
+      default: 1
+    },
+    itemValue: {
+      type: Number, // in naira
+      default: 0
+    },
 
-    estimatedDistanceMeters: Number,
-    estimatedDurationSec: Number,
-    deliveryInstructions: String,
+    // Delivery Details
+    estimatedDistanceMeters: {
+      type: Number,
+      default: 0
+    },
+    estimatedDurationSec: {
+      type: Number,
+      default: 0
+    },
+    actualDistanceMeters: {
+      type: Number
+    },
+    actualDurationSec: {
+      type: Number
+    },
 
-    // Add timestamps
+    // Status and Timestamps
+    status: {
+      type: String,
+      enum: [
+        'created',      // Initial state
+        'assigned',     // Rider assigned
+        'picked_up',    // Package picked up
+        'in_transit',   // En route to destination
+        'delivered',    // Successfully delivered
+        'returned',     // Returned to sender
+        'failed',       // Delivery failed
+        'cancelled'     // Cancelled
+      ],
+      default: 'created',
+      index: true
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now,
+      index: true
+    },
     assignedAt: Date,
     pickedUpAt: Date,
     inTransitAt: Date,
     deliveredAt: Date,
+    returnedAt: Date,
     failedAt: Date,
     cancelledAt: Date,
-    returnedAt: Date,
 
-    status: {
+    // Payment
+    deliveryFee: {
+      type: Number,
+      default: 0
+    },
+    paymentStatus: {
       type: String,
-      enum: [
-        "created", // Add 'created' to match your controller
-        "matched",
-        "assigned",
-        "accepted",
-        "picked_up", // Update to match controller
-        "in_transit",
-        "delivered",
-        "cancelled",
-        "failed", // Add missing statuses
-        "returned"
-      ],
-      default: "created", // Updated default
-      index: true,
+      enum: ['pending', 'paid', 'refunded'],
+      default: 'pending'
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'card', 'wallet', 'transfer'],
+      default: 'cash'
     },
 
-    payment: {
-      method: { type: String, enum: ["cod", "card", "wallet"], default: "cod" },
-      status: {
-        type: String,
-        enum: ["pending", "paid", "failed", "refunded"],
-        default: "pending",
-      },
-      gatewayRef: String,
+    // Instructions and Notes
+    deliveryInstructions: {
+      type: String,
+      trim: true
+    },
+    riderNotes: {
+      type: String,
+      trim: true
+    },
+    cancellationReason: {
+      type: String,
+      trim: true
+    },
+    failureReason: {
+      type: String,
+      trim: true
     },
 
-    proof: {
-      photoUrl: String,
-      deliveredAt: Date,
-      confirmationCode: String,
+    // Proof of Delivery
+    proofOfDelivery: {
+      signature: String,
+      photo: String,
+      recipientName: String,
+      deliveredAt: Date
     },
 
+    // Rating
     rating: {
-      riderRating: Number,
-      companyRating: Number,
+      score: {
+        type: Number,
+        min: 1,
+        max: 5
+      },
+      feedback: String,
+      ratedAt: Date
     },
 
-    meta: Object,
+    // Metadata
+    meta: {
+      platform: String,
+      ipAddress: String,
+      trackingLocation: {
+        lat: Number,
+        lng: Number,
+        timestamp: Date
+      },
+      trackingHistory: [{
+        lat: Number,
+        lng: Number,
+        timestamp: Date
+      }]
+    }
   },
-  { timestamps: true }
+  {
+    timestamps: true
+  }
 );
 
-DeliverySchema.index({ "pickup.lat": 1, "pickup.lng": 1 });
-DeliverySchema.index({ "dropoff.lat": 1, "dropoff.lng": 1 });
+// Indexes for better query performance
+deliverySchema.index({ customerId: 1, createdAt: -1 });
+deliverySchema.index({ riderId: 1, status: 1 });
+deliverySchema.index({ companyId: 1, status: 1 });
+deliverySchema.index({ status: 1, createdAt: -1 });
+deliverySchema.index({ 'pickup.lat': 1, 'pickup.lng': 1 });
 
-// Pre-save middleware to generate reference ID
-DeliverySchema.pre('save', function(next) {
-  if (this.isNew && !this.referenceId) {
-    this.referenceId = `DEL-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-  }
-  next();
+// Virtual for display summary
+deliverySchema.virtual('summary').get(function() {
+  return {
+    from: this.pickup.name || this.pickup.address.split(',')[0],
+    to: this.dropoff.name || this.dropoff.address.split(',')[0],
+    status: this.status,
+    itemType: this.itemType
+  };
 });
 
-const Delivery = mongoose.model("Delivery", DeliverySchema);
+// Ensure virtuals are included in JSON
+deliverySchema.set('toJSON', { virtuals: true });
+deliverySchema.set('toObject', { virtuals: true });
+
+const Delivery = mongoose.model("Delivery", deliverySchema);
+
 export default Delivery;

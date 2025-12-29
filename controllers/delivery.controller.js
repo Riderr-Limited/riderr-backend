@@ -1,19 +1,99 @@
-import User from "../models/user.models.js";
-import Rider from "../models/rider.model.js"; // Updated import
-import Company from "../models/company.models.js";
+// controllers/delivery.controller.js
+import DeliveryPerson from "../models/deliveryPerson.model.js";
 import Delivery from "../models/delivery.models.js";
 import mongoose from "mongoose";
 
+// Helper function to calculate distance between two coordinates
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 /**
- * @desc    Create a new delivery
+ * @desc    Get nearby delivery persons for delivery
+ * @route   GET /api/deliveries/nearby-riders
+ * @access  Private (Customer)
+ */
+export const getNearbyRidersForDelivery = async (req, res) => {
+  try {
+    const { lat, lng, radius = 10000, vehicleType } = req.query;
+
+    if (!lat || !lng) {
+      return res.status(400).json({
+        success: false,
+        message: "Latitude and longitude are required"
+      });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const maxDistance = parseFloat(radius);
+
+    // Find nearby delivery persons for deliveries
+    const deliveryPersons = await DeliveryPerson.findNearby(
+      longitude,
+      latitude,
+      maxDistance,
+      'delivery',
+      vehicleType
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${deliveryPersons.length} nearby delivery persons`,
+      data: deliveryPersons.map(person => ({
+        _id: person._id,
+        userId: person.userId,
+        companyId: person.companyId,
+        licenseNumber: person.licenseNumber,
+        vehicleType: person.vehicleType,
+        vehiclePlate: person.vehiclePlate,
+        vehicleColor: person.vehicleColor,
+        vehicleModel: person.vehicleModel,
+        isAvailable: person.isAvailable,
+        isVerified: person.isVerified,
+        isOnline: person.isOnline,
+        currentLocation: person.currentLocation,
+        totalDeliveries: person.totalDeliveries,
+        averageRating: person.averageRating,
+        distance: person._doc.distance || 0,
+        distanceText: `${(person._doc.distance || 0).toFixed(1)} km away`,
+        estimatedArrival: Math.ceil((person._doc.distance || 0) * 3),
+        createdAt: person.createdAt
+      }))
+    });
+
+  } catch (error) {
+    console.error("Get nearby delivery persons error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
+  }
+};
+
+/**
+ * @desc    Create a new delivery with optional delivery person assignment
  * @route   POST /api/deliveries
  * @access  Private (Customer)
  */
 export const createDelivery = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const customer = req.user;
     
     if (customer.role !== "customer") {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(403).json({
         success: false,
         message: "Only customers can create deliveries"
@@ -21,25 +101,28 @@ export const createDelivery = async (req, res) => {
     }
 
     const {
-      pickupAddress, pickupLat, pickupLng,
-      dropoffAddress, dropoffLat, dropoffLng,
+      pickupAddress, pickupLat, pickupLng, pickupName,
+      dropoffAddress, dropoffLat, dropoffLng, dropoffName,
       itemType, itemDescription, itemWeight, itemValue,
       customerName, customerPhone, recipientName, recipientPhone,
-      estimatedDistance, estimatedDuration, deliveryInstructions
+      estimatedDistance, estimatedDuration, deliveryInstructions,
+      deliveryPersonId // Optional: pre-selected delivery person
     } = req.body;
 
     // Validate required fields
     if (!pickupAddress || !pickupLat || !pickupLng ||
         !dropoffAddress || !dropoffLat || !dropoffLng ||
         !itemType || !customerName || !customerPhone || !recipientName || !recipientPhone) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
       });
     }
 
-    // Create delivery - using model field names
-    const delivery = new Delivery({
+    // Create delivery object
+    const deliveryData = {
       customerId: customer._id,
       customerName,
       customerPhone,
@@ -48,41 +131,101 @@ export const createDelivery = async (req, res) => {
       pickup: {
         address: pickupAddress,
         lat: parseFloat(pickupLat),
-        lng: parseFloat(pickupLng)
+        lng: parseFloat(pickupLng),
+        name: pickupName || pickupAddress
       },
       dropoff: {
         address: dropoffAddress,
         lat: parseFloat(dropoffLat),
-        lng: parseFloat(dropoffLng)
+        lng: parseFloat(dropoffLng),
+        name: dropoffName || dropoffAddress
       },
-      itemType: itemType, // This matches the model
+      itemType: itemType,
       itemDescription,
       itemWeight: itemWeight || 1,
       itemValue: itemValue || 0,
       estimatedDistanceMeters: estimatedDistance || 5000,
       estimatedDurationSec: estimatedDuration || 600,
       deliveryInstructions,
-      status: 'created', // Use 'created' instead of 'pending' to match model enum
+      status: 'created',
       meta: {
         platform: req.headers['x-platform'] || 'web',
         ipAddress: req.ip
       }
-    });
+    };
 
-    await delivery.save();
+    // If delivery person is pre-selected, validate and assign
+    if (deliveryPersonId) {
+      const deliveryPerson = await DeliveryPerson.findById(deliveryPersonId).session(session);
+      
+      if (!deliveryPerson) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({
+          success: false,
+          message: "Selected delivery person not found"
+        });
+      }
+
+      if (!deliveryPerson.isAvailableForDelivery()) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Selected delivery person is not available"
+        });
+      }
+
+      // Assign delivery person and update status
+      deliveryData.deliveryPersonId = deliveryPersonId;
+      deliveryData.companyId = deliveryPerson.companyId;
+      deliveryData.status = 'assigned';
+      deliveryData.assignedAt = new Date();
+
+      // Update delivery person status
+      deliveryPerson.currentDeliveryId = null; // Will be set after delivery is saved
+      deliveryPerson.isAvailable = false;
+      await deliveryPerson.save({ session });
+    }
+
+    // Create delivery
+    const delivery = new Delivery(deliveryData);
+    await delivery.save({ session });
+
+    // Update delivery person's currentDeliveryId if assigned
+    if (deliveryPersonId) {
+      await DeliveryPerson.findByIdAndUpdate(
+        deliveryPersonId,
+        { currentDeliveryId: delivery._id },
+        { session }
+      );
+    }
+
+    await session.commitTransaction();
+
+    // Populate delivery data for response
+    await delivery.populate([
+      { path: 'deliveryPersonId', populate: { path: 'userId', select: 'name phone avatarUrl' } },
+      { path: 'companyId', select: 'name logo contactPhone' }
+    ]);
 
     res.status(201).json({
       success: true,
-      message: "Delivery request created successfully",
+      message: deliveryPersonId 
+        ? "Delivery created and assigned successfully" 
+        : "Delivery request created successfully",
       data: delivery
     });
 
   } catch (error) {
+    await session.abortTransaction();
     console.error("Create delivery error:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Server error"
     });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -104,9 +247,9 @@ export const getMyDeliveries = async (req, res) => {
 
     const [deliveries, total] = await Promise.all([
       Delivery.find(query)
-        .populate('companyId', 'name contactPhone')
+        .populate('companyId', 'name contactPhone logo')
         .populate({
-          path: 'riderId',
+          path: 'deliveryPersonId',
           populate: { 
             path: 'userId', 
             select: 'name phone avatarUrl' 
@@ -118,9 +261,32 @@ export const getMyDeliveries = async (req, res) => {
       Delivery.countDocuments(query)
     ]);
 
+    // Format deliveries with location names
+    const formattedDeliveries = deliveries.map(delivery => {
+      const deliveryObj = delivery.toObject();
+      
+      return {
+        ...deliveryObj,
+        pickup: {
+          ...deliveryObj.pickup,
+          displayName: deliveryObj.pickup.name || deliveryObj.pickup.address,
+        },
+        dropoff: {
+          ...deliveryObj.dropoff,
+          displayName: deliveryObj.dropoff.name || deliveryObj.dropoff.address,
+        },
+        summary: {
+          from: deliveryObj.pickup.name || deliveryObj.pickup.address.split(',')[0],
+          to: deliveryObj.dropoff.name || deliveryObj.dropoff.address.split(',')[0],
+          status: deliveryObj.status,
+          itemType: deliveryObj.itemType
+        }
+      };
+    });
+
     res.status(200).json({
       success: true,
-      data: deliveries,
+      data: formattedDeliveries,
       pagination: {
         total,
         page,
@@ -141,91 +307,26 @@ export const getMyDeliveries = async (req, res) => {
 };
 
 /**
- * @desc    Get company's deliveries
- * @route   GET /api/deliveries/company/:companyId
- * @access  Private (Company Admin)
+ * @desc    Get delivery person's deliveries
+ * @route   GET /api/deliveries/delivery-person
+ * @access  Private (Delivery Person)
  */
-export const getCompanyDeliveries = async (req, res) => {
+export const getDeliveryPersonDeliveries = async (req, res) => {
   try {
-    const admin = req.user;
-    const { companyId } = req.params;
+    const user = req.user;
     
-    if (admin.role !== "company_admin" && admin.role !== "admin") {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied"
-      });
-    }
-    
-    if (admin.role === "company_admin" && admin.companyId?.toString() !== companyId) {
-      return res.status(403).json({
-        success: false,
-        message: "Cannot access another company's deliveries"
-      });
-    }
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-    const status = req.query.status;
-
-    const query = { companyId };
-    if (status) query.status = status;
-
-    const [deliveries, total] = await Promise.all([
-      Delivery.find(query)
-        .populate('customerId', 'name phone')
-        .populate({
-          path: 'riderId',
-          populate: { path: 'userId', select: 'name phone' }
-        })
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 }),
-      Delivery.countDocuments(query)
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: deliveries,
-      pagination: {
-        total,
-        page,
-        limit,
-        pages: Math.ceil(total / limit)
-      }
-    });
-
-  } catch (error) {
-    console.error("Get company deliveries error:", error);
-    res.status(500).json({
-      success: false,
-      message: error.message || "Server error"
-    });
-  }
-};
-
-/**
- * @desc    Get rider's deliveries
- * @route   GET /api/deliveries/rider
- * @access  Private (Rider)
- */
-export const getRiderDeliveries = async (req, res) => {
-  try {
-    const riderUser = req.user;
-    
-    if (riderUser.role !== "rider") {
+    if (user.role !== "rider") {
       return res.status(403).json({
         success: false,
         message: "Access denied"
       });
     }
 
-    const rider = await Rider.findOne({ userId: riderUser._id });
-    if (!rider) {
+    const deliveryPerson = await DeliveryPerson.findOne({ userId: user._id });
+    if (!deliveryPerson) {
       return res.status(404).json({
         success: false,
-        message: "Rider profile not found"
+        message: "Delivery person profile not found"
       });
     }
 
@@ -234,7 +335,7 @@ export const getRiderDeliveries = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const query = { riderId: rider._id };
+    const query = { deliveryPersonId: deliveryPerson._id };
     if (status) query.status = status;
 
     const [deliveries, total] = await Promise.all([
@@ -259,7 +360,7 @@ export const getRiderDeliveries = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Get rider deliveries error:", error);
+    console.error("Get delivery person deliveries error:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Server error"
@@ -281,8 +382,8 @@ export const getDeliveryById = async (req, res) => {
       .populate('customerId', 'name phone email')
       .populate('companyId', 'name contactPhone')
       .populate({
-        path: 'riderId',
-        populate: { path: 'userId', select: 'name phone' }
+        path: 'deliveryPersonId',
+        populate: { path: 'userId', select: 'name phone avatarUrl' }
       });
 
     if (!delivery) {
@@ -300,8 +401,8 @@ export const getDeliveryById = async (req, res) => {
     } else if (user.role === "customer" && delivery.customerId._id.toString() === user._id.toString()) {
       hasAccess = true;
     } else if (user.role === "rider") {
-      const rider = await Rider.findOne({ userId: user._id });
-      if (rider && delivery.riderId?._id.toString() === rider._id.toString()) {
+      const deliveryPerson = await DeliveryPerson.findOne({ userId: user._id });
+      if (deliveryPerson && delivery.deliveryPersonId?._id.toString() === deliveryPerson._id.toString()) {
         hasAccess = true;
       }
     } else if (user.role === "company_admin" && delivery.companyId?._id.toString() === user.companyId?.toString()) {
@@ -358,7 +459,7 @@ export const getAllDeliveries = async (req, res) => {
         .populate('customerId', 'name phone')
         .populate('companyId', 'name')
         .populate({
-          path: 'riderId',
+          path: 'deliveryPersonId',
           populate: { path: 'userId', select: 'name phone' }
         })
         .skip(skip)
@@ -388,7 +489,7 @@ export const getAllDeliveries = async (req, res) => {
 };
 
 /**
- * @desc    Assign delivery to rider
+ * @desc    Assign delivery to delivery person
  * @route   PATCH /api/deliveries/:deliveryId/assign
  * @access  Private (Company Admin)
  */
@@ -398,7 +499,7 @@ export const assignDelivery = async (req, res) => {
 
   try {
     const { deliveryId } = req.params;
-    const { riderId } = req.body;
+    const { deliveryPersonId } = req.body;
 
     const delivery = await Delivery.findById(deliveryId).session(session);
     
@@ -411,7 +512,7 @@ export const assignDelivery = async (req, res) => {
       });
     }
 
-    if (delivery.status !== 'created') { // Changed from 'pending' to 'created'
+    if (delivery.status !== 'created') {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -420,48 +521,47 @@ export const assignDelivery = async (req, res) => {
       });
     }
 
-    const rider = await Rider.findById(riderId).session(session);
-    if (!rider) {
+    const deliveryPerson = await DeliveryPerson.findById(deliveryPersonId).session(session);
+    if (!deliveryPerson) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Rider not found"
+        message: "Delivery person not found"
       });
     }
 
-    if (!rider.isAvailable) {
+    if (!deliveryPerson.isAvailableForDelivery()) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Rider is not available"
+        message: "Delivery person is not available"
       });
     }
 
-    // Check if rider is in same company (if delivery has company assigned)
-    if (delivery.companyId && rider.companyId?.toString() !== delivery.companyId.toString()) {
+    if (delivery.companyId && deliveryPerson.companyId?.toString() !== delivery.companyId.toString()) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Rider does not belong to this company"
+        message: "Delivery person does not belong to this company"
       });
     }
 
-    // Assign delivery to rider
-    delivery.riderId = riderId;
-    if (!delivery.companyId && rider.companyId) {
-      delivery.companyId = rider.companyId;
+    // Assign delivery to delivery person
+    delivery.deliveryPersonId = deliveryPersonId;
+    if (!delivery.companyId && deliveryPerson.companyId) {
+      delivery.companyId = deliveryPerson.companyId;
     }
     delivery.status = 'assigned';
     delivery.assignedAt = new Date();
     await delivery.save({ session });
 
-    // Update rider status
-    rider.currentDeliveryId = delivery._id;
-    rider.isAvailable = false;
-    await rider.save({ session });
+    // Update delivery person status
+    deliveryPerson.currentDeliveryId = delivery._id;
+    deliveryPerson.isAvailable = false;
+    await deliveryPerson.save({ session });
 
     await session.commitTransaction();
 
@@ -469,14 +569,14 @@ export const assignDelivery = async (req, res) => {
     await delivery.populate([
       { path: 'customerId', select: 'name phone' },
       { 
-        path: 'riderId',
-        populate: { path: 'userId', select: 'name phone' }
+        path: 'deliveryPersonId',
+        populate: { path: 'userId', select: 'name phone avatarUrl' }
       }
     ]);
 
     res.status(200).json({
       success: true,
-      message: "Delivery assigned to rider successfully",
+      message: "Delivery assigned successfully",
       data: delivery
     });
 
@@ -495,18 +595,17 @@ export const assignDelivery = async (req, res) => {
 /**
  * @desc    Update delivery status
  * @route   PATCH /api/deliveries/:deliveryId/status
- * @access  Private (Rider)
+ * @access  Private (Delivery Person)
  */
 export const updateDeliveryStatus = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const riderUser = req.user;
+    const user = req.user;
     const { deliveryId } = req.params;
     const { status, location } = req.body;
 
-    // Update status validation to match model
     if (!['picked_up', 'in_transit', 'delivered', 'returned', 'failed'].includes(status)) {
       await session.abortTransaction();
       session.endSession();
@@ -516,19 +615,19 @@ export const updateDeliveryStatus = async (req, res) => {
       });
     }
 
-    const rider = await Rider.findOne({ userId: riderUser._id }).session(session);
-    if (!rider) {
+    const deliveryPerson = await DeliveryPerson.findOne({ userId: user._id }).session(session);
+    if (!deliveryPerson) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Rider profile not found"
+        message: "Delivery person profile not found"
       });
     }
 
     const delivery = await Delivery.findOne({
       _id: deliveryId,
-      riderId: rider._id
+      deliveryPersonId: deliveryPerson._id
     }).session(session);
 
     if (!delivery) {
@@ -540,7 +639,7 @@ export const updateDeliveryStatus = async (req, res) => {
       });
     }
 
-    // Validate status transition (updated to match model)
+    // Validate status transition
     const validTransitions = {
       'assigned': ['picked_up', 'cancelled'],
       'picked_up': ['in_transit', 'returned'],
@@ -578,7 +677,6 @@ export const updateDeliveryStatus = async (req, res) => {
 
     // Update tracking location if provided
     if (location && location.lat && location.lng) {
-      // Add tracking location to meta
       delivery.meta = delivery.meta || {};
       delivery.meta.trackingLocation = {
         lat: parseFloat(location.lat),
@@ -586,7 +684,6 @@ export const updateDeliveryStatus = async (req, res) => {
         timestamp: new Date()
       };
       
-      // You might want to add this to a tracking history array
       if (!delivery.meta.trackingHistory) {
         delivery.meta.trackingHistory = [];
       }
@@ -599,12 +696,12 @@ export const updateDeliveryStatus = async (req, res) => {
 
     await delivery.save({ session });
 
-    // If delivery is completed, make rider available again
+    // If delivery is completed, make delivery person available again
     if (['delivered', 'returned', 'failed'].includes(status)) {
-      rider.currentDeliveryId = null;
-      rider.isAvailable = true;
-      rider.totalDeliveries = (rider.totalDeliveries || 0) + 1;
-      await rider.save({ session });
+      deliveryPerson.currentDeliveryId = null;
+      deliveryPerson.isAvailable = true;
+      deliveryPerson.totalDeliveries = (deliveryPerson.totalDeliveries || 0) + 1;
+      await deliveryPerson.save({ session });
     }
 
     await session.commitTransaction();
@@ -624,5 +721,70 @@ export const updateDeliveryStatus = async (req, res) => {
     });
   } finally {
     session.endSession();
+  }
+};
+
+/**
+ * @desc    Get company deliveries
+ * @route   GET /api/deliveries/company/:companyId
+ * @access  Private (Company Admin)
+ */
+export const getCompanyDeliveries = async (req, res) => {
+  try {
+    const admin = req.user;
+    const { companyId } = req.params;
+    
+    if (admin.role !== "company_admin" && admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+    
+    if (admin.role === "company_admin" && admin.companyId?.toString() !== companyId) {
+      return res.status(403).json({
+        success: false,
+        message: "Cannot access another company's deliveries"
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const status = req.query.status;
+
+    const query = { companyId };
+    if (status) query.status = status;
+
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate('customerId', 'name phone')
+        .populate({
+          path: 'deliveryPersonId',
+          populate: { path: 'userId', select: 'name phone avatarUrl' }
+        })
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 }),
+      Delivery.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error("Get company deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error"
+    });
   }
 };

@@ -4,6 +4,8 @@ import User from '../models/user.models.js';
 /**
  * Authenticate user via JWT token
  */
+
+
 export const authenticate = async (req, res) => {
   try {
     // Get token from header
