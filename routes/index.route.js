@@ -4,6 +4,9 @@ import authRoutes from "./auth.routes.js";
 import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
+import riderRoutes from './rider.routes.js';
+import companyRoute from './company.routes.js';
+
 
 const router = express.Router();
 
@@ -76,6 +79,15 @@ router.get("/", (req, res) => {
         updateStatus: "PATCH /api/deliveries/:id/status (rider)",
         getById: "GET /api/deliveries/:id",
         getAllDeliveries: "GET /api/deliveries (admin)"
+      },
+      rider: {
+        nearbyRiders: "GET /api/rider/nearby",
+        updateLocation: "PATCH /api/rider/location",
+        onlineStatus: "PATCH /api/rider/online-status",
+        getProfile: "GET /api/rider/profile",
+        nearbyDrivers: "GET /api/rider/drivers/nearby",
+        driverLocation: "PATCH /api/rider/drivers/location",
+        driverOnlineStatus: "PATCH /api/rider/drivers/online-status"
       }
     },
     documentation: "https://api-docs.example.com"
@@ -87,6 +99,7 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/rides", rideRoutes);
 router.use("/deliveries", deliveryRoutes);
+router.use("/rider", riderRoutes); // Add this line
 
 /**
  * @route   ALL *

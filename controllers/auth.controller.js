@@ -1258,3 +1258,172 @@ export const resetPasswordAdmin = async (req, res) => {
     });
   }
 };
+
+
+/**
+ * @desc    Create a driver for a specific company
+ * @route   POST /api/auth/signup/companies/:companyId/drivers
+ * @access  Public (but company must exist)
+ */
+export const signUpCompanyDriver = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const {
+      name,
+      email,
+      phone,
+      password,
+      licenseNumber,
+      vehicleType,
+      vehicleMake,
+      vehicleModel,
+      vehicleYear,
+      vehicleColor,
+      plateNumber,
+      licenseExpiry
+    } = req.body;
+
+    console.log('🚗 Company driver signup request:', { companyId, email });
+
+    // Validation
+    if (!name || !email || !phone || !password || !licenseNumber || 
+        !vehicleType || !plateNumber || !licenseExpiry) {
+      return res.status(400).json({
+        success: false,
+        message: "All driver fields are required"
+      });
+    }
+
+    // Check if company exists and is approved
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    if (company.status !== "approved") {
+      return res.status(400).json({
+        success: false,
+        message: "Company is not approved yet"
+      });
+    }
+
+    // Check existing user
+    const existingUser = await User.findOne({
+      $or: [{ email: email.toLowerCase() }, { phone }]
+    });
+    
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "User with this email or phone already exists"
+      });
+    }
+
+    // Generate email verification code
+    const emailCode = generateVerificationCode();
+    const emailExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    console.log('🔐 Generated email code:', emailCode);
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create driver user
+    const newUser = await User.create({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password: hashedPassword,
+      phone,
+      role: "driver",
+      companyId,
+      emailVerificationToken: emailCode,
+      emailVerificationExpires: emailExpiry,
+      failedLoginAttempts: 0,
+      isActive: true,
+      isVerified: false
+    });
+
+    console.log('👤 Driver user created:', newUser._id);
+
+    // Create driver profile
+    const driverProfile = await Driver.create({
+      userId: newUser._id,
+      companyId,
+      licenseNumber,
+      vehicleType,
+      vehicleMake,
+      vehicleModel,
+      vehicleYear,
+      vehicleColor,
+      plateNumber,
+      licenseExpiry,
+      approvalStatus: "pending"
+    });
+
+    console.log('🚗 Driver profile created:', driverProfile._id);
+
+    // Send verification email
+    await sendVerificationEmail(email, emailCode, name);
+
+    // Generate tokens
+    const accessToken = generateAccessToken({ 
+      userId: newUser._id, 
+      role: newUser.role,
+      isVerified: false
+    });
+    
+    const refreshToken = generateRefreshToken({ 
+      userId: newUser._id 
+    });
+
+    newUser.refreshToken = refreshToken;
+    await newUser.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Driver account created. Email verification code sent.",
+      requiresVerification: true,
+      data: {
+        accessToken,
+        refreshToken,
+        user: {
+          _id: newUser._id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone,
+          role: newUser.role,
+          isVerified: false,
+          companyId: newUser.companyId
+        },
+        driverProfile: {
+          _id: driverProfile._id,
+          licenseNumber: driverProfile.licenseNumber,
+          vehicleType: driverProfile.vehicleType,
+          plateNumber: driverProfile.plateNumber,
+          approvalStatus: driverProfile.approvalStatus
+        }
+      },
+      // In development, show the code for testing
+      ...(process.env.NODE_ENV === 'development' && {
+        debug: {
+          emailCode,
+          userId: newUser._id,
+          companyId,
+          driverProfileId: driverProfile._id
+        }
+      })
+    });
+
+  } catch (error) {
+    console.error('❌ Company driver signup error:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: "Driver signup failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

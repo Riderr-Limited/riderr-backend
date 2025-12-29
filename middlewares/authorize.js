@@ -48,8 +48,9 @@ const authorize = async (req, res, next) => {
     // Attach user to req object
     req.user = userObject;
 
+    // ✅ CRITICAL: Call next() to continue
     next();
-
+    
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({

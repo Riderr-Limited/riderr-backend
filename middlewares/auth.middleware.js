@@ -4,7 +4,7 @@ import User from '../models/user.models.js';
 /**
  * Authenticate user via JWT token
  */
-export const authenticate = async (req, res, next) => {
+export const authenticate = async (req, res) => {
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
@@ -107,25 +107,25 @@ export const authorize = (...roles) => {
       });
     }
 
-    next();
+   
   };
 };
 
 /**
  * Optional authentication - doesn't fail if no token
  */
-export const optionalAuth = async (req, res, next) => {
+export const optionalAuth = async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next();
+      return;
     }
 
     const token = authHeader.split(' ')[1];
 
     if (!token) {
-      return next();
+      return
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);

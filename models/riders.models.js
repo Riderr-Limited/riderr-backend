@@ -591,5 +591,5 @@ DriverSchema.statics.getOnlineCount = async function(companyId = null) {
   return this.countDocuments(query);
 };
 
-const Rider = mongoose.model("Driver", DriverSchema);
-export default Rider;
+const Driver = mongoose.model("Driver", DriverSchema);
+export default Driver;

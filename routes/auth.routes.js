@@ -10,7 +10,9 @@ import {
   debugUser,
   checkVerificationStatus,
   testEndpoint,
-  resetPasswordAdmin
+  resetPasswordAdmin,
+    signUpCompanyDriver
+
 } from '../controllers/auth.controller.js';
 import authorize from '../middlewares/authorize.js';
 
@@ -29,6 +31,8 @@ router.post('/debug-user', debugUser); // Debug endpoint
 router.post('/check-verification', checkVerificationStatus); // Debug endpoint
 // In your auth.routes.js
 router.post('/reset-password-admin', resetPasswordAdmin);
+router.post("/signup/companies/:companyId/drivers",   signUpCompanyDriver);
+
 // Protected routes
 router.post('/logout', authorize, logout);
 router.get('/me', authorize, getMe);
