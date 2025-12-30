@@ -10,7 +10,7 @@ import Ride from "../models/ride.model.js";
  */
 export const getNearbyDeliveryPersons = async (req, res) => {
   try {
-    const { lat, lng, radius = 10000, serviceType, vehicleType } = req.query;
+    const { lat, lng, radius = 10000 } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({
@@ -28,8 +28,7 @@ export const getNearbyDeliveryPersons = async (req, res) => {
       longitude,
       latitude,
       maxDistance,
-      serviceType,
-      vehicleType
+     
     );
 
     res.status(200).json({

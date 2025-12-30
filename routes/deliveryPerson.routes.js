@@ -29,4 +29,35 @@ router.patch('/online-status', toggleOnlineStatus);
 // Update services
 router.patch('/services', updateServices);
 
+ 
+
+ 
+
+router.get('/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const deliveryPerson = await DeliveryPerson.findOne({ userId })
+      .populate('userId', 'name email phone avatarUrl');
+    
+    if (!deliveryPerson) {
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery person not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      deliveryPerson
+    });
+  } catch (error) {
+    console.error('Error fetching delivery person:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
 export default router;

@@ -1,168 +1,68 @@
+// routes/user.routes.js
 import express from "express";
-import { 
-  getMyProfile,
-  updateMyProfile,
+import {
+  getUserProfile,
+  updateUserProfile,
   changePassword,
-  createRider,
-  getCompanyRiders,
-  getUserById,
-  deleteRider,
+  deactivateAccount,
+  reactivateAccount,
+  getUserNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  deleteNotification,
+  getUserPreferences,
+  updateUserPreferences,
+  getUserActivity,
+  getCompanyDrivers,
+  createCompanyDriver,
+  updateDriverStatus,
+  getDriverDetails,
   getAllUsers,
-  updateUserStatus
+  updateUser,
+  deleteUser
 } from "../controllers/user.controller.js";
-import authorize from "../middlewares/authorize.js";
-import authorizeRole from "../middlewares/authorizeRole.js";
+import  authenticate  from "../middlewares/authenticate.js";
+import { validateUpdateProfile, validateCreateDriver } from "../middlewares/validation.middleware.js";
 
 const router = express.Router();
 
-// Apply authorization middleware to all user routes
-router.use(authorize);
+// ==================== PUBLIC ROUTES ====================
+router.post("/reactivate", reactivateAccount);
 
-// ================== PROFILE ROUTES (All authenticated users) ==================
+// ==================== authenticateED ROUTES ====================
+// Apply authentication middleware to all routes below
+router.use(authenticate);
 
-/**
- * @route   GET /api/users/me
- * @desc    Get current user's profile
- * @access  Private
- */
-router.get("/me", getMyProfile);
+// User Profile Routes
+router.get("/profile", getUserProfile);
+router.put("/profile", validateUpdateProfile, updateUserProfile);
+router.put("/change-password", changePassword);
+router.delete("/deactivate", deactivateAccount);
 
-/**
- * @route   PATCH /api/users/me
- * @desc    Update current user's profile
- * @access  Private
- */
-router.patch("/me", updateMyProfile);
+// User Preferences Routes
+router.get("/preferences", getUserPreferences);
+router.put("/preferences", updateUserPreferences);
 
-/**
- * @route   PUT /api/users/me/password
- * @desc    Change current user's password
- * @access  Private
- */
-router.put("/me/password", changePassword);
+// Notification Routes
+router.get("/notifications", getUserNotifications);
+router.put("/notifications/:notificationId/read", markNotificationAsRead);
+router.put("/notifications/read-all", markAllNotificationsAsRead);
+router.delete("/notifications/:notificationId", deleteNotification);
 
-/**
- * @route   POST /api/users/me/avatar
- * @desc    Upload user avatar
- * @access  Private
- */
-router.post("/me/avatar", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Avatar upload endpoint"
-  });
-});
+// Activity Log Routes
+router.get("/activity", getUserActivity);
 
-// ================== USER MANAGEMENT ROUTES ==================
+// ==================== COMPANY ADMIN ROUTES ====================
+// Company Drivers Management
+router.get("/companies/:companyId/drivers", getCompanyDrivers);
+router.post("/companies/:companyId/drivers", validateCreateDriver, createCompanyDriver);
+router.get("/companies/:companyId/drivers/:driverId", getDriverDetails);
+router.put("/companies/:companyId/drivers/:driverId/status", updateDriverStatus);
 
-/**
- * @route   GET /api/users/:id
- * @desc    Get user by ID
- * @access  Private
- * @note    Admin can view anyone, company_admin can view their company users, users can view themselves
- */
-router.get("/:id", getUserById);
-
-// ================== COMPANY ADMIN ROUTES ==================
-
-/**
- * @route   POST /api/users/companies/:companyId/riders
- * @desc    Create a new rider for a company
- * @access  Private (company_admin only)
- */
-router.post(
-  "/companies/:companyId/riders",
-  authorizeRole(["company_admin"]),
-  createRider
-);
-
-/**
- * @route   GET /api/users/companies/:companyId/riders
- * @desc    Get all riders for a company
- * @access  Private (company_admin only)
- */
-router.get(
-  "/companies/:companyId/riders",
-  authorizeRole(["company_admin"]),
-  getCompanyRiders
-);
-
-/**
- * @route   DELETE /api/users/companies/:companyId/riders/:riderId
- * @desc    Deactivate a rider
- * @access  Private (company_admin only)
- */
-router.delete(
-  "/companies/:companyId/riders/:riderId",
-  authorizeRole(["company_admin"]),
-  deleteRider
-);
-
-// ================== ADMIN-ONLY ROUTES ==================
-
-/**
- * @route   GET /api/users
- * @desc    Get all users (with pagination, filtering, sorting)
- * @access  Private (admin only)
- */
-router.get(
-  "/",
-  authorizeRole(["admin"]),
-  getAllUsers
-);
-
-/**
- * @route   PATCH /api/users/:id/status
- * @desc    Update user status (isActive, isVerified)
- * @access  Private (admin only)
- */
-router.patch(
-  "/:id/status",
-  authorizeRole(["admin"]),
-  updateUserStatus
-);
-
-/**
- * @route   DELETE /api/users/:id
- * @desc    Deactivate user account
- * @access  Private (admin only)
- */
-router.delete(
-  "/:id",
-  authorizeRole(["admin"]),
-  (req, res) => {
-    res.status(200).json({
-      success: true,
-      message: "User deactivation endpoint"
-    });
-  }
-);
-
-/**
- * @route   GET /api/users/stats/overview
- * @desc    Get user statistics overview
- * @access  Private (admin only)
- */
-router.get(
-  "/stats/overview",
-  authorizeRole(["admin"]),
-  (req, res) => {
-    res.status(200).json({
-      success: true,
-      message: "User statistics endpoint",
-      data: {
-        totalUsers: 0,
-        activeUsers: 0,
-        newUsersToday: 0,
-        userDistribution: {
-          customer: 0,
-          rider: 0,
-          company_admin: 0,
-          admin: 0
-        }
-      }
-    });
-  }
-);
+// ==================== ADMIN ROUTES ====================
+// User Management (Admin only)
+router.get("/", getAllUsers);
+router.put("/:userId", updateUser);
+router.delete("/:userId", deleteUser);
 
 export default router;

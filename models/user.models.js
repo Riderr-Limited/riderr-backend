@@ -40,7 +40,6 @@ const UserSchema = new mongoose.Schema(
       index: true,
       validate: {
         validator: function(value) {
-          // Nigerian phone format: +234... or 0...
           return /^(\+234|0)[7-9][0-1]\d{8}$/.test(value.replace(/[\s\-\(\)]/g, ''));
         },
         message: "Please provide a valid Nigerian phone number"
@@ -54,7 +53,17 @@ const UserSchema = new mongoose.Schema(
       select: false
     },
 
-    // Company relationship (for company_admin and driver)
+    // ✅ ADD BOTH FIELDS FOR COMPATIBILITY
+    avatarUrl: {
+      type: String,
+      default: null
+    },
+
+    profileImage: { // ✅ Add this field
+      type: String,
+      default: null
+    },
+
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
@@ -62,17 +71,11 @@ const UserSchema = new mongoose.Schema(
       index: true
     },
 
-    // Driver-specific fields
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Driver",
       default: null,
       index: true
-    },
-
-    avatarUrl: {
-      type: String,
-      default: null
     },
 
     // Account status
@@ -133,7 +136,7 @@ const UserSchema = new mongoose.Schema(
       default: null
     },
 
-    // Email verification (KEEP ONLY EMAIL VERIFICATION)
+    // Email verification
     emailVerificationToken: {
       type: String,
       default: null,
@@ -228,7 +231,6 @@ UserSchema.virtual('isLocked').get(function() {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
-// REMOVE: isPhoneVerified virtual
 UserSchema.virtual('isEmailVerified').get(function() {
   return !!this.emailVerifiedAt;
 });
@@ -237,7 +239,7 @@ UserSchema.virtual('fullName').get(function() {
   return this.name;
 });
 
-// ========== PRE-SAVE MIDDLEWARE ==========
+ // ========== PRE-SAVE MIDDLEWARE ==========
 UserSchema.pre('save', async function(next) {
   try {
     // Trim and normalize strings
@@ -247,7 +249,14 @@ UserSchema.pre('save', async function(next) {
       this.phone = this.phone.trim().replace(/[\s\-\(\)]/g, '');
     }
     
-     
+    // ✅ Sync avatarUrl and profileImage for backward compatibility
+    if (this.avatarUrl && !this.profileImage) {
+      this.profileImage = this.avatarUrl;
+    }
+    if (this.profileImage && !this.avatarUrl) {
+      this.avatarUrl = this.profileImage;
+    }
+    
     // Set defaults based on role
     if (this.isNew) {
       if (this.role === 'admin') {
@@ -269,9 +278,9 @@ UserSchema.pre('save', async function(next) {
       }
     }
     
-  } catch (error) {
+   } catch (error) {
     console.log(error);
-  }
+   }
 });
 
 // ========== INSTANCE METHODS ==========
@@ -290,58 +299,6 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
   }
 };
 
-// Generate verification code
-UserSchema.methods.generateVerificationCode = function() {
-  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
-};
-
-// Set email verification token
-UserSchema.methods.setEmailVerificationToken = async function() {
-  const token = this.generateVerificationCode();
-  this.emailVerificationToken = token;
-  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-  await this.save();
-  return token;
-};
-
-// Verify email code
-UserSchema.methods.verifyEmailCode = async function(token) {
-  if (!this.emailVerificationToken || !this.emailVerificationExpires) {
-    return { success: false, message: 'No verification token found' };
-  }
-  
-  if (Date.now() > this.emailVerificationExpires) {
-    return { success: false, message: 'Verification token expired' };
-  }
-  
-  if (this.emailVerificationToken !== token) {
-    this.verificationAttempts += 1;
-    await this.save();
-    return { success: false, message: 'Invalid verification token' };
-  }
-  
-  this.emailVerifiedAt = new Date();
-  this.emailVerificationToken = null;
-  this.emailVerificationExpires = null;
-  this.verificationAttempts = 0;
-  this.isVerified = true; // User is verified after email verification
-  await this.save();
-  
-  return { success: true, message: 'Email verified successfully' };
-};
-
-// Add device token
-UserSchema.methods.addDeviceToken = async function(token, platform) {
-  this.deviceTokens = this.deviceTokens.filter(dt => dt.token !== token);
-  this.deviceTokens.push({ token, platform, addedAt: new Date() });
-  
-  if (this.deviceTokens.length > 3) {
-    this.deviceTokens = this.deviceTokens.slice(-3);
-  }
-  
-  await this.save();
-};
-
 // Get safe user object
 UserSchema.methods.toSafeObject = function() {
   return {
@@ -350,7 +307,8 @@ UserSchema.methods.toSafeObject = function() {
     name: this.name,
     email: this.email,
     phone: this.phone,
-    avatarUrl: this.avatarUrl,
+    avatarUrl: this.avatarUrl || this.profileImage, // ✅ Return whichever is available
+    profileImage: this.profileImage || this.avatarUrl, // ✅ Return both
     isVerified: this.isVerified,
     isActive: this.isActive,
     companyId: this.companyId,
@@ -359,29 +317,6 @@ UserSchema.methods.toSafeObject = function() {
     preferences: this.preferences,
     createdAt: this.createdAt
   };
-};
-
-// ========== STATIC METHODS ==========
-UserSchema.statics.findActive = function(role) {
-  const query = { isActive: true, isDeleted: false };
-  if (role) query.role = role;
-  return this.find(query);
-};
-
-UserSchema.statics.findByEmailOrPhone = function(identifier) {
-  return this.findOne({
-    $or: [
-      { email: identifier.toLowerCase() },
-      { phone: identifier.replace(/[\s\-\(\)]/g, '') }
-    ],
-    isDeleted: false
-  }).select('+password +refreshToken');
-};
-
-UserSchema.statics.findByCompany = function(companyId, role) {
-  const query = { companyId, isDeleted: false };
-  if (role) query.role = role;
-  return this.find(query);
 };
 
 const User = mongoose.model("User", UserSchema);

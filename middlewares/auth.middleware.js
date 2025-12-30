@@ -4,9 +4,7 @@ import User from '../models/user.models.js';
 /**
  * Authenticate user via JWT token
  */
-
-
-export const authenticate = async (req, res) => {
+export const authenticate = async (req, res, next) => {  // Added next parameter
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
@@ -30,7 +28,7 @@ export const authenticate = async (req, res) => {
     // Verify token
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-change-in-production');
     } catch (err) {
       if (err.name === 'TokenExpiredError') {
         return res.status(401).json({
@@ -75,7 +73,7 @@ export const authenticate = async (req, res) => {
 
     // Attach user to request
     req.user = user;
-    next();
+    next();  // Added next() call
 
   } catch (error) {
     console.error('❌ Authentication error:', error);
@@ -109,28 +107,28 @@ export const authorize = (...roles) => {
       });
     }
 
-   
+    next();  // Added next() call
   };
 };
 
 /**
  * Optional authentication - doesn't fail if no token
  */
-export const optionalAuth = async (req, res) => {
+export const optionalAuth = async (req, res, next) => {  // Added next parameter
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return;
+      return next();  // Changed from return; to next()
     }
 
     const token = authHeader.split(' ')[1];
 
     if (!token) {
-      return
+      return next();  // Changed from return to next()
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-change-in-production');
     const user = await User.findById(decoded.userId)
       .select('-password -refreshToken');
 
@@ -193,3 +191,146 @@ export const checkCompanyOwnership = (req, res, next) => {
     message: 'Access denied'
   });
 };
+
+/**
+ * Company admin only middleware
+ */
+export const companyAdminOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  if (req.user.role !== 'company_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only company admins can access this route'
+    });
+  }
+
+  if (!req.user.companyId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Company admin must be associated with a company'
+    });
+  }
+
+  next();
+};
+
+/**
+ * Admin only middleware
+ */
+export const adminOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only admins can access this route'
+    });
+  }
+
+  next();
+};
+
+/**
+ * Driver only middleware
+ */
+export const driverOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  if (req.user.role !== 'driver') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only drivers can access this route'
+    });
+  }
+
+  next();
+};
+
+/**
+ * Customer only middleware
+ */
+export const customerOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  if (req.user.role !== 'customer') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only customers can access this route'
+    });
+  }
+
+  next();
+};
+
+/**
+ * Rate limiting middleware (placeholder)
+ */
+export const rateLimit = (req, res, next) => {
+  // Implement rate limiting logic here
+  // You can use express-rate-limit package
+  next();
+};
+
+/**
+ * Check if user owns resource
+ */
+export const checkResourceOwnership = (resourceOwnerId) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Admins can access any resource
+    if (req.user.role === 'admin') {
+      return next();
+    }
+
+    // Check if user owns the resource
+    const resourceId = req.params[resourceOwnerId] || req.body[resourceOwnerId];
+    
+    if (req.user._id.toString() === resourceId.toString()) {
+      return next();
+    }
+
+    // Company admin can access company resources
+    if (req.user.role === 'company_admin' && req.user.companyId) {
+      // Additional logic for company-owned resources
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. You do not own this resource.'
+    });
+  };
+};
+
+/**
+ * Add aliases for compatibility
+ */
+export const protect = authenticate;  // Alias for authenticate
+export const auth = authenticate;     // Another alias

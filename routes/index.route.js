@@ -5,7 +5,8 @@ import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
 import deliveryPersonRoutes from './deliveryPerson.routes.js';
-import companyRoutes from './company.routes.js';
+ import paymentRoutes from './payment.routes.js';
+
 
 const router = express.Router();
 
@@ -97,7 +98,8 @@ router.use("/users", userRoutes);
 router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
 router.use("/delivery-persons", deliveryPersonRoutes);
-router.use("/companies", companyRoutes);
+router.use("/payments", paymentRoutes);
+
 
 /**
  * @route   ALL *

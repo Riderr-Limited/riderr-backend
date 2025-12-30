@@ -1,40 +1,73 @@
-import express from 'express';
+// routes/auth.routes.js (with validation)
+import express from "express";
 import {
   signUp,
+  signUpCompanyDriver,
   signIn,
-  verifyEmail, // Removed verifyPhone
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  changePassword,
   resendVerification,
   refreshToken,
   logout,
   getMe,
-  debugUser,
-  checkVerificationStatus,
+  updateProfile,
   testEndpoint,
-  resetPasswordAdmin,
-    signUpCompanyDriver
-
-} from '../controllers/auth.controller.js';
-import authorize from '../middlewares/authorize.js';
+  checkVerificationStatus
+} from "../controllers/auth.controller.js";
+import { protect, authorize } from "../middlewares/auth.middleware.js";
+import {
+  validateSignup,
+  validateLogin,
+  validateVerifyEmail,
+  validateForgotPassword,
+  validateResetPassword,
+  validateChangePassword,
+  validateResendVerification,
+  validateRefreshToken,
+  validateSignUpCompanyDriver
+} from "../middlewares/validation.middleware.js";
 
 const router = express.Router();
 
-// Test endpoint
-router.get('/test', testEndpoint);
+// ==================== PUBLIC ROUTES ====================
 
-// Public routes
-router.post('/signup', signUp);
-router.post('/login', signIn);
-router.post('/verify-email', verifyEmail); // Only email verification
-router.post('/resend-verification', resendVerification);
-router.post('/refresh', refreshToken);
-router.post('/debug-user', debugUser); // Debug endpoint
-router.post('/check-verification', checkVerificationStatus); // Debug endpoint
-// In your auth.routes.js
-router.post('/reset-password-admin', resetPasswordAdmin);
-router.post("/signup/companies/:companyId/drivers",   signUpCompanyDriver);
+// Health check
+router.get("/test", testEndpoint);
 
-// Protected routes
-router.post('/logout', authorize, logout);
-router.get('/me', authorize, getMe);
+// Verification status
+router.get("/check-verification", checkVerificationStatus);
+
+// Registration & Login
+router.post("/signup", validateSignup, signUp);
+router.post("/login", validateLogin, signIn);
+
+// Email verification
+router.post("/verify-email", validateVerifyEmail, verifyEmail);
+router.post("/resend-verification", validateResendVerification, resendVerification);
+
+// Password recovery
+router.post("/forgot-password", validateForgotPassword, forgotPassword);
+router.post("/reset-password", validateResetPassword, resetPassword);
+
+// Token refresh
+router.post("/refresh", validateRefreshToken, refreshToken);
+
+// ==================== PROTECTED ROUTES ====================
+router.use(protect);
+
+// User profile (all authenticated users)
+router.get("/me", getMe);
+router.put("/profile", updateProfile);
+router.post("/change-password", validateChangePassword, changePassword);
+router.post("/logout", logout);
+
+// Company admin specific routes
+router.post("/signup-company-driver", 
+  authorize('company_admin'),
+  validateSignUpCompanyDriver,
+  signUpCompanyDriver
+);
 
 export default router;

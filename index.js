@@ -1,6 +1,10 @@
+// server.js
 import mongoose from 'mongoose';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import app from './app.js';
 import dotenv from 'dotenv';
+import { setupDeliverySocket } from './socket/deliverySocket.js';
 
 // Load environment variables
 dotenv.config();
@@ -18,7 +22,6 @@ const connectDB = async () => {
     console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
     console.log(`📊 Database: ${conn.connection.name}`);
     
-    // Handle connection events
     mongoose.connection.on('error', (err) => {
       console.error('❌ MongoDB connection error:', err);
     });
@@ -37,13 +40,29 @@ const connectDB = async () => {
     process.exit(1);
   }
 };
+
 /**
  * Graceful shutdown
  */
-const gracefulShutdown = async () => {
+const gracefulShutdown = async (server, io) => {
   console.log('🛑 Received shutdown signal, closing connections...');
   
   try {
+    // Close Socket.IO connections
+    if (io) {
+      io.close(() => {
+        console.log('✅ Socket.IO connections closed');
+      });
+    }
+    
+    // Close HTTP server
+    if (server) {
+      server.close(() => {
+        console.log('✅ HTTP server closed');
+      });
+    }
+    
+    // Close MongoDB connection
     await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
     
@@ -62,18 +81,38 @@ const startServer = async () => {
     // Connect to database
     await connectDB();
     
+    // Create HTTP server from Express app
+    const httpServer = createServer(app);
+    
+    // Initialize Socket.IO with CORS configuration
+    const io = new Server(httpServer, {
+      cors: {
+        origin: '*', // In production, replace with your actual domain
+        methods: ['GET', 'POST'],
+        credentials: true
+      },
+      transports: ['websocket', 'polling'],
+      pingTimeout: 60000,
+      pingInterval: 25000
+    });
+    
+    // Setup delivery socket events
+    setupDeliverySocket(io);
+    console.log('✅ Socket.IO initialized and delivery socket setup complete');
+    
     // Start the server
-    const server = app.listen(PORT, () => {
-      console.log('\n' + '='.repeat(50));
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      console.log('\n' + '='.repeat(60));
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`📡 API available at: http://localhost:${PORT}/api`);
       console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
-      console.log('='.repeat(50) + '\n');
+      console.log(`🔌 WebSocket available at: ws://localhost:${PORT}`);
+      console.log('='.repeat(60) + '\n');
     });
     
     // Handle server errors
-    server.on('error', (error) => {
+    httpServer.on('error', (error) => {
       if (error.code === 'EADDRINUSE') {
         console.error(`❌ Port ${PORT} is already in use`);
       } else {
@@ -83,8 +122,8 @@ const startServer = async () => {
     });
     
     // Handle graceful shutdown
-    process.on('SIGTERM', gracefulShutdown);
-    process.on('SIGINT', gracefulShutdown);
+    process.on('SIGTERM', () => gracefulShutdown(httpServer, io));
+    process.on('SIGINT', () => gracefulShutdown(httpServer, io));
     
   } catch (error) {
     console.error('❌ Failed to start server:', error);
@@ -103,6 +142,8 @@ process.on('unhandledRejection', (error) => {
   console.error('❌ Unhandled Rejection:', error);
   process.exit(1);
 });
+
+
 
 // Start the server
 startServer();

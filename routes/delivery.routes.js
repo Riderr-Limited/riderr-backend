@@ -1,50 +1,152 @@
 // routes/delivery.routes.js
-import express from 'express';
-import authenticate from '../middlewares/authenticate.js';
+import express from "express";
 import {
-  createDelivery,
+  createDeliveryRequest,
+  getNearbyDrivers,
+  acceptDelivery,
+  rejectDelivery,
+  startDelivery,
+  updateDeliveryLocation,
+  completeDelivery,
+  cancelDelivery,
+  getDeliveryDetails,
+  rateDelivery,
   getMyDeliveries,
-  getDeliveryPersonDeliveries, // ✅ This is the correct name
-  getDeliveryById,              // ✅ Fixed typo
+  getDriverDeliveries,
+  trackDelivery,
+  generateDeliveryOTP,
   getAllDeliveries,
-  assignDelivery,
-  updateDeliveryStatus,
-  getNearbyRidersForDelivery
-} from '../controllers/delivery.controller.js';
+  getCompanyDeliveries
+} from "../controllers/delivery.controller.js";
+import { protect, authorize, companyAdminOnly, adminOnly } from "../middlewares/auth.middleware.js";
+import {
+  validateCreateDelivery,
+  validateRateDelivery,
+  validateIdParam,
+  validatePagination,
+  validateDeliveryQuery,
+  validateNearbyDrivers,
+  validateUpdateLocation,
+  validateOTPGeneration,
+  validateCancelDelivery,
+  validateStartDelivery,
+  validateCompleteDelivery
+} from "../middlewares/validation.middleware.js";
 
 const router = express.Router();
 
-// Get nearby delivery persons for delivery
-router.get('/nearby-riders', authenticate, getNearbyRidersForDelivery);
+// ==================== PROTECTED ROUTES ====================
+// All routes require authentication
+router.use(protect);
 
-// Create a new delivery (with optional delivery person selection)
-router.post('/', authenticate, createDelivery);
+// ==================== CUSTOMER ROUTES ====================
+router.post("/request", 
+  authorize('customer'),
+  validateCreateDelivery,
+  createDeliveryRequest
+);
 
-// Get my deliveries (Customer)
-router.get('/my', authenticate, getMyDeliveries);
+router.get("/nearby-drivers", 
+  authorize('customer'),
+  validateNearbyDrivers,
+  getNearbyDrivers
+);
 
-// Get delivery person's deliveries (Delivery Person)
-router.get('/delivery-person', authenticate, getDeliveryPersonDeliveries); // ✅ Use correct name
+router.get("/my",
+  authorize('customer'),
+  validatePagination,
+  validateDeliveryQuery,
+  getMyDeliveries
+);
 
-// Get company deliveries (Company Admin)
-// Note: This function doesn't exist in your controller! You need to add it
-router.get('/company/:companyId', authenticate, (req, res) => {
-  res.status(501).json({ 
-    success: false, 
-    message: "Company deliveries endpoint not implemented yet" 
-  });
-});
+router.post("/:deliveryId/generate-otp",
+  authorize('customer'),
+  validateIdParam,
+  validateOTPGeneration,
+  generateDeliveryOTP
+);
 
-// Get all deliveries (Admin)
-router.get('/', authenticate, getAllDeliveries);
+router.post("/:deliveryId/rate",
+  authorize('customer'),
+  validateIdParam,
+  validateRateDelivery,
+  rateDelivery
+);
 
-// Get delivery by ID
-router.get('/:deliveryId', authenticate, getDeliveryById);
+router.post("/:deliveryId/cancel",
+  authorize('customer', 'driver', 'admin'),
+  validateIdParam,
+  validateCancelDelivery,
+  cancelDelivery
+);
 
-// Assign delivery to delivery person (Company Admin)
-router.patch('/:deliveryId/assign', authenticate, assignDelivery);
+// ==================== DRIVER ROUTES ====================
+router.post("/:deliveryId/accept",
+  authorize('driver'),
+  validateIdParam,
+  acceptDelivery
+);
 
-// Update delivery status (Delivery Person)
-router.patch('/:deliveryId/status', authenticate, updateDeliveryStatus);
+router.post("/:deliveryId/reject",
+  authorize('driver'),
+  validateIdParam,
+  rejectDelivery
+);
+
+router.post("/:deliveryId/start",
+  authorize('driver'),
+  validateIdParam,
+  validateStartDelivery,
+  startDelivery
+);
+
+router.post("/:deliveryId/complete",
+  authorize('driver'),
+  validateIdParam,
+  validateCompleteDelivery,
+  completeDelivery
+);
+
+router.post("/:deliveryId/location",
+  authorize('driver'),
+  validateIdParam,
+  validateUpdateLocation,
+  updateDeliveryLocation
+);
+
+router.get("/driver/my",
+  authorize('driver'),
+  validatePagination,
+  validateDeliveryQuery,
+  getDriverDeliveries
+);
+
+// ==================== SHARED ROUTES (Customer/Driver/Admin) ====================
+router.get("/:deliveryId",
+  validateIdParam,
+  getDeliveryDetails
+);
+
+router.get("/:deliveryId/track",
+  validateIdParam,
+  trackDelivery
+);
+
+// ==================== COMPANY ADMIN ROUTES ====================
+router.get("/company/:companyId/deliveries",
+  companyAdminOnly,
+  validateIdParam,
+  validatePagination,
+  validateDeliveryQuery,
+  getCompanyDeliveries
+);
+
+// ==================== ADMIN ROUTES ====================
+router.get("/",
+  adminOnly,
+  validatePagination,
+  validateDeliveryQuery,
+  getAllDeliveries
+);
 
 export default router;

@@ -8,6 +8,7 @@ import Delivery from "../models/delivery.models.js";
  * @route   GET /api/rider/nearby
  * @access  Private (Customer/Company Admin)
  */
+// Update in rider.controller.js
 export const getNearbyRiders = async (req, res) => {
   try {
     const { lat, lng, radius = 10000, vehicleType } = req.query;
@@ -23,68 +24,121 @@ export const getNearbyRiders = async (req, res) => {
     const longitude = parseFloat(lng);
     const maxDistance = parseFloat(radius); // in meters
 
-    // Find riders within radius who are available and online
-    const query = {
-      isAvailable: true,
-      isOnline: true,
-      isVerified: true,
-      currentDeliveryId: null,
-      "currentLocation.lat": { $exists: true },
-      "currentLocation.lng": { $exists: true }
-    };
+    // Find BOTH riders AND drivers who are available
+    const [riders, drivers] = await Promise.all([
+      // Find riders (delivery persons)
+      Rider.find({
+        isAvailable: true,
+        isOnline: true,
+        isVerified: true,
+        currentDeliveryId: null,
+        "currentLocation.lat": { $exists: true },
+        "currentLocation.lng": { $exists: true }
+      }).populate('userId', 'name phone avatarUrl'),
+      
+      // Find drivers who can also do deliveries
+      Driver.find({
+        isAvailable: true,
+        isOnline: true,
+        isVerified: true,
+        currentTripId: null,
+        "location.coordinates": { $exists: true },
+        canAcceptRides: true // Make sure they can accept rides/deliveries
+      }).populate('userId', 'name phone avatarUrl')
+    ]);
 
+    // Combine and filter both riders and drivers
+    const allProviders = [
+      ...riders.map(r => ({ ...r.toObject(), type: 'rider' })),
+      ...drivers.map(d => ({ 
+        ...d.toObject(), 
+        type: 'driver',
+        // Map driver location to rider format for distance calculation
+        currentLocation: {
+          lat: d.location?.coordinates?.[1] || 0,
+          lng: d.location?.coordinates?.[0] || 0
+        }
+      }))
+    ];
+
+    // Filter by vehicle type if specified
+    let filteredProviders = allProviders;
     if (vehicleType) {
-      query.vehicleType = vehicleType;
+      filteredProviders = allProviders.filter(provider => 
+        provider.vehicleType === vehicleType
+      );
     }
 
-    const riders = await Rider.find(query).populate('userId', 'name phone avatarUrl');
-
-    // Calculate distance for each rider and filter by radius
-    const nearbyRiders = riders.filter(rider => {
-      if (!rider.currentLocation?.lat || !rider.currentLocation?.lng) {
+    // Calculate distance and filter by radius
+    const nearbyRiders = filteredProviders.filter(provider => {
+      const loc = provider.currentLocation || provider.location;
+      
+      if (!loc || !loc.lat || !loc.lng) {
         return false;
       }
 
       const distance = calculateDistance(
         latitude,
         longitude,
-        rider.currentLocation.lat,
-        rider.currentLocation.lng
+        loc.lat,
+        loc.lng
       );
 
-      rider.distance = distance; // Add distance to rider object
-      return distance <= maxDistance / 1000; // Convert meters to km for comparison
+      provider.distance = distance; // Add distance to provider object
+      return distance <= maxDistance / 1000; // Convert meters to km
     });
 
     // Sort by distance
     nearbyRiders.sort((a, b) => a.distance - b.distance);
 
+    // Format response
+    const formattedRiders = nearbyRiders.map(provider => {
+      const baseData = {
+        _id: provider._id,
+        userId: provider.userId,
+        companyId: provider.companyId,
+        licenseNumber: provider.licenseNumber,
+        vehicleType: provider.vehicleType,
+        isAvailable: provider.isAvailable,
+        isVerified: provider.isVerified,
+        isOnline: provider.isOnline,
+        currentLocation: provider.currentLocation,
+        distance: provider.distance,
+        distanceText: `${provider.distance.toFixed(1)} km away`,
+        estimatedArrival: Math.ceil(provider.distance * 3), // 3 min per km
+        type: provider.type // 'rider' or 'driver'
+      };
+
+      // Add type-specific fields
+      if (provider.type === 'rider') {
+        return {
+          ...baseData,
+          vehiclePlate: provider.vehiclePlate,
+          vehicleColor: provider.vehicleColor,
+          vehicleModel: provider.vehicleModel,
+          currentDeliveryId: provider.currentDeliveryId,
+          totalDeliveries: provider.totalDeliveries,
+          averageRating: provider.averageRating
+        };
+      } else { // driver
+        return {
+          ...baseData,
+          vehicleMake: provider.vehicleMake,
+          vehicleModel: provider.vehicleModel,
+          vehicleYear: provider.vehicleYear,
+          vehicleColor: provider.vehicleColor,
+          plateNumber: provider.plateNumber,
+          currentTripId: provider.currentTripId,
+          rating: provider.rating,
+          canAcceptRides: provider.canAcceptRides
+        };
+      }
+    });
+
     res.status(200).json({
       success: true,
       message: "Nearby riders found",
-      data: nearbyRiders.map(rider => ({
-        _id: rider._id,
-        userId: rider.userId,
-        companyId: rider.companyId,
-        licenseNumber: rider.licenseNumber,
-        vehicleType: rider.vehicleType,
-        vehiclePlate: rider.vehiclePlate,
-        vehicleColor: rider.vehicleColor,
-        vehicleModel: rider.vehicleModel,
-        isAvailable: rider.isAvailable,
-        isVerified: rider.isVerified,
-        isOnline: rider.isOnline,
-        currentDeliveryId: rider.currentDeliveryId,
-        currentLocation: rider.currentLocation,
-        totalDeliveries: rider.totalDeliveries,
-        averageRating: rider.averageRating,
-        distance: rider.distance,
-        licensePhoto: rider.licensePhoto,
-        vehiclePhoto: rider.vehiclePhoto,
-        insurancePhoto: rider.insurancePhoto,
-        createdAt: rider.createdAt,
-        updatedAt: rider.updatedAt
-      }))
+      data: formattedRiders
     });
 
   } catch (error) {

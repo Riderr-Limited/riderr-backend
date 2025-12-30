@@ -1,36 +1,36 @@
-// routes/drivers.routes.js
+// routes/driver.routes.js
 import express from 'express';
-import authorize from '../middlewares/authorize.js'; // Default import
 import {
+  getNearbyDrivers,
   updateDriverLocation,
   toggleDriverOnlineStatus,
-  getRiderProfile
-} from '../controllers/rider.controller.js';
+  getDriverProfile,
+  updateDriverProfile,
+  uploadDriverDocuments,
+  getCurrentDelivery,
+  updateAvailability
+} from '../controllers/driver.controller.js';
+import { protect } from '../middleware/auth.middleware.js';
 
 const router = express.Router();
 
-// Apply authentication to all routes
-router.use(authorize); // Use the correct middleware
+// All routes require authentication
+router.use(protect);
 
-/**
- * @route   GET /api/drivers/profile
- * @desc    Get driver profile
- * @access  Private (driver only)
- */
-router.get('/profile', getRiderProfile);
-
-/**
- * @route   PATCH /api/drivers/online-status
- * @desc    Toggle driver online status
- * @access  Private (driver only)
- */
-router.patch('/online-status', toggleDriverOnlineStatus);
-
-/**
- * @route   PATCH /api/drivers/location
- * @desc    Update driver location
- * @access  Private (driver only)
- */
+// Driver   and location
+router.get('/nearby', getNearbyDrivers);
 router.patch('/location', updateDriverLocation);
+router.patch('/online-status', toggleDriverOnlineStatus);
+router.patch('/availability', updateAvailability);
+
+// Driver profile
+router.get('/profile', getDriverProfile);
+router.patch('/profile', updateDriverProfile);
+
+// Driver documents
+router.post('/documents', uploadDriverDocuments);
+
+// Current delivery
+router.get('/current-delivery', getCurrentDelivery);
 
 export default router;

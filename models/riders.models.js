@@ -397,7 +397,6 @@ DriverSchema.pre('save', function(next) {
     this.plateNumber = this.plateNumber.toUpperCase().trim();
   }
 
-  next();
 });
 
 // ========== INSTANCE METHODS ==========
