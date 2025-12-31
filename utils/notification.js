@@ -11,7 +11,6 @@ export const sendNotification = async ({ userId, title, message, data, type = "s
       userId,
       title,
       message,
-      data,
       type,
       read: false
     });

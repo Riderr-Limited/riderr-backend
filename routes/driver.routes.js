@@ -1,16 +1,15 @@
 // routes/driver.routes.js
 import express from 'express';
 import {
-  getNearbyDrivers,
-  updateDriverLocation,
+   updateDriverLocation,
   toggleDriverOnlineStatus,
   getDriverProfile,
   updateDriverProfile,
   uploadDriverDocuments,
   getCurrentDelivery,
-  updateAvailability
-} from '../controllers/driver.controller.js';
-import { protect } from '../middleware/auth.middleware.js';
+  updateDriverAvailability
+ } from '../controllers/driver.controller.js';
+import { protect } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
@@ -18,11 +17,10 @@ const router = express.Router();
 router.use(protect);
 
 // Driver   and location
-router.get('/nearby', getNearbyDrivers);
-router.patch('/location', updateDriverLocation);
+ router.patch('/location', updateDriverLocation);
 router.patch('/online-status', toggleDriverOnlineStatus);
-router.patch('/availability', updateAvailability);
-
+router.post('/availability', updateDriverAvailability);
+ 
 // Driver profile
 router.get('/profile', getDriverProfile);
 router.patch('/profile', updateDriverProfile);

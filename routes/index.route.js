@@ -6,7 +6,7 @@ import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
 import deliveryPersonRoutes from './deliveryPerson.routes.js';
  import paymentRoutes from './payment.routes.js';
-
+import driverRoutes from './driver.routes.js';
 
 const router = express.Router();
 
@@ -61,7 +61,8 @@ router.get("/", (req, res) => {
         assignDelivery: "PATCH /api/deliveries/:id/assign (company_admin)",
         updateStatus: "PATCH /api/deliveries/:id/status (delivery_person)",
         getById: "GET /api/deliveries/:id",
-        getAllDeliveries: "GET /api/deliveries (admin)"
+        getAllDeliveries: "GET /api/deliveries (admin)",
+        getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)"
       },
       rides: {
         createRide: "POST /api/rides (customer)",
@@ -99,7 +100,7 @@ router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
 router.use("/delivery-persons", deliveryPersonRoutes);
 router.use("/payments", paymentRoutes);
-
+router.use("/driver", driverRoutes)
 
 /**
  * @route   ALL *

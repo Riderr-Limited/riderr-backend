@@ -464,17 +464,17 @@ export const toggleDriverOnlineStatus = async (req, res) => {
       });
     }
 
-    // Validate if driver can go online
-    if (isOnline) {
-      const validation = await validateDriverForOnline(driver);
-      if (!validation.isValid) {
-        return res.status(400).json({
-          success: false,
-          message: "Cannot go online",
-          errors: validation.errors
-        });
-      }
-    }
+    //// Validate if driver can go online
+    //if (isOnline) {
+    //  const validation = await validateDriverForOnline(driver);
+    //  if (!validation.isValid) {
+    //    return res.status(400).json({
+    //      success: false,
+    //      message: "Cannot go online",
+    //      errors: validation.errors
+    //    });
+    //  }
+    //}
 
     // Update status
     driver.isOnline = isOnline;
