@@ -62,7 +62,8 @@ router.get("/", (req, res) => {
         updateStatus: "PATCH /api/deliveries/:id/status (delivery_person)",
         getById: "GET /api/deliveries/:id",
         getAllDeliveries: "GET /api/deliveries (admin)",
-        getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)"
+        getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)",
+        getCurrentDelivery: "GET /api/drivers/current-delivery (delivery_person)"
       },
       rides: {
         createRide: "POST /api/rides (customer)",

@@ -78,7 +78,7 @@ const broadcastDeliveryRequest = async (delivery, drivers) => {
         deliveryId: delivery._id,
         pickup: delivery.pickup,
         dropoff: delivery.dropoff,
-        estimatedFare: delivery.estimatedFare,
+        estimatedFare: delivery.fare.totalFare,
         distance: delivery.estimatedDistanceKm,
         expiresIn: 60 // 60 seconds to accept
       }
@@ -104,7 +104,7 @@ const broadcastDeliveryRequest = async (delivery, drivers) => {
 
 /**
  * -------------------------------
- * DELIVERY CONTROLLERS
+ * CUSTOMER CONTROLLERS
  * -------------------------------
  */
 
@@ -153,8 +153,8 @@ export const createDeliveryRequest = async (req, res) => {
       dropoffAddress,
       dropoffLat,
       dropoffLng,
-      dropoffName,
-      dropoffPhone,
+      recipientName,
+      recipientPhone,
       dropoffInstructions,
       
       itemType,
@@ -178,6 +178,16 @@ export const createDeliveryRequest = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Pickup and dropoff coordinates are required"
+      });
+    }
+
+    // Validate recipient details
+    if (!recipientName || !recipientPhone) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Recipient name and phone are required"
       });
     }
 
@@ -218,10 +228,13 @@ export const createDeliveryRequest = async (req, res) => {
         address: dropoffAddress,
         lat: parseFloat(dropoffLat),
         lng: parseFloat(dropoffLng),
-        name: dropoffName || "Dropoff Location",
-        phone: dropoffPhone,
+        name: recipientName || "Dropoff Location",
+        phone: recipientPhone,
         instructions: dropoffInstructions
       },
+      
+      recipientName: recipientName,
+      recipientPhone: recipientPhone,
       
       itemDetails: {
         type: itemType || "parcel",
@@ -262,6 +275,7 @@ export const createDeliveryRequest = async (req, res) => {
         scheduledFor: scheduleFor ? new Date(scheduleFor) : null
       },
       
+      // SIMPLIFIED: Start with "created" status only
       status: "created",
       meta: {
         platform: req.headers['x-platform'] || 'web',
@@ -274,7 +288,7 @@ export const createDeliveryRequest = async (req, res) => {
     const delivery = new Delivery(deliveryData);
     await delivery.save({ session });
 
-    // Find nearby drivers
+    // Find nearby drivers (but don't broadcast immediately)
     const nearbyDrivers = await findNearbyDrivers(
       parseFloat(pickupLat),
       parseFloat(pickupLng),
@@ -282,28 +296,69 @@ export const createDeliveryRequest = async (req, res) => {
       vehicleType
     );
 
-    // Broadcast to drivers
+    // Store nearby drivers info but don't broadcast yet
     if (nearbyDrivers.length > 0) {
-      await broadcastDeliveryRequest(delivery, nearbyDrivers);
+      // Just log for now - actual broadcasting will happen via scheduled job or separate endpoint
+      console.log(`Found ${nearbyDrivers.length} nearby drivers for delivery ${delivery._id}`);
+      
+      // Store the nearest driver info for quick access
+      const nearestDriver = nearbyDrivers[0];
+      delivery.nearestDriver = {
+        driverId: nearestDriver._id,
+        distance: nearestDriver._doc.distance,
+        estimatedArrival: Math.ceil(nearestDriver._doc.distance * 3)
+      };
     } else {
-      delivery.status = "no_drivers";
-      await delivery.save({ session });
+      console.log(`No nearby drivers found for delivery ${delivery._id}`);
+      // Just leave as "created" - no special status
     }
+
+    await delivery.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
+    // SIMPLIFIED RESPONSE: Just confirm delivery created
     res.status(201).json({
       success: true,
-      message: nearbyDrivers.length > 0 
-        ? "Delivery request created and searching for drivers" 
-        : "Delivery request created. No drivers available in your area.",
+      message: "Delivery request created successfully",
       data: {
-        delivery,
-        nearbyDriversCount: nearbyDrivers.length,
-        estimatedWaitTime: nearbyDrivers.length > 0 ? "2-5 minutes" : "Unknown"
+        delivery: {
+          _id: delivery._id,
+          status: delivery.status,
+          pickup: delivery.pickup,
+          dropoff: delivery.dropoff,
+          recipientName: delivery.recipientName,
+          recipientPhone: delivery.recipientPhone,
+          itemDetails: delivery.itemDetails,
+          fare: delivery.fare,
+          estimatedDistanceKm: delivery.estimatedDistanceKm,
+          estimatedDurationMin: delivery.estimatedDurationMin,
+          payment: delivery.payment,
+          instructions: delivery.instructions,
+          schedule: delivery.schedule,
+          createdAt: delivery.createdAt,
+          // Include nearby drivers count but don't change status
+          nearbyDriversCount: nearbyDrivers.length,
+          estimatedWaitTime: nearbyDrivers.length > 0 ? "Searching for drivers..." : "Waiting for drivers to come online"
+        }
       }
     });
+
+    // AFTER RESPONSE: Start searching for drivers in background
+    if (nearbyDrivers.length > 0) {
+      // Start broadcasting to drivers
+      setTimeout(async () => {
+        try {
+          const updatedDelivery = await Delivery.findById(delivery._id);
+          if (updatedDelivery && updatedDelivery.status === "created") {
+            await broadcastDeliveryRequest(updatedDelivery, nearbyDrivers);
+          }
+        } catch (error) {
+          console.error("Background broadcast error:", error);
+        }
+      }, 1000); // 1 second delay
+    }
 
   } catch (error) {
     await session.abortTransaction();
@@ -318,7 +373,7 @@ export const createDeliveryRequest = async (req, res) => {
 };
 
 /**
- * @desc    Get nearby available drivers
+ * @desc    Get nearby available drivers for customer
  * @route   GET /api/deliveries/nearby-drivers
  * @access  Private (Customer)
  */
@@ -386,7 +441,172 @@ export const getNearbyDrivers = async (req, res) => {
 };
 
 /**
- * @desc    Driver accepts delivery request
+ * -------------------------------
+ * DRIVER CONTROLLERS - DELIVERY REQUESTS
+ * -------------------------------
+ */
+
+/**
+ * @desc    Get nearby delivery requests for driver
+ * @route   GET /api/deliveries/driver/nearby
+ * @access  Private (Driver)
+ */
+export const getNearbyDeliveryRequests = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    
+    // Validate driver role
+    if (driverUser.role !== "driver") {
+      return res.status(403).json({
+        success: false,
+        message: "Only drivers can view delivery requests"
+      });
+    }
+
+    const { lat, lng, radius = 10, maxDistance = 10 } = req.query;
+
+    // Use provided location or driver's current location
+    let latitude, longitude;
+    
+    if (lat && lng) {
+      latitude = parseFloat(lat);
+      longitude = parseFloat(lng);
+    } else {
+      // Get driver's current location
+      const driver = await Driver.findOne({ userId: driverUser._id });
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          message: "Driver profile not found"
+        });
+      }
+      
+      if (!driver.currentLocation?.lat || !driver.currentLocation?.lng) {
+        return res.status(400).json({
+          success: false,
+          message: "Driver location not available. Please update your location."
+        });
+      }
+      
+      latitude = driver.currentLocation.lat;
+      longitude = driver.currentLocation.lng;
+    }
+
+    // Find available deliveries
+    const deliveries = await Delivery.find({
+      status: "created", // Only show created deliveries (not yet assigned)
+      driverId: { $exists: false }, // Not assigned to any driver
+      $or: [
+        { broadcastedTo: { $exists: false } },
+        { $and: [
+          { broadcastedTo: { $exists: true } },
+          { broadcastedTo: { $ne: driverUser.driverId } } // Not already broadcasted to this driver
+        ]}
+      ],
+      createdAt: { $gte: new Date(Date.now() - 30 * 60 * 1000) } // Last 30 minutes only
+    })
+    .populate('customerId', 'name phone avatarUrl rating')
+    .sort({ createdAt: -1 })
+    .limit(50); // Limit results for performance
+
+    // Calculate distance for each delivery and filter by radius
+    const nearbyDeliveries = [];
+    
+    for (const delivery of deliveries) {
+      const distance = calculateDistance(
+        latitude,
+        longitude,
+        delivery.pickup.lat,
+        delivery.pickup.lng
+      );
+      
+      // Check if within radius
+      if (distance <= parseFloat(maxDistance)) {
+        // Calculate fare (if not already calculated)
+        if (!delivery.fare?.totalFare) {
+          const fareDetails = calculateFare({
+            distance,
+            itemWeight: delivery.itemDetails.weight || 1,
+            itemType: delivery.itemDetails.type || "parcel",
+            vehicleType: delivery.instructions?.vehiclePreference || "bike",
+            isFragile: delivery.itemDetails.isFragile || false,
+            itemValue: delivery.itemDetails.value || 0
+          });
+          
+          delivery.fare = {
+            baseFare: fareDetails.baseFare,
+            distanceFare: fareDetails.distanceFare,
+            weightFare: fareDetails.weightFare,
+            specialFare: fareDetails.specialFare,
+            totalFare: fareDetails.totalFare,
+            currency: "NGN"
+          };
+        }
+        
+        // Format delivery for response
+        const formattedDelivery = {
+          _id: delivery._id,
+          pickup: {
+            address: delivery.pickup.address,
+            lat: delivery.pickup.lat,
+            lng: delivery.pickup.lng,
+            name: delivery.pickup.name,
+            phone: delivery.pickup.phone,
+            instructions: delivery.pickup.instructions
+          },
+          dropoff: {
+            address: delivery.dropoff.address,
+            lat: delivery.dropoff.lat,
+            lng: delivery.dropoff.lng,
+            name: delivery.dropoff.name,
+            phone: delivery.dropoff.phone,
+            instructions: delivery.dropoff.instructions
+          },
+          recipientName: delivery.recipientName,
+          recipientPhone: delivery.recipientPhone,
+          itemDetails: delivery.itemDetails,
+          fare: delivery.fare,
+          estimatedDistanceKm: delivery.estimatedDistanceKm || distance,
+          estimatedDurationMin: delivery.estimatedDurationMin || Math.ceil(distance * 3),
+          payment: delivery.payment,
+          instructions: delivery.instructions,
+          customer: delivery.customerId,
+          createdAt: delivery.createdAt,
+          distance: parseFloat(distance.toFixed(2)),
+          distanceText: `${distance.toFixed(1)} km away`,
+          estimatedPickupTime: Math.ceil(distance * 3), // 3 min per km
+          canAccept: true
+        };
+        
+        nearbyDeliveries.push(formattedDelivery);
+      }
+    }
+
+    // Sort by distance (closest first)
+    nearbyDeliveries.sort((a, b) => a.distance - b.distance);
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${nearbyDeliveries.length} nearby delivery requests`,
+      data: {
+        deliveries: nearbyDeliveries,
+        driverLocation: { lat: latitude, lng: longitude },
+        searchRadius: maxDistance,
+        count: nearbyDeliveries.length
+      }
+    });
+
+  } catch (error) {
+    console.error("Get nearby deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get nearby deliveries"
+    });
+  }
+};
+
+/**
+ * @desc    Driver accepts a delivery request
  * @route   POST /api/deliveries/:deliveryId/accept
  * @access  Private (Driver)
  */
@@ -425,7 +645,7 @@ export const acceptDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Driver is not available"
+        message: "Driver is not available to accept new deliveries"
       });
     }
 
@@ -441,33 +661,34 @@ export const acceptDelivery = async (req, res) => {
     }
 
     // Check if delivery is still available
-    if (delivery.status !== "searching" && delivery.status !== "created") {
+    if (delivery.status !== "created" && delivery.status !== "searching") {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Delivery is no longer available"
+        message: `Delivery is no longer available (status: ${delivery.status})`
       });
     }
 
-    // Check if delivery was broadcasted to this driver
-    if (delivery.broadcastedTo && !delivery.broadcastedTo.includes(driver._id)) {
+    // Check if already assigned to another driver
+    if (delivery.driverId) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Delivery request not found"
+        message: "Delivery already assigned to another driver"
       });
     }
 
-    // Check if broadcast is expired (60 seconds)
-    if (delivery.broadcastedAt && Date.now() - delivery.broadcastedAt > 60000) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Delivery request has expired"
-      });
+    // Calculate distance from driver to pickup
+    let driverToPickupDistance = 5; // Default if no location
+    if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+      driverToPickupDistance = calculateDistance(
+        driver.currentLocation.lat,
+        driver.currentLocation.lng,
+        delivery.pickup.lat,
+        delivery.pickup.lng
+      );
     }
 
     // Assign delivery to driver
@@ -476,7 +697,7 @@ export const acceptDelivery = async (req, res) => {
     delivery.status = "assigned";
     delivery.assignedAt = new Date();
     delivery.acceptedAt = new Date();
-    delivery.estimatedPickupTime = new Date(Date.now() + (driver._doc.distance * 3 * 60000)); // 3 min per km
+    delivery.estimatedPickupTime = new Date(Date.now() + (driverToPickupDistance * 3 * 60000)); // 3 min per km
 
     // Update driver status
     driver.currentDeliveryId = delivery._id;
@@ -495,9 +716,10 @@ export const acceptDelivery = async (req, res) => {
     // Notify customer
     const customer = await User.findById(delivery.customerId);
     if (customer) {
+      // Send push notification
       await sendNotification({
         userId: customer._id,
-        title: "Driver Assigned",
+        title: "🎉 Driver Assigned!",
         message: `Driver ${driverUser.name} has accepted your delivery`,
         data: {
           type: "driver_assigned",
@@ -505,11 +727,13 @@ export const acceptDelivery = async (req, res) => {
           driver: {
             name: driverUser.name,
             phone: driverUser.phone,
-            vehicle: `${driver.vehicleMake} ${driver.vehicleModel}`,
+            vehicle: `${driver.vehicleMake || ''} ${driver.vehicleModel || ''}`.trim() || 'Vehicle',
             plateNumber: driver.plateNumber,
-            rating: driver.rating || 0
+            rating: driver.rating || 0,
+            photo: driverUser.avatarUrl
           },
-          estimatedPickupTime: delivery.estimatedPickupTime
+          estimatedPickupTime: delivery.estimatedPickupTime,
+          estimatedArrival: `${Math.ceil(driverToPickupDistance * 3)} minutes`
         }
       });
     }
@@ -519,32 +743,48 @@ export const acceptDelivery = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Delivery accepted successfully",
+      message: "Delivery accepted successfully!",
       data: {
-        delivery,
+        delivery: {
+          _id: delivery._id,
+          status: delivery.status,
+          pickup: delivery.pickup,
+          dropoff: delivery.dropoff,
+          recipientName: delivery.recipientName,
+          recipientPhone: delivery.recipientPhone,
+          estimatedPickupTime: delivery.estimatedPickupTime,
+          fare: delivery.fare
+        },
         driver: {
           _id: driver._id,
           name: driverUser.name,
-          vehicle: `${driver.vehicleMake} ${driver.vehicleModel}`,
+          phone: driverUser.phone,
+          vehicle: `${driver.vehicleMake || ''} ${driver.vehicleModel || ''}`.trim() || 'Vehicle',
           plateNumber: driver.plateNumber,
-          phone: driverUser.phone
-        }
+          rating: driver.rating || 0
+        },
+        nextSteps: [
+          "Proceed to pickup location",
+          "Contact customer if needed",
+          "Pick up the package",
+          "Start delivery"
+        ]
       }
     });
 
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("Accept delivery error:", error);
+    console.error("Accept delivery request error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to accept delivery"
+      message: "Failed to accept delivery request"
     });
   }
 };
 
 /**
- * @desc    Driver rejects delivery request
+ * @desc    Driver rejects a delivery request
  * @route   POST /api/deliveries/:deliveryId/reject
  * @access  Private (Driver)
  */
@@ -578,19 +818,121 @@ export const rejectDelivery = async (req, res) => {
       : 0;
     await driver.save();
 
-    // Log rejection (optional - for analytics)
-    console.log(`Driver ${driverUser._id} rejected delivery ${deliveryId}: ${reason}`);
+    // Log rejection for analytics
+    console.log(`Driver ${driverUser._id} rejected delivery ${deliveryId}: ${reason || 'No reason provided'}`);
 
     res.status(200).json({
       success: true,
-      message: "Delivery request rejected"
+      message: "Delivery request rejected",
+      data: {
+        rejectedAt: new Date(),
+        reason: reason || "Not specified"
+      }
     });
 
   } catch (error) {
-    console.error("Reject delivery error:", error);
+    console.error("Reject delivery request error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to reject delivery"
+      message: "Failed to reject delivery request"
+    });
+  }
+};
+
+/**
+ * @desc    Get driver's active delivery
+ * @route   GET /api/deliveries/driver/active
+ * @access  Private (Driver)
+ */
+export const getDriverActiveDelivery = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    
+    if (driverUser.role !== "driver") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver profile not found"
+      });
+    }
+
+    if (!driver.currentDeliveryId) {
+      return res.status(200).json({
+        success: true,
+        message: "No active delivery",
+        data: null
+      });
+    }
+
+    const delivery = await Delivery.findById(driver.currentDeliveryId)
+      .populate('customerId', 'name phone avatarUrl rating')
+      .populate('companyId', 'name contactPhone logo');
+
+    if (!delivery) {
+      // Clear invalid reference
+      driver.currentDeliveryId = null;
+      driver.isAvailable = true;
+      await driver.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: "No active delivery",
+        data: null
+      });
+    }
+
+    // Calculate ETA if in transit
+    let eta = null;
+    let etaMinutes = null;
+    
+    if (delivery.status === "picked_up" && delivery.tracking?.locations?.length > 0) {
+      const lastLocation = delivery.tracking.locations[delivery.tracking.locations.length - 1];
+      const distanceToDropoff = calculateDistance(
+        lastLocation.lat,
+        lastLocation.lng,
+        delivery.dropoff.lat,
+        delivery.dropoff.lng
+      );
+      etaMinutes = Math.ceil(distanceToDropoff * 3);
+      eta = new Date(Date.now() + (etaMinutes * 60000));
+    } else if (delivery.status === "assigned") {
+      // Calculate ETA to pickup
+      if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        const distanceToPickup = calculateDistance(
+          driver.currentLocation.lat,
+          driver.currentLocation.lng,
+          delivery.pickup.lat,
+          delivery.pickup.lng
+        );
+        etaMinutes = Math.ceil(distanceToPickup * 3);
+        eta = new Date(Date.now() + (etaMinutes * 60000));
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...delivery.toObject(),
+        eta,
+        etaMinutes,
+        nextAction: getNextDeliveryAction(delivery.status),
+        canStart: delivery.status === "assigned",
+        canComplete: ["picked_up", "in_transit"].includes(delivery.status)
+      }
+    });
+
+  } catch (error) {
+    console.error("Get active delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get active delivery"
     });
   }
 };
@@ -607,7 +949,7 @@ export const startDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
-    const { otp } = req.body; // For OTP verification
+    const { otp, notes } = req.body; // OTP for verification
 
     // Validate driver role
     if (driverUser.role !== "driver") {
@@ -655,8 +997,8 @@ export const startDelivery = async (req, res) => {
       });
     }
 
-    // OTP verification for high-value items
-    if (delivery.itemDetails.value > 10000 && otp !== delivery.pickup.otp) {
+    // OTP verification (if required for high-value items)
+    if (delivery.pickup.otp && otp !== delivery.pickup.otp) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -669,6 +1011,11 @@ export const startDelivery = async (req, res) => {
     delivery.status = "picked_up";
     delivery.pickedUpAt = new Date();
     delivery.actualPickupTime = new Date();
+    
+    // Add pickup notes if provided
+    if (notes) {
+      delivery.pickup.notes = notes;
+    }
     
     // Start tracking
     delivery.tracking = {
@@ -688,7 +1035,7 @@ export const startDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "Delivery Started",
+        title: "📦 Package Picked Up",
         message: `Your package has been picked up by ${driverUser.name}`,
         data: {
           type: "delivery_started",
@@ -697,7 +1044,8 @@ export const startDelivery = async (req, res) => {
             name: driverUser.name,
             phone: driverUser.phone
           },
-          pickedUpAt: delivery.pickedUpAt
+          pickedUpAt: delivery.pickedUpAt,
+          nextStep: "On the way to dropoff location"
         }
       });
     }
@@ -709,8 +1057,14 @@ export const startDelivery = async (req, res) => {
       success: true,
       message: "Delivery started successfully",
       data: {
-        delivery,
-        nextStep: "Proceed to dropoff location"
+        delivery: {
+          _id: delivery._id,
+          status: delivery.status,
+          pickedUpAt: delivery.pickedUpAt,
+          pickup: delivery.pickup,
+          dropoff: delivery.dropoff,
+          nextStep: "Proceed to dropoff location"
+        }
       }
     });
 
@@ -721,6 +1075,182 @@ export const startDelivery = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to start delivery"
+    });
+  }
+};
+
+/**
+ * @desc    Driver completes delivery
+ * @route   POST /api/deliveries/:deliveryId/complete
+ * @access  Private (Driver)
+ */
+export const completeDelivery = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const driverUser = req.user;
+    const { deliveryId } = req.params;
+    const { 
+      otp, 
+      recipientName,
+      recipientSignature,
+      deliveryProof 
+    } = req.body;
+
+    // Validate driver role
+    if (driverUser.role !== "driver") {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({
+        success: false,
+        message: "Only drivers can complete deliveries"
+      });
+    }
+
+    // Find driver profile
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
+    if (!driver) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Driver profile not found"
+      });
+    }
+
+    // Find delivery
+    const delivery = await Delivery.findOne({
+      _id: deliveryId,
+      driverId: driver._id
+    }).session(session);
+
+    if (!delivery) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found"
+      });
+    }
+
+    // Check if delivery can be completed
+    if (delivery.status !== "picked_up" && delivery.status !== "in_transit") {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: `Delivery cannot be completed from status: ${delivery.status}`
+      });
+    }
+
+    // OTP verification
+    if (delivery.dropoff.otp && otp !== delivery.dropoff.otp) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP"
+      });
+    }
+
+    // Update delivery status
+    delivery.status = "delivered";
+    delivery.deliveredAt = new Date();
+    delivery.actualDeliveryTime = new Date();
+    
+    // Update delivery proof
+    delivery.deliveryProof = {
+      deliveredAt: new Date(),
+      recipientName: recipientName || delivery.recipientName,
+      recipientSignature: recipientSignature,
+      photos: deliveryProof?.photos || [],
+      otpVerified: !!otp,
+      notes: deliveryProof?.notes
+    };
+
+    // Calculate actual fare (if there were changes)
+    const actualDistance = delivery.tracking?.locations?.length > 0 
+      ? calculateTotalDistance(delivery.tracking.locations)
+      : delivery.estimatedDistanceKm;
+
+    if (Math.abs(actualDistance - delivery.estimatedDistanceKm) > 2) {
+      // Recalculate fare if distance difference > 2km
+      const fareDetails = calculateFare({
+        distance: actualDistance,
+        itemWeight: delivery.itemDetails.weight,
+        itemType: delivery.itemDetails.type,
+        vehicleType: driver.vehicleType,
+        isFragile: delivery.itemDetails.isFragile,
+        itemValue: delivery.itemDetails.value
+      });
+      
+      delivery.fare.actualTotal = fareDetails.totalFare;
+      delivery.fare.adjustment = fareDetails.totalFare - delivery.fare.totalFare;
+    } else {
+      delivery.fare.actualTotal = delivery.fare.totalFare;
+    }
+
+    // Update driver status and stats
+    driver.currentDeliveryId = null;
+    driver.isAvailable = true;
+    driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
+    driver.earnings = (driver.earnings || 0) + (delivery.fare.actualTotal || delivery.fare.totalFare);
+    
+    // Update driver rating (simplified - in real app, use actual rating from customer)
+    const newRating = calculateNewRating(driver.rating, delivery.rating);
+    if (newRating !== null) {
+      driver.rating = newRating;
+    }
+
+    await Promise.all([
+      delivery.save({ session }),
+      driver.save({ session })
+    ]);
+
+    // Notify customer
+    const customer = await User.findById(delivery.customerId);
+    if (customer) {
+      await sendNotification({
+        userId: customer._id,
+        title: "🎊 Delivery Completed!",
+        message: `Your package has been delivered successfully`,
+        data: {
+          type: "delivery_completed",
+          deliveryId: delivery._id,
+          deliveredAt: delivery.deliveredAt,
+          fare: delivery.fare.actualTotal || delivery.fare.totalFare,
+          requestRating: true
+        }
+      });
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: "Delivery completed successfully",
+      data: {
+        delivery: {
+          _id: delivery._id,
+          status: delivery.status,
+          deliveredAt: delivery.deliveredAt,
+          fare: delivery.fare,
+          deliveryProof: delivery.deliveryProof
+        },
+        earnings: delivery.fare.actualTotal || delivery.fare.totalFare,
+        driverAvailable: true
+      }
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Complete delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to complete delivery"
     });
   }
 };
@@ -834,170 +1364,82 @@ export const updateDeliveryLocation = async (req, res) => {
 };
 
 /**
- * @desc    Driver completes delivery
- * @route   POST /api/deliveries/:deliveryId/complete
- * @access  Private (Driver)
+ * -------------------------------
+ * SHARED CONTROLLERS
+ * -------------------------------
  */
-export const completeDelivery = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
 
+/**
+ * @desc    Get delivery details
+ * @route   GET /api/deliveries/:deliveryId
+ * @access  Private
+ */
+export const getDeliveryDetails = async (req, res) => {
   try {
-    const driverUser = req.user;
+    const user = req.user;
     const { deliveryId } = req.params;
-    const { 
-      otp, 
-      recipientName,
-      recipientSignature,
-      deliveryProof 
-    } = req.body;
 
-    // Validate driver role
-    if (driverUser.role !== "driver") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: "Only drivers can complete deliveries"
-      });
-    }
-
-    // Find driver profile
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
-    if (!driver) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Driver profile not found"
-      });
-    }
-
-    // Find delivery
-    const delivery = await Delivery.findOne({
-      _id: deliveryId,
-      driverId: driver._id
-    }).session(session);
+    const delivery = await Delivery.findById(deliveryId)
+      .populate('customerId', 'name phone avatarUrl')
+      .populate('driverId', 'licenseNumber vehicleType vehicleMake vehicleModel plateNumber')
+      .populate({
+        path: 'driverId',
+        populate: {
+          path: 'userId',
+          select: 'name phone avatarUrl rating'
+        }
+      })
+      .populate('companyId', 'name contactPhone logo');
 
     if (!delivery) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({
         success: false,
         message: "Delivery not found"
       });
     }
 
-    // Check if delivery can be completed
-    if (delivery.status !== "picked_up" && delivery.status !== "in_transit") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
+    // Check access permissions
+    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
+    const isDriver = user.role === "driver" && delivery.driverId?._id;
+    const isCompanyAdmin = user.role === "company_admin" && 
+      user.companyId?.toString() === delivery.companyId?.toString();
+    const isAdmin = user.role === "admin";
+
+    if (!isCustomer && !isDriver && !isCompanyAdmin && !isAdmin) {
+      return res.status(403).json({
         success: false,
-        message: `Delivery cannot be completed from status: ${delivery.status}`
+        message: "Access denied"
       });
     }
 
-    // OTP verification
-    if (delivery.dropoff.otp && otp !== delivery.dropoff.otp) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP"
-      });
+    // Calculate ETA if delivery is in progress
+    let eta = null;
+    if (delivery.status === "picked_up" && delivery.tracking?.locations?.length > 0) {
+      const lastLocation = delivery.tracking.locations[delivery.tracking.locations.length - 1];
+      const distanceToDropoff = calculateDistance(
+        lastLocation.lat,
+        lastLocation.lng,
+        delivery.dropoff.lat,
+        delivery.dropoff.lng
+      );
+      eta = new Date(Date.now() + (distanceToDropoff * 3 * 60000)); // 3 min per km
     }
-
-    // Update delivery status
-    delivery.status = "delivered";
-    delivery.deliveredAt = new Date();
-    delivery.actualDeliveryTime = new Date();
-    
-    // Update delivery proof
-    delivery.deliveryProof = {
-      deliveredAt: new Date(),
-      recipientName: recipientName || delivery.dropoff.name,
-      recipientSignature: recipientSignature,
-      photos: deliveryProof?.photos || [],
-      otpVerified: !!otp,
-      notes: deliveryProof?.notes
-    };
-
-    // Calculate actual fare (if there were changes)
-    const actualDistance = delivery.tracking?.locations?.length > 0 
-      ? calculateTotalDistance(delivery.tracking.locations)
-      : delivery.estimatedDistanceKm;
-
-    if (Math.abs(actualDistance - delivery.estimatedDistanceKm) > 2) {
-      // Recalculate fare if distance difference > 2km
-      const fareDetails = calculateFare({
-        distance: actualDistance,
-        itemWeight: delivery.itemDetails.weight,
-        itemType: delivery.itemDetails.type,
-        vehicleType: driver.vehicleType,
-        isFragile: delivery.itemDetails.isFragile,
-        itemValue: delivery.itemDetails.value
-      });
-      
-      delivery.fare.actualTotal = fareDetails.totalFare;
-      delivery.fare.adjustment = fareDetails.totalFare - delivery.fare.totalFare;
-    } else {
-      delivery.fare.actualTotal = delivery.fare.totalFare;
-    }
-
-    // Update driver status and stats
-    driver.currentDeliveryId = null;
-    driver.isAvailable = true;
-    driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
-    driver.earnings = (driver.earnings || 0) + (delivery.fare.actualTotal || delivery.fare.totalFare);
-    
-    // Update driver rating (simplified - in real app, use actual rating from customer)
-    const newRating = calculateNewRating(driver.rating, delivery.rating);
-    if (newRating !== null) {
-      driver.rating = newRating;
-    }
-
-    await Promise.all([
-      delivery.save({ session }),
-      driver.save({ session })
-    ]);
-
-    // Notify customer
-    const customer = await User.findById(delivery.customerId);
-    if (customer) {
-      await sendNotification({
-        userId: customer._id,
-        title: "Delivery Completed",
-        message: `Your package has been delivered successfully`,
-        data: {
-          type: "delivery_completed",
-          deliveryId: delivery._id,
-          deliveredAt: delivery.deliveredAt,
-          fare: delivery.fare.actualTotal || delivery.fare.totalFare
-        }
-      });
-    }
-
-    await session.commitTransaction();
-    session.endSession();
 
     res.status(200).json({
       success: true,
-      message: "Delivery completed successfully",
       data: {
-        delivery,
-        earnings: delivery.fare.actualTotal || delivery.fare.totalFare,
-        driverAvailable: true
+        ...delivery.toObject(),
+        eta,
+        canCancel: ["created", "searching", "assigned", "picked_up"].includes(delivery.status),
+        canRate: delivery.status === "delivered" && !delivery.rating
       }
     });
 
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Complete delivery error:", error);
+    console.error("Get delivery details error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to complete delivery"
+      message: "Failed to get delivery details"
     });
   }
 };
@@ -1129,7 +1571,13 @@ export const cancelDelivery = async (req, res) => {
       success: true,
       message: "Delivery cancelled successfully",
       data: {
-        delivery,
+        delivery: {
+          _id: delivery._id,
+          status: delivery.status,
+          cancelledAt: delivery.cancelledAt,
+          cancellationFee: delivery.cancellationFee,
+          refundAmount: delivery.refundAmount
+        },
         cancellationFee,
         refundAmount
       }
@@ -1142,81 +1590,6 @@ export const cancelDelivery = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to cancel delivery"
-    });
-  }
-};
-
-/**
- * @desc    Get delivery details
- * @route   GET /api/deliveries/:deliveryId
- * @access  Private
- */
-export const getDeliveryDetails = async (req, res) => {
-  try {
-    const user = req.user;
-    const { deliveryId } = req.params;
-
-    const delivery = await Delivery.findById(deliveryId)
-      .populate('customerId', 'name phone avatarUrl')
-      .populate('driverId', 'licenseNumber vehicleType vehicleMake vehicleModel plateNumber')
-      .populate({
-        path: 'driverId',
-        populate: {
-          path: 'userId',
-          select: 'name phone avatarUrl rating'
-        }
-      })
-      .populate('companyId', 'name contactPhone logo');
-
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found"
-      });
-    }
-
-    // Check access permissions
-    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
-    const isDriver = user.role === "driver" && delivery.driverId?._id;
-    const isCompanyAdmin = user.role === "company_admin" && 
-      user.companyId?.toString() === delivery.companyId?.toString();
-    const isAdmin = user.role === "admin";
-
-    if (!isCustomer && !isDriver && !isCompanyAdmin && !isAdmin) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied"
-      });
-    }
-
-    // Calculate ETA if delivery is in progress
-    let eta = null;
-    if (delivery.status === "picked_up" && delivery.tracking?.locations?.length > 0) {
-      const lastLocation = delivery.tracking.locations[delivery.tracking.locations.length - 1];
-      const distanceToDropoff = calculateDistance(
-        lastLocation.lat,
-        lastLocation.lng,
-        delivery.dropoff.lat,
-        delivery.dropoff.lng
-      );
-      eta = new Date(Date.now() + (distanceToDropoff * 3 * 60000)); // 3 min per km
-    }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        ...delivery.toObject(),
-        eta,
-        canCancel: ["created", "searching", "assigned", "picked_up"].includes(delivery.status),
-        canRate: delivery.status === "delivered" && !delivery.rating
-      }
-    });
-
-  } catch (error) {
-    console.error("Get delivery details error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get delivery details"
     });
   }
 };
@@ -1415,7 +1788,7 @@ export const getMyDeliveries = async (req, res) => {
 
 /**
  * @desc    Get driver's deliveries
- * @route   GET /api/deliveries/driver/my
+ * @route   GET /api/deliveries/driver/my-deliveries
  * @access  Private (Driver)
  */
 export const getDriverDeliveries = async (req, res) => {
@@ -1492,7 +1865,7 @@ export const trackDelivery = async (req, res) => {
     const { deliveryId } = req.params;
 
     const delivery = await Delivery.findById(deliveryId)
-      .select('status pickup dropoff tracking driverId estimatedPickupTime estimatedDeliveryTime');
+      .select('status pickup dropoff tracking driverId estimatedPickupTime estimatedDeliveryTime recipientName recipientPhone customerId');
 
     if (!delivery) {
       return res.status(404).json({
@@ -1560,6 +1933,8 @@ export const trackDelivery = async (req, res) => {
         status: delivery.status,
         pickup: delivery.pickup,
         dropoff: delivery.dropoff,
+        recipientName: delivery.recipientName,
+        recipientPhone: delivery.recipientPhone,
         tracking: delivery.tracking,
         driverLocation,
         eta,
@@ -1639,29 +2014,6 @@ export const generateDeliveryOTP = async (req, res) => {
       message: "Failed to generate OTP"
     });
   }
-};
-
-// Helper functions
-const calculateTotalDistance = (locations) => {
-  let totalDistance = 0;
-  for (let i = 1; i < locations.length; i++) {
-    totalDistance += calculateDistance(
-      locations[i-1].lat,
-      locations[i-1].lng,
-      locations[i].lat,
-      locations[i].lng
-    );
-  }
-  return totalDistance;
-};
-
-const calculateNewRating = (currentRating, newRating) => {
-  if (newRating === undefined || newRating === null) return null;
-  
-  if (!currentRating) return newRating;
-  
-  // Simple average for demo - in production, use weighted average
-  return (currentRating + newRating) / 2;
 };
 
 /**
@@ -1883,5 +2235,58 @@ export const getCompanyDeliveries = async (req, res) => {
       success: false,
       message: "Failed to get company deliveries"
     });
+  }
+};
+
+// Helper functions
+const calculateTotalDistance = (locations) => {
+  let totalDistance = 0;
+  for (let i = 1; i < locations.length; i++) {
+    totalDistance += calculateDistance(
+      locations[i-1].lat,
+      locations[i-1].lng,
+      locations[i].lat,
+      locations[i].lng
+    );
+  }
+  return totalDistance;
+};
+
+const calculateNewRating = (currentRating, newRating) => {
+  if (newRating === undefined || newRating === null) return null;
+  
+  if (!currentRating) return newRating;
+  
+  // Simple average for demo - in production, use weighted average
+  return (currentRating + newRating) / 2;
+};
+
+// Helper function to determine next action
+const getNextDeliveryAction = (status) => {
+  switch (status) {
+    case "assigned":
+      return {
+        action: "go_to_pickup",
+        title: "Go to Pickup Location",
+        description: "Proceed to the pickup location to collect the package"
+      };
+    case "picked_up":
+      return {
+        action: "go_to_dropoff",
+        title: "Go to Dropoff Location",
+        description: "Deliver the package to the recipient"
+      };
+    case "in_transit":
+      return {
+        action: "continue_to_dropoff",
+        title: "Continue to Dropoff",
+        description: "Continue to the dropoff location"
+      };
+    default:
+      return {
+        action: "wait",
+        title: "Wait for Instructions",
+        description: "Please wait for further instructions"
+      };
   }
 };

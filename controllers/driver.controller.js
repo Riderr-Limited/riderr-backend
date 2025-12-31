@@ -567,12 +567,7 @@ export const updateDriverAvailability = async (req, res) => {
         }
       }
 
-      if (!driver.canAcceptDeliveries) {
-        return res.status(400).json({
-          success: false,
-          message: "Driver is not allowed to accept deliveries"
-        });
-      }
+     
     }
 
     driver.isAvailable = isAvailable;

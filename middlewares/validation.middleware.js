@@ -513,7 +513,7 @@ export const validateUserQuery = [
 
 // ==================== DELIVERY VALIDATION ====================
 
-// Create delivery validation (updated to match your controller)
+// Create delivery validation (UPDATED - matches your controller)
 export const validateCreateDelivery = [
   body("pickupAddress")
     .trim()
@@ -559,13 +559,20 @@ export const validateCreateDelivery = [
   
   body("pickupInstructions").optional().trim(),
   
-  body("dropoffName").optional().trim(),
-  
-  body("dropoffPhone")
-    .optional()
+  // UPDATED: Changed from dropoffName/dropoffPhone to recipientName/recipientPhone
+  body("recipientName")
     .trim()
+    .notEmpty()
+    .withMessage("Recipient name is required")
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Recipient name must be between 2 and 100 characters"),
+  
+  body("recipientPhone")
+    .trim()
+    .notEmpty()
+    .withMessage("Recipient phone is required")
     .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Invalid dropoff phone number"),
+    .withMessage("Invalid recipient phone number"),
   
   body("dropoffInstructions").optional().trim(),
   
@@ -873,7 +880,55 @@ export const validateCompleteDelivery = [
   
   validate
 ];
-// Add this to your validation.middleware.js
+
+// Nearby delivery requests validation (for drivers)
+export const validateNearbyDeliveryRequests = [
+  query("lat")
+    .optional()
+    .isFloat({ min: -90, max: 90 })
+    .withMessage("Latitude must be between -90 and 90"),
+  
+  query("lng")
+    .optional()
+    .isFloat({ min: -180, max: 180 })
+    .withMessage("Longitude must be between -180 and 180"),
+  
+  query("radius")
+    .optional()
+    .isFloat({ min: 1, max: 50 })
+    .withMessage("Radius must be between 1 and 50 km"),
+  
+  query("maxDistance")
+    .optional()
+    .isFloat({ min: 1, max: 50 })
+    .withMessage("Max distance must be between 1 and 50 km"),
+  
+  validate
+];
+
+// Accept delivery validation
+export const validateAcceptDelivery = [
+  param("deliveryId")
+    .isMongoId()
+    .withMessage("Invalid delivery ID format"),
+  
+  validate
+];
+
+// Reject delivery validation
+export const validateRejectDelivery = [
+  param("deliveryId")
+    .isMongoId()
+    .withMessage("Invalid delivery ID format"),
+  
+  body("reason")
+    .optional()
+    .trim()
+    .isLength({ min: 1, max: 500 })
+    .withMessage("Reason must be between 1 and 500 characters"),
+  
+  validate
+];
 
 // Sign up company driver validation
 export const validateSignUpCompanyDriver = [

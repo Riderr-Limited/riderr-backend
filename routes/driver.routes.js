@@ -1,34 +1,44 @@
-// routes/driver.routes.js
 import express from 'express';
 import {
-   updateDriverLocation,
-  toggleDriverOnlineStatus,
   getDriverProfile,
   updateDriverProfile,
   uploadDriverDocuments,
+  updateDriverLocation,
+  toggleDriverOnlineStatus,
+  updateDriverAvailability,
   getCurrentDelivery,
-  updateDriverAvailability
- } from '../controllers/driver.controller.js';
-import { protect } from '../middlewares/auth.middleware.js';
+  getDriverEarnings,
+  getDriverStats,
+  getDeliveryRequests,
+  updateDriverSettings
+} from '../controllers/driver.controller.js';
+import { protect, authorize } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
-// All routes require authentication
+// Protect all routes
 router.use(protect);
+router.use(authorize('driver'));
 
-// Driver   and location
- router.patch('/location', updateDriverLocation);
-router.patch('/online-status', toggleDriverOnlineStatus);
-router.post('/availability', updateDriverAvailability);
- 
 // Driver profile
 router.get('/profile', getDriverProfile);
-router.patch('/profile', updateDriverProfile);
-
-// Driver documents
+router.put('/profile', updateDriverProfile);
 router.post('/documents', uploadDriverDocuments);
 
-// Current delivery
+// Driver status and location
+router.post('/location', updateDriverLocation);
+router.post('/online-status', toggleDriverOnlineStatus);
+router.post('/availability', updateDriverAvailability);
+
+// Driver deliveries
 router.get('/current-delivery', getCurrentDelivery);
+router.get('/requests', getDeliveryRequests); // For socket/notification based requests
+
+// Driver earnings and stats
+router.get('/earnings', getDriverEarnings);
+router.get('/stats', getDriverStats);
+
+// Driver settings
+router.put('/settings', updateDriverSettings);
 
 export default router;

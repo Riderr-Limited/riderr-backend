@@ -1,10 +1,11 @@
+// middleware/auth.middleware.js
 import jwt from 'jsonwebtoken';
 import User from '../models/user.models.js';
 
 /**
  * Authenticate user via JWT token
  */
-export const authenticate = async (req, res, next) => {  // Added next parameter
+export const authenticate = async (req, res, next) => {
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
@@ -73,7 +74,7 @@ export const authenticate = async (req, res, next) => {  // Added next parameter
 
     // Attach user to request
     req.user = user;
-    next();  // Added next() call
+    next();
 
   } catch (error) {
     console.error('❌ Authentication error:', error);
@@ -107,25 +108,25 @@ export const authorize = (...roles) => {
       });
     }
 
-    next();  // Added next() call
+    next();
   };
 };
 
 /**
  * Optional authentication - doesn't fail if no token
  */
-export const optionalAuth = async (req, res, next) => {  // Added next parameter
+export const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next();  // Changed from return; to next()
+      return next();
     }
 
     const token = authHeader.split(' ')[1];
 
     if (!token) {
-      return next();  // Changed from return to next()
+      return next();
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-change-in-production');

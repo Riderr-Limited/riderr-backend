@@ -1,152 +1,74 @@
-// routes/delivery.routes.js
-import express from "express";
+import express from 'express';
 import {
+  // Customer endpoints
   createDeliveryRequest,
   getNearbyDrivers,
+  getMyDeliveries,
+  generateDeliveryOTP,
+  
+  // Driver endpoints
+  getNearbyDeliveryRequests,
   acceptDelivery,
   rejectDelivery,
-  startDelivery,
-  updateDeliveryLocation,
-  completeDelivery,
-  cancelDelivery,
-  getDeliveryDetails,
-  rateDelivery,
-  getMyDeliveries,
+  getDriverActiveDelivery,
   getDriverDeliveries,
+  startDelivery,
+  completeDelivery,
+  updateDeliveryLocation,
+  
+  // Shared endpoints
+  getDeliveryDetails,
+  cancelDelivery,
+  rateDelivery,
   trackDelivery,
-  generateDeliveryOTP,
+  
+  // Admin endpoints
   getAllDeliveries,
   getCompanyDeliveries
-} from "../controllers/delivery.controller.js";
-import { protect, authorize, companyAdminOnly, adminOnly } from "../middlewares/auth.middleware.js";
-import {
+} from '../controllers/delivery.controller.js';
+import { protect, authorize } from '../middlewares/auth.middleware.js';
+import { 
   validateCreateDelivery,
-  validateRateDelivery,
-  validateIdParam,
-  validatePagination,
-  validateDeliveryQuery,
   validateNearbyDrivers,
+  validateNearbyDeliveryRequests,
+  validateAcceptDelivery,
+  validateRejectDelivery,
+  validateStartDelivery,
+  validateCompleteDelivery,
   validateUpdateLocation,
   validateOTPGeneration,
   validateCancelDelivery,
-  validateStartDelivery,
-  validateCompleteDelivery
-} from "../middlewares/validation.middleware.js";
+  validateRateDelivery,
+  validateDeliveryQuery,
+  validateIdParam
+} from '../middlewares/validation.middleware.js';
 
 const router = express.Router();
 
-// ==================== PROTECTED ROUTES ====================
-// All routes require authentication
-router.use(protect);
+// Customer routes
+router.post('/request', protect, authorize('customer'), validateCreateDelivery, createDeliveryRequest);
+router.get('/nearby-drivers', protect, authorize('customer'), validateNearbyDrivers, getNearbyDrivers);
+router.get('/my', protect, authorize('customer'), getMyDeliveries);
+router.post('/:deliveryId/generate-otp', protect, authorize('customer'), validateIdParam, validateOTPGeneration, generateDeliveryOTP);
 
-// ==================== CUSTOMER ROUTES ====================
-router.post("/request", 
-  authorize('customer'),
-  validateCreateDelivery,
-  createDeliveryRequest
-);
+// Driver routes
+router.get('/driver/nearby', protect, authorize('driver'), validateNearbyDeliveryRequests, getNearbyDeliveryRequests);
+router.get('/driver/active', protect, authorize('driver'), getDriverActiveDelivery);
+router.get('/driver/my-deliveries', protect, authorize('driver'), getDriverDeliveries);
+router.post('/:deliveryId/accept', protect, authorize('driver'), validateIdParam, validateAcceptDelivery, acceptDelivery);
+router.post('/:deliveryId/reject', protect, authorize('driver'), validateIdParam, validateRejectDelivery, rejectDelivery);
+router.post('/:deliveryId/start', protect, authorize('driver'), validateIdParam, validateStartDelivery, startDelivery);
+router.post('/:deliveryId/complete', protect, authorize('driver'), validateIdParam, validateCompleteDelivery, completeDelivery);
+router.post('/:deliveryId/location', protect, authorize('driver'), validateIdParam, validateUpdateLocation, updateDeliveryLocation);
 
-router.get("/nearby-drivers", 
-  authorize('customer'),
-  validateNearbyDrivers,
-  getNearbyDrivers
-);
+// Shared routes
+router.get('/:deliveryId', protect, validateIdParam, getDeliveryDetails);
+router.post('/:deliveryId/cancel', protect, validateIdParam, validateCancelDelivery, cancelDelivery);
+router.post('/:deliveryId/rate', protect, authorize('customer'), validateIdParam, validateRateDelivery, rateDelivery);
+router.get('/:deliveryId/track', protect, validateIdParam, trackDelivery);
 
-router.get("/my",
-  authorize('customer'),
-  validatePagination,
-  validateDeliveryQuery,
-  getMyDeliveries
-);
-
-router.post("/:deliveryId/generate-otp",
-  authorize('customer'),
-  validateIdParam,
-  validateOTPGeneration,
-  generateDeliveryOTP
-);
-
-router.post("/:deliveryId/rate",
-  authorize('customer'),
-  validateIdParam,
-  validateRateDelivery,
-  rateDelivery
-);
-
-router.post("/:deliveryId/cancel",
-  authorize('customer', 'driver', 'admin'),
-  validateIdParam,
-  validateCancelDelivery,
-  cancelDelivery
-);
-
-// ==================== DRIVER ROUTES ====================
-router.post("/:deliveryId/accept",
-  authorize('driver'),
-  validateIdParam,
-  acceptDelivery
-);
-
-router.post("/:deliveryId/reject",
-  authorize('driver'),
-  validateIdParam,
-  rejectDelivery
-);
-
-router.post("/:deliveryId/start",
-  authorize('driver'),
-  validateIdParam,
-  validateStartDelivery,
-  startDelivery
-);
-
-router.post("/:deliveryId/complete",
-  authorize('driver'),
-  validateIdParam,
-  validateCompleteDelivery,
-  completeDelivery
-);
-
-router.post("/:deliveryId/location",
-  authorize('driver'),
-  validateIdParam,
-  validateUpdateLocation,
-  updateDeliveryLocation
-);
-
-router.get("/driver/my",
-  authorize('driver'),
-  validatePagination,
-  validateDeliveryQuery,
-  getDriverDeliveries
-);
-
-// ==================== SHARED ROUTES (Customer/Driver/Admin) ====================
-router.get("/:deliveryId",
-  validateIdParam,
-  getDeliveryDetails
-);
-
-router.get("/:deliveryId/track",
-  validateIdParam,
-  trackDelivery
-);
-
-// ==================== COMPANY ADMIN ROUTES ====================
-router.get("/company/:companyId/deliveries",
-  companyAdminOnly,
-  validateIdParam,
-  validatePagination,
-  validateDeliveryQuery,
-  getCompanyDeliveries
-);
-
-// ==================== ADMIN ROUTES ====================
-router.get("/",
-  adminOnly,
-  validatePagination,
-  validateDeliveryQuery,
-  getAllDeliveries
-);
+// Admin routes
+router.get('/', protect, authorize('admin'), validateDeliveryQuery, getAllDeliveries);
+router.get('/company/:companyId/deliveries', protect, authorize('company_admin', 'admin'), validateIdParam, getCompanyDeliveries);
 
 export default router;
