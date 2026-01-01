@@ -728,15 +728,15 @@ export const signIn = async (req, res) => {
     user.lastLoginAt = new Date();
 
     // For company admins, check company status
-    if (user.role === "company_admin" && user.companyId) {
-      if (user.companyId.status !== "approved") {
-        return res.status(403).json({
-          success: false,
-          message: "Company not approved yet",
-          companyStatus: user.companyId.status
-        });
-      }
-    }
+   // if (user.role === "company_admin" && user.companyId) {
+   //   if (user.companyId.status !== "approved") {
+   //     return res.status(403).json({
+   //       success: false,
+   //       message: "Company not approved yet",
+   //       companyStatus: user.companyId.status
+   //     });
+   //   }
+   // }
 
     // Generate tokens
     const accessToken = generateAccessToken({ 

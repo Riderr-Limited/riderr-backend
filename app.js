@@ -5,6 +5,8 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import mongoSanitize from 'express-mongo-sanitize';
 import apiRoutes from './routes/index.route.js';
+import newDriverRoutes from './routes/newDriver.routes.js';
+import newDeliveryRoutes from './routes/newDelivery.routes.js';
 
 const app = express();
 
@@ -63,6 +65,8 @@ if (process.env.NODE_ENV === 'development') {
  * API Routes
  */
 app.use('/api', apiRoutes);
+app.use('/api/drivers', newDriverRoutes);
+app.use('/api/deliveries', newDeliveryRoutes);
 
 /**
  * Root Route

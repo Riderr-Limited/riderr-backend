@@ -1,3 +1,4 @@
+// driver.routes.js
 import express from 'express';
 import {
   getDriverProfile,
@@ -9,8 +10,12 @@ import {
   getCurrentDelivery,
   getDriverEarnings,
   getDriverStats,
+  getDriverDeliveries,  // From driver.controller.js
   getDeliveryRequests,
-  updateDriverSettings
+  updateDriverSettings,
+  acceptDelivery,        // From driver.controller.js  
+  startDelivery,         // From driver.controller.js
+  completeDelivery       // From driver.controller.js
 } from '../controllers/driver.controller.js';
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 
@@ -30,9 +35,13 @@ router.post('/location', updateDriverLocation);
 router.post('/online-status', toggleDriverOnlineStatus);
 router.post('/availability', updateDriverAvailability);
 
-// Driver deliveries
-router.get('/current-delivery', getCurrentDelivery);
-router.get('/requests', getDeliveryRequests); // For socket/notification based requests
+// Driver deliveries (ALL delivery-related endpoints)
+router.get('/deliveries', getDriverDeliveries);               // GET /api/driver/deliveries
+router.get('/current-delivery', getCurrentDelivery);          // GET /api/driver/current-delivery
+router.get('/requests', getDeliveryRequests);                 // GET /api/driver/requests
+router.post('/deliveries/accept/:deliveryId', acceptDelivery);   // POST /api/driver/deliveries/accept/:id
+router.post('/deliveries/start/:deliveryId', startDelivery);     // POST /api/driver/deliveries/start/:id
+router.post('/deliveries/complete/:deliveryId', completeDelivery); // POST /api/driver/deliveries/complete/:id
 
 // Driver earnings and stats
 router.get('/earnings', getDriverEarnings);
