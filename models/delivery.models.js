@@ -1,17 +1,18 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const deliverySchema = new mongoose.Schema({
   // Reference ID
   referenceId: {
     type: String,
-     index: true,
-      sparse: true
+    unique: true,
+    required: true,
+    index: true,
   },
-  
+
   // Driver details - FIXED to use correct structure
   driverDetails: {
-    driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     name: String,
     phone: String,
     avatarUrl: String,
@@ -19,45 +20,45 @@ const deliverySchema = new mongoose.Schema({
       type: String,
       make: String,
       model: String,
-      plateNumber: String
-    }
+      plateNumber: String,
+    },
   },
-  
+
   // Main relationships
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    ref: "User",
+    required: true,
   },
   driverId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Driver'
+    ref: "Driver",
   },
   companyId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Company'
+    ref: "Company",
   },
-  
+
   // Customer details
   customerName: {
     type: String,
-    required: true
+    required: true,
   },
   customerPhone: {
     type: String,
-    required: true
+    required: true,
   },
-  
+
   // Recipient details
   recipientName: {
     type: String,
-    required: true
+    required: true,
   },
   recipientPhone: {
     type: String,
-    required: true
+    required: true,
   },
-  
+
   // Pickup location
   pickup: {
     address: String,
@@ -65,9 +66,9 @@ const deliverySchema = new mongoose.Schema({
     lng: Number,
     name: String,
     phone: String,
-    instructions: String
+    instructions: String,
   },
-  
+
   // Dropoff location
   dropoff: {
     address: String,
@@ -75,26 +76,26 @@ const deliverySchema = new mongoose.Schema({
     lng: Number,
     name: String,
     phone: String,
-    instructions: String
+    instructions: String,
   },
-  
+
   // Item details
   itemDetails: {
     type: {
       type: String,
-      default: 'parcel'
+      default: "parcel",
     },
     description: String,
     weight: {
       type: Number,
-      default: 1
+      default: 1,
     },
     value: {
       type: Number,
-      default: 0
-    }
+      default: 0,
+    },
   },
-  
+
   // Fare details
   fare: {
     baseFare: Number,
@@ -102,67 +103,67 @@ const deliverySchema = new mongoose.Schema({
     totalFare: Number,
     currency: {
       type: String,
-      default: 'NGN'
-    }
+      default: "NGN",
+    },
   },
-  
+
   // Delivery estimates
   estimatedDistanceKm: Number,
   estimatedDurationMin: Number,
-  
+
   // Payment information
   payment: {
     method: String,
     status: {
       type: String,
-      default: 'pending'
-    }
+      default: "pending",
+    },
   },
-  
+
   // Status
   status: {
     type: String,
     enum: [
-      'created',
-      'assigned',
-      'picked_up',
-      'delivered',
-      'cancelled',
-      'failed'
+      "created",
+      "assigned",
+      "picked_up",
+      "delivered",
+      "cancelled",
+      "failed",
     ],
-    default: 'created'
+    default: "created",
   },
-  
+
   // Timestamps
   assignedAt: Date,
   pickedUpAt: Date,
   deliveredAt: Date,
   cancelledAt: Date,
-  
+
   // Rating
   rating: {
     type: Number,
     min: 1,
-    max: 5
+    max: 5,
   },
   review: String,
   ratedAt: Date,
-  
+
   // Tip
   tip: {
     amount: Number,
-    addedAt: Date
+    addedAt: Date,
   },
-  
+
   // Created and updated timestamps
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   updatedAt: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 });
 
 // Indexes for better query performance
@@ -173,10 +174,22 @@ deliverySchema.index({ status: 1 });
 deliverySchema.index({ createdAt: -1 });
 
 // Update timestamps before saving
-deliverySchema.pre('save', function(next) {
+deliverySchema.pre("save", function (next) {
   this.updatedAt = new Date();
- 
 });
 
-const Delivery = mongoose.model('Delivery', deliverySchema);
+const Delivery = mongoose.model("Delivery", deliverySchema);
+
+import crypto from "crypto";
+
+deliverySchema.pre("save", function (next) {
+  if (!this.referenceId) {
+    this.referenceId = `RID-${Date.now()}-${crypto
+      .randomBytes(3)
+      .toString("hex")
+      .toUpperCase()}`;
+  }
+  next();
+});
+
 export default Delivery;
