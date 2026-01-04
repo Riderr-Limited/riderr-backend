@@ -1,4 +1,3 @@
-// server.js
 import mongoose from 'mongoose';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -87,8 +86,8 @@ const startServer = async () => {
     // Initialize Socket.IO with CORS configuration
     const io = new Server(httpServer, {
       cors: {
-        origin: '*', // In production, replace with your actual domain
-        methods: ['GET', 'POST'],
+        origin: ['http://localhost:3000', 'http://localhost:3001'], // Specific origins
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         credentials: true
       },
       transports: ['websocket', 'polling'],
@@ -108,8 +107,7 @@ const startServer = async () => {
       console.log(`📡 API available at: http://localhost:${PORT}/api`);
       console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
       console.log(`🔌 WebSocket available at: ws://localhost:${PORT}`);
-      console.log('='.repeat(60) + '\n');
-    });
+     });
     
     // Handle server errors
     httpServer.on('error', (error) => {
@@ -142,8 +140,6 @@ process.on('unhandledRejection', (error) => {
   console.error('❌ Unhandled Rejection:', error);
   process.exit(1);
 });
-
-
 
 // Start the server
 startServer();

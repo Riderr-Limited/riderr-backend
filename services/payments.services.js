@@ -1,17 +1,19 @@
-// services/payment.service.js
+// services/payments.services.js
 import axios from 'axios';
-import crypto from 'crypto';
 import Payment from '../models/payments.models.js';
 import Delivery from '../models/delivery.models.js';
+import Driver from '../models/riders.models.js';
+import User from '../models/user.models.js';
+import crypto from 'crypto';
 
 class PaymentService {
   constructor() {
-    this.paystackSecret = process.env.PAYSTACK_SECRET_KEY;
-    this.paystackPublic = process.env.PAYSTACK_PUBLIC_KEY;
-    this.baseURL = 'https://api.paystack.co';
+    this.paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+    this.paystackPublicKey = process.env.PAYSTACK_PUBLIC_KEY;
+    this.webhookSecret = process.env.PAYSTACK_WEBHOOK_SECRET;
+    this.paystackBaseUrl = 'https://api.paystack.co';
   }
 
-  // Initialize payment (creates escrow)
   async initializePayment(paymentData) {
     try {
       const {
@@ -20,272 +22,175 @@ class PaymentService {
         amount,
         email,
         callback_url,
-        metadata = {}
+        metadata
       } = paymentData;
 
-      // Create payment record
-      const payment = new Payment({
-        deliveryId,
-        customerId,
-        amount: amount * 100, // Convert to kobo (Paystack expects amount in kobo)
-        currency: 'NGN',
-        isEscrow: true,
-        escrowStatus: 'pending',
-        provider: 'paystack',
-        metadata
-      });
+      // Convert amount to kobo (Paystack uses kobo for NGN)
+      const amountInKobo = Math.round(amount * 100);
 
-      await payment.save();
-
-      // Initialize Paystack payment
-      const response = await axios.post(
-        `${this.baseURL}/transaction/initialize`,
-        {
-          email,
-          amount: payment.amount,
-          reference: payment.reference,
-          callback_url,
-          metadata: {
-            paymentId: payment._id,
-            deliveryId,
-            customerId
-          }
+      const payload = {
+        email,
+        amount: amountInKobo,
+        callback_url,
+        metadata: {
+          ...metadata,
+          deliveryId,
+          customerId
         },
+        currency: 'NGN'
+      };
+
+      const response = await axios.post(
+        `${this.paystackBaseUrl}/transaction/initialize`,
+        payload,
         {
           headers: {
-            Authorization: `Bearer ${this.paystackSecret}`,
+            Authorization: `Bearer ${this.paystackSecretKey}`,
             'Content-Type': 'application/json'
           }
         }
       );
 
-      return {
-        success: true,
-        data: {
-          payment,
-          authorization_url: response.data.data.authorization_url,
-          access_code: response.data.data.access_code,
-          reference: payment.reference
-        }
-      };
-    } catch (error) {
-      console.error('Initialize payment error:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || error.message
-      };
-    }
-  }
+      if (response.data.status) {
+        const { reference, authorization_url, access_code } = response.data.data;
 
-  // Verify payment webhook
-  async verifyPayment(reference) {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/transaction/verify/${reference}`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.paystackSecret}`
+        // Create payment record
+        const payment = new Payment({
+          deliveryId,
+          customerId,
+          amount,
+          reference,
+          provider: 'paystack',
+          providerData: {
+            access_code,
+            authorization_url,
+            reference,
+            metadata: response.data.data
+          },
+          escrowStatus: 'pending',
+          fees: {
+            platformFee: 0.10, // 10% platform fee
+            transactionFee: 0.015 * amount // 1.5% transaction fee
           }
-        }
-      );
-
-      const paymentData = response.data.data;
-      
-      // Find payment
-      const payment = await Payment.findOne({ reference });
-      if (!payment) {
-        throw new Error('Payment not found');
-      }
-
-      // Update payment status
-      if (paymentData.status === 'success') {
-        // Hold funds in escrow
-        await payment.holdInEscrow({
-          escrowId: paymentData.id,
-          holdReference: paymentData.reference,
-          transactionData: paymentData
         });
 
-        // Update delivery payment status
-        await Delivery.findByIdAndUpdate(payment.deliveryId, {
-          'payment.status': 'paid',
-          'payment.amount': payment.amount / 100,
-          'payment.transactionId': paymentData.reference
-        });
-
-        return {
-          success: true,
-          data: payment,
-          message: 'Payment successful, funds held in escrow'
-        };
-      } else {
-        payment.escrowStatus = 'cancelled';
+        // Calculate fees
+        payment.calculateFees();
         await payment.save();
 
         return {
-          success: false,
-          data: payment,
-          message: `Payment failed: ${paymentData.gateway_response}`
+          success: true,
+          message: 'Payment initialized successfully',
+          data: {
+            authorization_url,
+            reference,
+            access_code,
+            amount,
+            paymentId: payment._id
+          }
         };
       }
-    } catch (error) {
-      console.error('Verify payment error:', error);
+
       return {
         success: false,
-        message: error.message
+        message: response.data.message || 'Failed to initialize payment'
+      };
+    } catch (error) {
+      console.error('Initialize payment service error:', error.response?.data || error.message);
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Payment initialization failed'
       };
     }
   }
 
-  // Release funds from escrow to delivery person
-  async releaseEscrowFunds(paymentId, deliveryPersonId, reason = 'delivery_confirmed') {
+  async verifyPayment(reference) {
     try {
-      const payment = await Payment.findById(paymentId);
-      if (!payment) {
-        throw new Error('Payment not found');
-      }
-
-      // Verify delivery is completed
-      const delivery = await Delivery.findById(payment.deliveryId);
-      if (!delivery || delivery.status !== 'delivered') {
-        throw new Error('Delivery not completed');
-      }
-
-      // Calculate amounts
-      payment.calculateFees();
-      payment.deliveryPersonId = deliveryPersonId;
-
-      // For Paystack, we'd use transfer API
-      // Note: You need to have the delivery person's transfer recipient setup
-      const transferResponse = await axios.post(
-        `${this.baseURL}/transfer`,
-        {
-          source: 'balance',
-          amount: payment.fees.deliveryPersonAmount,
-          recipient: deliveryPerson.recipientCode, // You need to create recipient first
-          reason: `Payment for delivery ${delivery._id}`
-        },
+      const response = await axios.get(
+        `${this.paystackBaseUrl}/transaction/verify/${reference}`,
         {
           headers: {
-            Authorization: `Bearer ${this.paystackSecret}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${this.paystackSecretKey}`
           }
         }
       );
 
-      // Update payment status
-      await payment.releaseFromEscrow(reason);
+      if (response.data.status && response.data.data.status === 'success') {
+        const paymentData = response.data.data;
+        
+        // Find payment record
+        const payment = await Payment.findOne({ reference });
+        
+        if (!payment) {
+          return {
+            success: false,
+            message: 'Payment record not found'
+          };
+        }
 
-      return {
-        success: true,
-        data: {
-          payment,
-          transfer: transferResponse.data.data
-        },
-        message: 'Funds released successfully'
-      };
-    } catch (error) {
-      console.error('Release escrow funds error:', error);
-      return {
-        success: false,
-        message: error.message
-      };
-    }
-  }
+        // Update payment status
+        payment.escrowStatus = 'held';
+        payment.heldAt = new Date();
+        payment.providerData = {
+          ...payment.providerData,
+          verification: paymentData,
+          verifiedAt: new Date()
+        };
 
-  // Refund funds to customer
-  async refundEscrowFunds(paymentId, reason = 'cancelled') {
-    try {
-      const payment = await Payment.findById(paymentId);
-      if (!payment) {
-        throw new Error('Payment not found');
+        await payment.save();
+
+        // Update delivery status
+        await Delivery.findByIdAndUpdate(payment.deliveryId, {
+          'payment.status': 'paid',
+          'payment.paidAt': new Date(),
+          'payment.method': 'card',
+          'payment.transactionId': reference
+        });
+
+        // If delivery has driver, update driver's payment reference
+        const delivery = await Delivery.findById(payment.deliveryId);
+        if (delivery && delivery.driverId) {
+          await Driver.findByIdAndUpdate(delivery.driverId, {
+            $addToSet: { pendingPayments: payment._id }
+          });
+        }
+
+        return {
+          success: true,
+          message: 'Payment verified successfully',
+          data: {
+            paymentId: payment._id,
+            status: payment.escrowStatus,
+            amount: payment.amount,
+            deliveryId: payment.deliveryId,
+            verifiedAt: payment.heldAt
+          }
+        };
       }
 
-      // Initiate refund through Paystack
-      const refundResponse = await axios.post(
-        `${this.baseURL}/refund`,
-        {
-          transaction: payment.providerData.holdReference,
-          amount: payment.amount,
-          customer_note: `Refund for ${reason}`,
-          merchant_note: `Refund processed for payment ${paymentId}`
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.paystackSecret}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      // Update payment status
-      await payment.refundFromEscrow(reason);
-
-      return {
-        success: true,
-        data: {
-          payment,
-          refund: refundResponse.data.data
-        },
-        message: 'Refund processed successfully'
-      };
-    } catch (error) {
-      console.error('Refund escrow funds error:', error);
       return {
         success: false,
-        message: error.message
+        message: response.data.message || 'Payment verification failed'
+      };
+    } catch (error) {
+      console.error('Verify payment service error:', error.response?.data || error.message);
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Payment verification failed'
       };
     }
   }
 
-  // Create transfer recipient for delivery person
-  async createTransferRecipient(deliveryPersonData) {
-    try {
-      const { name, accountNumber, bankCode, email } = deliveryPersonData;
-
-      const response = await axios.post(
-        `${this.baseURL}/transferrecipient`,
-        {
-          type: 'nuban',
-          name,
-          account_number: accountNumber,
-          bank_code: bankCode,
-          currency: 'NGN',
-          email
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.paystackSecret}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      return {
-        success: true,
-        data: response.data.data,
-        message: 'Transfer recipient created successfully'
-      };
-    } catch (error) {
-      console.error('Create transfer recipient error:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || error.message
-      };
-    }
-  }
-
-  // Webhook handler for Paystack events
   async handleWebhook(payload, signature) {
     try {
       // Verify webhook signature
       const hash = crypto
-        .createHmac('sha512', this.paystackSecret)
+        .createHmac('sha512', this.webhookSecret)
         .update(JSON.stringify(payload))
         .digest('hex');
 
       if (hash !== signature) {
-        throw new Error('Invalid signature');
+        throw new Error('Invalid webhook signature');
       }
 
       const event = payload.event;
@@ -293,91 +198,326 @@ class PaymentService {
 
       switch (event) {
         case 'charge.success':
-          await this.verifyPayment(data.reference);
+          await this.handleSuccessfulCharge(data);
           break;
-
+        
         case 'transfer.success':
-          // Handle successful transfer to delivery person
-          console.log('Transfer successful:', data);
+          await this.handleSuccessfulTransfer(data);
           break;
-
+        
         case 'transfer.failed':
-          // Handle failed transfer
-          console.log('Transfer failed:', data);
+          await this.handleFailedTransfer(data);
           break;
-
-        case 'refund.processed':
-          // Handle refund processed
-          console.log('Refund processed:', data);
+        
+        case 'transfer.reversed':
+          await this.handleReversedTransfer(data);
           break;
+        
+        default:
+          console.log(`Unhandled webhook event: ${event}`);
       }
 
       return { success: true, message: 'Webhook processed' };
     } catch (error) {
-      console.error('Webhook handler error:', error);
+      console.error('Webhook processing error:', error);
       return { success: false, message: error.message };
     }
   }
 
-  // Get payment details
-  async getPaymentDetails(paymentId) {
-    try {
-      const payment = await Payment.findById(paymentId)
-        .populate('deliveryId')
-        .populate('customerId', 'name email phone')
-        .populate('deliveryPersonId', 'userId')
-        .populate({
-          path: 'deliveryPersonId.userId',
-          select: 'name email'
-        });
+  async handleSuccessfulCharge(data) {
+    const { reference, amount, metadata } = data;
+    
+    // Verify and process payment
+    await this.verifyPayment(reference);
+    
+    // Additional logic for successful charge
+    if (metadata && metadata.deliveryId) {
+      await Delivery.findByIdAndUpdate(metadata.deliveryId, {
+        'payment.webhookProcessed': true,
+        'payment.webhookProcessedAt': new Date()
+      });
+    }
+  }
 
+  async releaseEscrowFunds(paymentId, deliveryPersonId, reason, session = null) {
+    try {
+      const payment = await Payment.findById(paymentId);
+      
       if (!payment) {
         throw new Error('Payment not found');
       }
 
-      return {
-        success: true,
-        data: payment
+      if (payment.escrowStatus !== 'held') {
+        throw new Error(`Cannot release funds. Current status: ${payment.escrowStatus}`);
+      }
+
+      // Get driver's transfer recipient
+      const driver = await Driver.findById(deliveryPersonId);
+      if (!driver || !driver.transferRecipientCode) {
+        throw new Error('Driver transfer recipient not found');
+      }
+
+      // Calculate amount to transfer (after platform fee)
+      const transferAmount = payment.fees.deliveryPersonAmount * 100; // Convert to kobo
+      
+      const payload = {
+        source: 'balance',
+        amount: transferAmount,
+        recipient: driver.transferRecipientCode,
+        reason: reason || 'Delivery completed'
       };
+
+      const response = await axios.post(
+        `${this.paystackBaseUrl}/transfer`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${this.paystackSecretKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data.status) {
+        const transferData = response.data.data;
+
+        // Update payment status
+        payment.escrowStatus = 'released';
+        payment.deliveryPersonId = deliveryPersonId;
+        payment.releasedAt = new Date();
+        payment.providerData = {
+          ...payment.providerData,
+          transfer: transferData,
+          releasedAt: new Date()
+        };
+
+        if (session) {
+          await payment.save({ session });
+        } else {
+          await payment.save();
+        }
+
+        // Update driver earnings
+        await Driver.findByIdAndUpdate(deliveryPersonId, {
+          $inc: { earnings: payment.fees.deliveryPersonAmount },
+          $pull: { pendingPayments: paymentId },
+          $push: { 
+            completedPayments: {
+              paymentId,
+              amount: payment.fees.deliveryPersonAmount,
+              transferredAt: new Date()
+            }
+          }
+        });
+
+        // Notify driver
+        const driverUser = await User.findById(driver.userId);
+        if (driverUser) {
+          await this.sendNotification(driverUser._id, {
+            title: '💰 Payment Released',
+            message: `₦${payment.fees.deliveryPersonAmount} has been transferred to your account`,
+            data: { paymentId, amount: payment.fees.deliveryPersonAmount }
+          });
+        }
+
+        return {
+          success: true,
+          message: 'Funds released successfully',
+          data: {
+            paymentId: payment._id,
+            amount: payment.fees.deliveryPersonAmount,
+            transferReference: transferData.reference,
+            releasedAt: payment.releasedAt
+          }
+        };
+      }
+
+      throw new Error(response.data.message || 'Transfer failed');
     } catch (error) {
-      console.error('Get payment details error:', error);
+      console.error('Release escrow funds error:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async refundEscrowFunds(paymentId, reason, session = null) {
+    try {
+      const payment = await Payment.findById(paymentId);
+      
+      if (!payment) {
+        throw new Error('Payment not found');
+      }
+
+      if (!['held', 'pending'].includes(payment.escrowStatus)) {
+        throw new Error(`Cannot refund funds. Current status: ${payment.escrowStatus}`);
+      }
+
+      // For Paystack, initiate refund
+      const refundAmount = payment.amount * 100; // Convert to kobo
+      
+      const payload = {
+        transaction: payment.reference,
+        amount: refundAmount,
+        currency: 'NGN',
+        customer_note: reason || 'Refund requested'
+      };
+
+      const response = await axios.post(
+        `${this.paystackBaseUrl}/refund`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${this.paystackSecretKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data.status) {
+        const refundData = response.data.data;
+
+        // Update payment status
+        payment.escrowStatus = 'refunded';
+        payment.refundedAt = new Date();
+        payment.providerData = {
+          ...payment.providerData,
+          refund: refundData,
+          refundedAt: new Date()
+        };
+
+        if (session) {
+          await payment.save({ session });
+        } else {
+          await payment.save();
+        }
+
+        // Update delivery status
+        await Delivery.findByIdAndUpdate(payment.deliveryId, {
+          'payment.status': 'refunded',
+          'payment.refundedAt': new Date(),
+          status: 'cancelled'
+        });
+
+        // Notify customer
+        await this.sendNotification(payment.customerId, {
+          title: '💸 Refund Processed',
+          message: `₦${payment.amount} has been refunded to your account`,
+          data: { paymentId, amount: payment.amount, reason }
+        });
+
+        return {
+          success: true,
+          message: 'Refund processed successfully',
+          data: {
+            paymentId: payment._id,
+            amount: payment.amount,
+            refundReference: refundData.reference,
+            refundedAt: payment.refundedAt
+          }
+        };
+      }
+
+      throw new Error(response.data.message || 'Refund failed');
+    } catch (error) {
+      console.error('Refund escrow funds error:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async createTransferRecipient(recipientData) {
+    try {
+      const { userId, name, accountNumber, bankCode, email } = recipientData;
+
+      const payload = {
+        type: 'nuban',
+        name,
+        account_number: accountNumber,
+        bank_code: bankCode,
+        currency: 'NGN',
+        email
+      };
+
+      const response = await axios.post(
+        `${this.paystackBaseUrl}/transferrecipient`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${this.paystackSecretKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data.status) {
+        const recipient = response.data.data;
+
+        // Save recipient code to driver profile
+        await Driver.findOneAndUpdate(
+          { userId },
+          { 
+            transferRecipientCode: recipient.recipient_code,
+            bankDetails: {
+              accountNumber,
+              bankCode,
+              bankName: recipient.details.bank_name,
+              accountName: recipient.details.account_name
+            }
+          }
+        );
+
+        return {
+          success: true,
+          message: 'Transfer recipient created successfully',
+          data: recipient
+        };
+      }
+
       return {
         success: false,
-        message: error.message
+        message: response.data.message || 'Failed to create transfer recipient'
+      };
+    } catch (error) {
+      console.error('Create transfer recipient error:', error.response?.data || error.message);
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Failed to create transfer recipient'
       };
     }
   }
 
-  // Get customer payments
-  async getCustomerPayments(customerId, page = 1, limit = 10) {
-    try {
-      const skip = (page - 1) * limit;
+  async verifyWebhookSignature(payload, signature) {
+    const hash = crypto
+      .createHmac('sha512', this.webhookSecret)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+    
+    return hash === signature;
+  }
 
-      const [payments, total] = await Promise.all([
-        Payment.find({ customerId })
-          .populate('deliveryId', 'status pickup dropoff')
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit),
-        Payment.countDocuments({ customerId })
-      ]);
+  async sendNotification(userId, notification) {
+    // Implement your notification logic here
+    // This could be email, push notification, etc.
+    console.log('Sending notification to user:', userId, notification);
+  }
 
-      return {
-        success: true,
-        data: payments,
-        pagination: {
-          total,
-          page,
-          limit,
-          pages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      console.error('Get customer payments error:', error);
-      return {
-        success: false,
-        message: error.message
-      };
+  async splitEscrowFunds(paymentId, customerAmount, deliveryPersonAmount, session) {
+    // Implement split payment logic
+    // This would involve partial refund to customer and partial transfer to driver
+    // You'll need to implement this based on your specific requirements
+  }
+
+  async notifyDisputeRaised(paymentId, raisedBy) {
+    // Notify admins about dispute
+    const payment = await Payment.findById(paymentId);
+    
+    // Find admin users
+    const admins = await User.find({ role: 'admin' });
+    
+    for (const admin of admins) {
+      await this.sendNotification(admin._id, {
+        title: '⚠️ Dispute Raised',
+        message: `A dispute has been raised by ${raisedBy} for payment ${paymentId}`,
+        data: { paymentId, raisedBy, payment }
+      });
     }
   }
 }

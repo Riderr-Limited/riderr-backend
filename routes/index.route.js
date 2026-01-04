@@ -5,7 +5,7 @@ import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
 import deliveryPersonRoutes from './deliveryPerson.routes.js';
-import paymentRoutes from './payment.routes.js';
+// import paymentRoutes from './payment.routes.js';
 import driverRoutes from './driver.routes.js';
 
 const router = express.Router();
@@ -72,14 +72,14 @@ router.get("/", (req, res) => {
         completeDelivery: "POST /api/deliveries/:deliveryId/complete (driver)",
         updateLocation: "POST /api/deliveries/:deliveryId/location (driver)",
         // Only customer endpoints
-  create: "POST /api/deliveries/request (customer)",
-  getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)",
-  getMyDeliveries: "GET /api/deliveries/my (customer)",
-  // Shared endpoints
-  getDeliveryDetails: "GET /api/deliveries/:deliveryId",
-  trackDelivery: "GET /api/deliveries/:deliveryId/track",
-  cancelDelivery: "POST /api/deliveries/:deliveryId/cancel",
-  rateDelivery: "POST /api/deliveries/:deliveryId/rate (customer)",
+        create: "POST /api/deliveries/request (customer)",
+        getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)",
+        getMyDeliveries: "GET /api/deliveries/my (customer)",
+        // Shared endpoints
+        getDeliveryDetails: "GET /api/deliveries/:deliveryId",
+        trackDelivery: "GET /api/deliveries/:deliveryId/track",
+        cancelDelivery: "POST /api/deliveries/:deliveryId/cancel",
+        rateDelivery: "POST /api/deliveries/:deliveryId/rate (customer)",
         // Admin endpoints
         getAllDeliveries: "GET /api/deliveries (admin)",
         getCompanyDeliveries: "GET /api/deliveries/company/:companyId/deliveries (company_admin, admin)"
@@ -133,9 +133,7 @@ router.get("/", (req, res) => {
         getProfile: "GET /api/delivery-persons/profile",
         updateServices: "PATCH /api/delivery-persons/services"
       },
-      payments: {
-        // Payment endpoints will be listed here
-      }
+      
     },
     documentation: "https://api-docs.example.com"
   });
@@ -147,7 +145,7 @@ router.use("/users", userRoutes);
 router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
 router.use("/delivery-persons", deliveryPersonRoutes);
-router.use("/payments", paymentRoutes);
+//router.use("/payments", paymentRoutes);
 router.use("/driver", driverRoutes);
 
 /**
