@@ -1,11 +1,12 @@
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
-import apiRoutes from './routes/index.route.js';
-import newDriverRoutes from './routes/newDriver.routes.js';
-import newDeliveryRoutes from './routes/newDelivery.routes.js';
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
+import rateLimit from "express-rate-limit";
+import mongoSanitize from "express-mongo-sanitize";
+import apiRoutes from "./routes/index.route.js";
+import newDriverRoutes from "./routes/newDriver.routes.js";
+import newDeliveryRoutes from "./routes/newDelivery.routes.js";
 
 const app = express();
 
@@ -54,63 +55,48 @@ app.use(cors(corsOptions));
  * Security Middleware
  */
 app.use(helmet());
-
-// Custom NoSQL injection protection (alternative to express-mongo-sanitize)
-app.use((req, res, next) => {
-  // Sanitize request body
-  const sanitize = (obj) => {
-    if (obj && typeof obj === 'object') {
-      for (const key in obj) {
-        if (key.startsWith('$') || key.includes('.')) {
-          delete obj[key];
-        } else if (typeof obj[key] === 'object') {
-          sanitize(obj[key]);
-        }
-      }
-    }
-    return obj;
-  };
-
-  if (req.body) sanitize(req.body);
-  if (req.query) sanitize(req.query);
-  next();
-});
+app.set("trust proxy", true);
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000,
-  message: 'Too many requests from this IP, please try again later.',
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.method === 'OPTIONS'
 });
 
-app.use('/api/', limiter);
+// Apply rate limiting to all routes
+app.use("/api/", limiter);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
-  message: 'Too many authentication attempts, please try again later.',
-  skip: (req) => req.method === 'OPTIONS'
+  max: 10,
+  message: "Too many authentication attempts, please try again later.",
 });
 
-app.use('/api/auth/login', authLimiter);
-app.use('/api/auth/signup', authLimiter);
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/signup", authLimiter);
 
 /**
  * Body Parser Middleware
  */
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+/**
+ * Data Sanitization
+ */
+// Prevent NoSQL injection
 
 /**
  * Logging
  */
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
+if (process.env.NODE_ENV === "development") {
+  app.use(morgan("dev"));
 } else {
-  app.use(morgan('combined'));
+  app.use(morgan("combined"));
 }
 
 /**
@@ -150,23 +136,24 @@ app.post('/api/test-cors', (req, res) => {
 /**
  * API Routes
  */
-app.use('/api', apiRoutes);
-app.use('/api/drivers', newDriverRoutes);
-app.use('/api/deliveries', newDeliveryRoutes);
+app.use("/api", apiRoutes);
+app.use("/api/drivers", newDriverRoutes);
+app.use("/api/deliveries", newDeliveryRoutes);
 
 /**
  * Root Route
  */
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: 'Riderr API',
-    version: '1.0.0',
+    message: "Riderr API",
+    version: "1.0.0",
     endpoints: {
-      auth: '/api/auth',
-      health: '/api/health',
-      testCors: '/api/test-cors'
-    }
+      auth: "/api/auth",
+      users: "/api/users",
+      rides: "/api/rides",
+      health: "/api/health",
+    },
   });
 });
 
@@ -179,7 +166,7 @@ app.get('/', (req, res) => {
  * Global Error Handler
  */
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err);
+  console.error("❌ Error:", err);
 
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
@@ -191,15 +178,15 @@ app.use((err, req, res, next) => {
   }
 
   const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
+  const message = err.message || "Internal Server Error";
 
   res.status(statusCode).json({
     success: false,
     message,
-    ...(process.env.NODE_ENV === 'development' && {
+    ...(process.env.NODE_ENV === "development" && {
       error: err.message,
-      stack: err.stack
-    })
+      stack: err.stack,
+    }),
   });
 });
 

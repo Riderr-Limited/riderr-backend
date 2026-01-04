@@ -3,9 +3,9 @@ import Company from "../models/company.models.js";
 import Driver from "../models/riders.models.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import mongoose from 'mongoose';
-import nodemailer from 'nodemailer';
-import { validationResult } from 'express-validator';
+import mongoose from "mongoose";
+import nodemailer from "nodemailer";
+import { validationResult } from "express-validator";
 
 /**
  * -------------------------------
@@ -29,17 +29,18 @@ export const checkVerificationStatus = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email is required"
+        message: "Email is required",
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() })
-      .select('emailVerifiedAt isVerified');
+    const user = await User.findOne({ email: email.toLowerCase() }).select(
+      "emailVerifiedAt isVerified"
+    );
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found"
+        message: "User not found",
       });
     }
 
@@ -48,15 +49,14 @@ export const checkVerificationStatus = async (req, res) => {
       data: {
         isVerified: user.isVerified,
         emailVerifiedAt: user.emailVerifiedAt,
-        requiresVerification: !user.isVerified
-      }
+        requiresVerification: !user.isVerified,
+      },
     });
-
   } catch (error) {
-    console.error('❌ Check verification error:', error);
+    console.error("❌ Check verification error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to check verification status"
+      message: "Failed to check verification status",
     });
   }
 };
@@ -65,16 +65,18 @@ export const checkVerificationStatus = async (req, res) => {
 const generateAccessToken = (payload) => {
   return jwt.sign(
     payload,
-    process.env.JWT_SECRET || 'fallback-secret-key-change-in-production',
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || '24h' }
+    process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "24h" }
   );
 };
 
 const generateRefreshToken = (payload) => {
   return jwt.sign(
     payload,
-    process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'fallback-secret-key-change-in-production',
-    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || '30d' }
+    process.env.JWT_REFRESH_SECRET ||
+      process.env.JWT_SECRET ||
+      "fallback-secret-key-change-in-production",
+    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" }
   );
 };
 
@@ -82,17 +84,17 @@ const generateRefreshToken = (payload) => {
 const createEmailTransporter = () => {
   try {
     return nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+      host: process.env.EMAIL_HOST || "smtp.gmail.com",
       port: parseInt(process.env.EMAIL_PORT) || 587,
       secure: false,
       auth: {
-        user: process.env.EMAIL_USER || 'test@example.com',
-        pass: process.env.EMAIL_PASSWORD || 'testpassword'
+        user: process.env.EMAIL_USER || "test@example.com",
+        pass: process.env.EMAIL_PASSWORD || "testpassword",
       },
-      tls: { rejectUnauthorized: false }
+      tls: { rejectUnauthorized: false },
     });
   } catch (error) {
-    console.log('📧 Email transporter not configured, running in dev mode');
+    console.log("📧 Email transporter not configured, running in dev mode");
     return null;
   }
 };
@@ -101,16 +103,16 @@ const createEmailTransporter = () => {
 const sendVerificationEmail = async (email, code, name) => {
   try {
     const transporter = createEmailTransporter();
-    
+
     if (!transporter) {
       console.log(`📧 DEV MODE: Email verification code for ${email}: ${code}`);
       return { success: true, devMode: true };
     }
-    
+
     const mailOptions = {
-      from: `"Riderr" <${process.env.EMAIL_USER || 'noreply@riderr.com'}>`,
+      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
       to: email,
-      subject: 'Your Riderr Verification Code',
+      subject: "Your Riderr Verification Code",
       html: `
         <!DOCTYPE html>
         <html>
@@ -143,14 +145,14 @@ const sendVerificationEmail = async (email, code, name) => {
           </div>
         </body>
         </html>
-      `
+      `,
     };
 
     await transporter.sendMail(mailOptions);
     console.log(`✅ Email sent to ${email}`);
     return { success: true };
   } catch (error) {
-    console.error('❌ Email error:', error.message);
+    console.error("❌ Email error:", error.message);
     console.log(`📧 FALLBACK: Email verification code for ${email}: ${code}`);
     return { success: true, devMode: true };
   }
@@ -160,16 +162,16 @@ const sendVerificationEmail = async (email, code, name) => {
 const sendOTPEmail = async (email, otp, name) => {
   try {
     const transporter = createEmailTransporter();
-    
+
     if (!transporter) {
       console.log(`📧 DEV MODE: OTP for ${email}: ${otp}`);
       return { success: true, devMode: true };
     }
-    
+
     const mailOptions = {
-      from: `"Riderr" <${process.env.EMAIL_USER || 'noreply@riderr.com'}>`,
+      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
       to: email,
-      subject: 'Password Reset OTP - Riderr',
+      subject: "Password Reset OTP - Riderr",
       html: `
         <!DOCTYPE html>
         <html>
@@ -205,14 +207,14 @@ const sendOTPEmail = async (email, otp, name) => {
           </div>
         </body>
         </html>
-      `
+      `,
     };
 
     await transporter.sendMail(mailOptions);
     console.log(`✅ Password reset OTP sent to ${email}`);
     return { success: true };
   } catch (error) {
-    console.error('❌ OTP email error:', error.message);
+    console.error("❌ OTP email error:", error.message);
     console.log(`📧 FALLBACK: Password reset OTP for ${email}: ${otp}`);
     return { success: true, devMode: true };
   }
@@ -231,262 +233,222 @@ const sendOTPEmail = async (email, otp, name) => {
  */
 export const signUp = async (req, res) => {
   const session = await mongoose.startSession();
-  
+
+  let newUser;
+  let emailCode;
+  let requiresVerification = true;
+
   try {
-    session.startTransaction();
-
-    // Validate input
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: errors.array()
-      });
-    }
-
-    const { name, email, password, role, phone } = req.body;
-
-    console.log('📝 Signup request:', { name, email, role, phone });
-
-    // Check existing user
-    const existingUser = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { phone }]
-    }).session(session);
-    
-    if (existingUser) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(409).json({
-        success: false,
-        message: "User with this email or phone already exists"
-      });
-    }
-
-    // Generate email verification code
-    const emailCode = generateVerificationCode();
-    const emailExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-    console.log('🔐 Generated email code:', emailCode);
-
-    let newUser;
-    let company = null;
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    if (role === "company_admin") {
-      // Company registration
-      const { companyName, address, city, state, lga, businessLicense, taxId, 
-      bankName, accountName, accountNumber, companyPhone } = req.body;
-
-      if (!companyName || !city || !state || !businessLicense || !taxId || !companyPhone) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          success: false,
-          message: "Company details required"
-        });
+    await session.withTransaction(async () => {
+      // ✅ Validate input
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        throw new Error("VALIDATION_FAILED");
       }
 
-      // Check existing company
-      const existingCompany = await Company.findOne({
-        $or: [
-          { name: companyName },
-          { contactEmail: email },
-          { businessLicense }
-        ]
+      const { name, email, password, role, phone } = req.body;
+
+      console.log("📝 Signup request:", { name, email, role, phone });
+
+      // ✅ Check existing user
+      const existingUser = await User.findOne({
+        $or: [{ email: email.toLowerCase() }, { phone }],
       }).session(session);
 
-      if (existingCompany) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(409).json({
-          success: false,
-          message: "Company already exists"
-        });
+      if (existingUser) {
+        throw new Error("USER_EXISTS");
       }
 
-      // Create company
-      company = await Company.create([{
-        name: companyName,
-        address,
-        city,
-        state,
-        lga,
-        businessLicense,
-        taxId,
-        contactPhone: companyPhone,
-        contactEmail: email,
-        password: hashedPassword,
-        status: "pending",  
-        bankDetails: {
+      // ✅ Generate verification code
+      emailCode = generateVerificationCode();
+      const emailExpiry = Date.now() + 10 * 60 * 1000;
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      if (role === "company_admin") {
+        const {
+          companyName,
+          address,
+          city,
+          state,
+          lga,
+          businessLicense,
+          taxId,
           bankName,
           accountName,
-          accountNumber
+          accountNumber,
+          companyPhone,
+        } = req.body;
+
+        if (!companyName || !city || !state || !businessLicense || !taxId) {
+          throw new Error("COMPANY_DETAILS_REQUIRED");
         }
-      }], { session });
 
-      // Create company admin user
-      newUser = await User.create([{
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        password: hashedPassword,
-        phone,
-        role: "company_admin",
-        companyId: company[0]._id,
-        emailVerificationToken: emailCode,
-        emailVerificationExpires: emailExpiry,
-        failedLoginAttempts: 0,
-        isActive: true,
-        isVerified: false
-      }], { session });
+        const existingCompany = await Company.findOne({
+          $or: [
+            { name: companyName },
+            { contactEmail: email },
+            { businessLicense },
+          ],
+        }).session(session);
 
-      console.log('🏢 Company admin created:', newUser[0]._id);
+        if (existingCompany) {
+          throw new Error("COMPANY_EXISTS");
+        }
 
-    } else if (role === "driver") {
-      // Driver registration by company
-      const { companyId } = req.body;
+        const [company] = await Company.create(
+          [
+            {
+              name: companyName,
+              address,
+              city,
+              state,
+              lga,
+              businessLicense,
+              taxId,
+              contactPhone: companyPhone,
+              contactEmail: email,
+              password: hashedPassword,
+              status: "pending",
+              bankDetails: { bankName, accountName, accountNumber },
+            },
+          ],
+          { session }
+        );
 
-      if (!companyId) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          success: false,
-          message: "Company ID is required for driver registration"
-        });
+        [newUser] = await User.create(
+          [
+            {
+              name: name.trim(),
+              email: email.toLowerCase().trim(),
+              password: hashedPassword,
+              phone,
+              role: "company_admin",
+              companyId: company._id,
+              emailVerificationToken: emailCode,
+              emailVerificationExpires: emailExpiry,
+              isActive: true,
+              isVerified: false,
+            },
+          ],
+          { session }
+        );
+      } else if (role === "driver") {
+        const { companyId } = req.body;
+        if (!companyId) throw new Error("COMPANY_ID_REQUIRED");
+
+        const company = await Company.findById(companyId).session(session);
+        if (!company) throw new Error("COMPANY_NOT_FOUND");
+
+        [newUser] = await User.create(
+          [
+            {
+              name: name.trim(),
+              email: email.toLowerCase().trim(),
+              password: hashedPassword,
+              phone,
+              role: "driver",
+              companyId,
+              emailVerificationToken: emailCode,
+              emailVerificationExpires: emailExpiry,
+              isActive: true,
+              isVerified: false,
+            },
+          ],
+          { session }
+        );
+
+        const { licenseNumber, vehicleType, plateNumber, licenseExpiry } =
+          req.body;
+
+        if (!licenseNumber || !vehicleType || !plateNumber || !licenseExpiry) {
+          throw new Error("DRIVER_DETAILS_REQUIRED");
+        }
+
+        await Driver.create(
+          [
+            {
+              userId: newUser._id,
+              companyId,
+              licenseNumber,
+              vehicleType,
+              plateNumber,
+              licenseExpiry,
+              approvalStatus: "pending",
+            },
+          ],
+          { session }
+        );
+      } else {
+        [newUser] = await User.create(
+          [
+            {
+              name: name.trim(),
+              email: email.toLowerCase().trim(),
+              password: hashedPassword,
+              phone,
+              role: role || "customer",
+              emailVerificationToken: emailCode,
+              emailVerificationExpires: emailExpiry,
+              isActive: true,
+              isVerified: false,
+            },
+          ],
+          { session }
+        );
       }
 
-      // Verify company exists
-      company = await Company.findById(companyId).session(session);
-      if (!company) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(404).json({
-          success: false,
-          message: "Company not found"
-        });
-      }
+      // ✅ Tokens INSIDE transaction (DB-only)
+      const refreshToken = generateRefreshToken({ userId: newUser._id });
+      newUser.refreshToken = refreshToken;
+      await newUser.save({ session });
 
-      // Create driver user
-      newUser = await User.create([{
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        password: hashedPassword,
-        phone,
-        role: "driver",
-        companyId,
-        emailVerificationToken: emailCode,
-        emailVerificationExpires: emailExpiry,
-        failedLoginAttempts: 0,
-        isActive: true,
-        isVerified: false
-      }], { session });
-
-      console.log('🚗 Driver created:', newUser[0]._id);
-
-      // Create driver profile
-      const { licenseNumber, vehicleType, vehicleMake, vehicleModel, vehicleYear, 
-              vehicleColor, plateNumber, licenseExpiry } = req.body;
-
-      if (!licenseNumber || !vehicleType || !plateNumber || !licenseExpiry) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          success: false,
-          message: "Driver details required"
-        });
-      }
-
-      await Driver.create([{
-        userId: newUser[0]._id,
-        companyId,
-        licenseNumber,
-        vehicleType,
-        vehicleMake,
-        vehicleModel,
-        vehicleYear,
-        vehicleColor,
-        plateNumber,
-        licenseExpiry,
-        approvalStatus: "pending",
-        isOnline: false,
-        isAvailable: false,
-        canAcceptDeliveries: true
-      }], { session });
-
-    } else {
-      // Customer registration
-      newUser = await User.create([{
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        password: hashedPassword,
-        phone,
-        role: role || "customer",
-        emailVerificationToken: emailCode,
-        emailVerificationExpires: emailExpiry,
-        failedLoginAttempts: 0,
-        isActive: true,
-        isVerified: false
-      }], { session });
-
-      console.log('👤 User created:', newUser[0]._id);
-    }
-
-    // Send verification email
-    const requiresVerification = role !== "admin";
-    
-    if (requiresVerification) {
-      await sendVerificationEmail(email, emailCode, name);
-    }
-
-    // Generate tokens
-    const accessToken = generateAccessToken({ 
-      userId: newUser[0]._id, 
-      role: newUser[0].role,
-      isVerified: false
-    });
-    
-    const refreshToken = generateRefreshToken({ 
-      userId: newUser[0]._id 
+      requiresVerification = role !== "admin";
     });
 
-    newUser[0].refreshToken = refreshToken;
-    await newUser[0].save({ session });
-
-    await session.commitTransaction();
     session.endSession();
 
-    res.status(201).json({
+    // ✅ SEND EMAIL AFTER COMMIT (VERY IMPORTANT)
+    if (requiresVerification) {
+      await sendVerificationEmail(newUser.email, emailCode, newUser.name);
+    }
+
+    // ✅ Generate access token AFTER commit
+    const accessToken = generateAccessToken({
+      userId: newUser._id,
+      role: newUser.role,
+      isVerified: false,
+    });
+
+    return res.status(201).json({
       success: true,
-      message: requiresVerification 
-        ? "Account created. Email verification code sent."
-        : "Account created successfully",
-      requiresVerification,
+      message: "Account created. Email verification code sent.",
       data: {
         accessToken,
-        refreshToken,
+        refreshToken: newUser.refreshToken,
         user: {
-          _id: newUser[0]._id,
-          name: newUser[0].name,
-          email: newUser[0].email,
-          phone: newUser[0].phone,
-          role: newUser[0].role,
-          isVerified: false,
-          companyId: newUser[0].companyId
-        }
-      }
+          _id: newUser._id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone,
+          role: newUser.role,
+          companyId: newUser.companyId,
+        },
+      },
     });
-
   } catch (error) {
-    await session.abortTransaction();
     session.endSession();
-    console.error('❌ Signup error:', error);
-    
-    res.status(500).json({
+
+    console.error("❌ Signup error:", error);
+
+    if (error.message === "USER_EXISTS") {
+      return res
+        .status(409)
+        .json({ success: false, message: "User already exists" });
+    }
+
+    return res.status(500).json({
       success: false,
       message: "Signup failed",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -498,17 +460,17 @@ export const signUp = async (req, res) => {
  */
 export const signUpCompanyDriver = async (req, res) => {
   const session = await mongoose.startSession();
-  
+
   try {
     session.startTransaction();
 
     // Check if user is company admin
-    if (req.user.role !== 'company_admin') {
+    if (req.user.role !== "company_admin") {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({
         success: false,
-        message: "Only company admins can register drivers"
+        message: "Only company admins can register drivers",
       });
     }
 
@@ -520,23 +482,27 @@ export const signUpCompanyDriver = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Name, email, password, and phone are required"
+        message: "Name, email, password, and phone are required",
       });
     }
 
-    console.log('📝 Company driver signup request:', { name, email, companyId: req.user.companyId });
+    console.log("📝 Company driver signup request:", {
+      name,
+      email,
+      companyId: req.user.companyId,
+    });
 
     // Check existing user
     const existingUser = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { phone }]
+      $or: [{ email: email.toLowerCase() }, { phone }],
     }).session(session);
-    
+
     if (existingUser) {
       await session.abortTransaction();
       session.endSession();
       return res.status(409).json({
         success: false,
-        message: "User with this email or phone already exists"
+        message: "User with this email or phone already exists",
       });
     }
 
@@ -544,36 +510,35 @@ export const signUpCompanyDriver = async (req, res) => {
     const emailCode = generateVerificationCode();
     const emailExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
 
-    console.log('🔐 Generated email code:', emailCode);
+    console.log("🔐 Generated email code:", emailCode);
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create driver user
-    const newUser = await User.create([{
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      password: hashedPassword,
-      phone,
-      role: "driver",
-      companyId: req.user.companyId, // Use the company admin's company
-      emailVerificationToken: emailCode,
-      emailVerificationExpires: emailExpiry,
-      failedLoginAttempts: 0,
-      isActive: true,
-      isVerified: false
-    }], { session });
+    const newUser = await User.create(
+      [
+        {
+          name: name.trim(),
+          email: email.toLowerCase().trim(),
+          password: hashedPassword,
+          phone,
+          role: "driver",
+          companyId: req.user.companyId, // Use the company admin's company
+          emailVerificationToken: emailCode,
+          emailVerificationExpires: emailExpiry,
+          failedLoginAttempts: 0,
+          isActive: true,
+          isVerified: false,
+        },
+      ],
+      { session }
+    );
 
-    console.log('🚗 Company driver created:', newUser[0]._id);
+    console.log("🚗 Company driver created:", newUser[0]._id);
 
     // Driver details
-    const { licenseNumber, vehicleType, vehicleMake, vehicleModel, vehicleYear, 
-            vehicleColor, plateNumber, licenseExpiry } = req.body;
-
-    // Create driver profile
-    await Driver.create([{
-      userId: newUser[0]._id,
-      companyId: req.user.companyId,
+    const {
       licenseNumber,
       vehicleType,
       vehicleMake,
@@ -582,24 +547,43 @@ export const signUpCompanyDriver = async (req, res) => {
       vehicleColor,
       plateNumber,
       licenseExpiry,
-      approvalStatus: "pending",
-      isOnline: false,
-      isAvailable: false,
-      canAcceptDeliveries: true
-    }], { session });
+    } = req.body;
+
+    // Create driver profile
+    await Driver.create(
+      [
+        {
+          userId: newUser[0]._id,
+          companyId: req.user.companyId,
+          licenseNumber,
+          vehicleType,
+          vehicleMake,
+          vehicleModel,
+          vehicleYear,
+          vehicleColor,
+          plateNumber,
+          licenseExpiry,
+          approvalStatus: "pending",
+          isOnline: false,
+          isAvailable: false,
+          canAcceptDeliveries: true,
+        },
+      ],
+      { session }
+    );
 
     // Send verification email
     await sendVerificationEmail(email, emailCode, name);
 
     // Generate tokens for the driver
-    const accessToken = generateAccessToken({ 
-      userId: newUser[0]._id, 
+    const accessToken = generateAccessToken({
+      userId: newUser[0]._id,
       role: newUser[0].role,
-      isVerified: false
+      isVerified: false,
     });
-    
-    const refreshToken = generateRefreshToken({ 
-      userId: newUser[0]._id 
+
+    const refreshToken = generateRefreshToken({
+      userId: newUser[0]._id,
     });
 
     newUser[0].refreshToken = refreshToken;
@@ -621,20 +605,19 @@ export const signUpCompanyDriver = async (req, res) => {
           phone: newUser[0].phone,
           role: newUser[0].role,
           isVerified: false,
-          companyId: newUser[0].companyId
-        }
-      }
+          companyId: newUser[0].companyId,
+        },
+      },
     });
-
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error('❌ Company driver signup error:', error);
-    
+    console.error("❌ Company driver signup error:", error);
+
     res.status(500).json({
       success: false,
       message: "Driver registration failed",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -650,7 +633,7 @@ export const signIn = async (req, res) => {
 
     // Determine the identifier
     let userIdentifier;
-    
+
     if (emailOrPhone) {
       userIdentifier = emailOrPhone;
     } else if (email) {
@@ -662,7 +645,7 @@ export const signIn = async (req, res) => {
     if (!userIdentifier || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email/Phone and password are required"
+        message: "Email/Phone and password are required",
       });
     }
 
@@ -670,18 +653,20 @@ export const signIn = async (req, res) => {
     const query = {
       $or: [
         { email: userIdentifier.toLowerCase().trim() },
-        { phone: userIdentifier.trim() }
-      ]
+        { phone: userIdentifier.trim() },
+      ],
     };
 
     const user = await User.findOne(query)
-      .select('+password +failedLoginAttempts +isLocked +refreshToken +emailVerificationToken')
-      .populate('companyId');
-    
+      .select(
+        "+password +failedLoginAttempts +isLocked +refreshToken +emailVerificationToken"
+      )
+      .populate("companyId");
+
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password"
+        message: "Invalid email or password",
       });
     }
 
@@ -689,7 +674,7 @@ export const signIn = async (req, res) => {
     if (user.isLocked) {
       return res.status(403).json({
         success: false,
-        message: "Account is locked due to too many failed attempts"
+        message: "Account is locked due to too many failed attempts",
       });
     }
 
@@ -697,28 +682,28 @@ export const signIn = async (req, res) => {
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
-        message: "Account is deactivated"
+        message: "Account is deactivated",
       });
     }
 
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    
+
     if (!isPasswordValid) {
       // Increment failed attempts
       user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
       user.lastFailedLogin = new Date();
-      
+
       // Lock account after 5 failed attempts
       if (user.failedLoginAttempts >= 5) {
         user.isLocked = true;
       }
-      
+
       await user.save();
-      
+
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password"
+        message: "Invalid email or password",
       });
     }
 
@@ -728,25 +713,25 @@ export const signIn = async (req, res) => {
     user.lastLoginAt = new Date();
 
     // For company admins, check company status
-   // if (user.role === "company_admin" && user.companyId) {
-   //   if (user.companyId.status !== "approved") {
-   //     return res.status(403).json({
-   //       success: false,
-   //       message: "Company not approved yet",
-   //       companyStatus: user.companyId.status
-   //     });
-   //   }
-   // }
+    // if (user.role === "company_admin" && user.companyId) {
+    //   if (user.companyId.status !== "approved") {
+    //     return res.status(403).json({
+    //       success: false,
+    //       message: "Company not approved yet",
+    //       companyStatus: user.companyId.status
+    //     });
+    //   }
+    // }
 
     // Generate tokens
-    const accessToken = generateAccessToken({ 
-      userId: user._id, 
+    const accessToken = generateAccessToken({
+      userId: user._id,
       role: user.role,
-      isVerified: user.isVerified
+      isVerified: user.isVerified,
     });
-    
-    const refreshToken = generateRefreshToken({ 
-      userId: user._id 
+
+    const refreshToken = generateRefreshToken({
+      userId: user._id,
     });
 
     user.refreshToken = refreshToken;
@@ -763,9 +748,9 @@ export const signIn = async (req, res) => {
     // For drivers, fetch driver profile
     let driverProfile = null;
     if (user.role === "driver") {
-      driverProfile = await Driver.findOne({ 
+      driverProfile = await Driver.findOne({
         userId: user._id,
-        companyId: user.companyId 
+        companyId: user.companyId,
       });
     }
 
@@ -777,35 +762,36 @@ export const signIn = async (req, res) => {
         refreshToken,
         user: {
           ...userObject,
-          driverProfile: driverProfile ? {
-            _id: driverProfile._id,
-            licenseNumber: driverProfile.licenseNumber,
-            licenseExpiry: driverProfile.licenseExpiry,
-            vehicleType: driverProfile.vehicleType,
-            vehicleMake: driverProfile.vehicleMake,
-            vehicleModel: driverProfile.vehicleModel,
-            vehicleYear: driverProfile.vehicleYear,
-            vehicleColor: driverProfile.vehicleColor,
-            plateNumber: driverProfile.plateNumber,
-            approvalStatus: driverProfile.approvalStatus,
-            isOnline: driverProfile.isOnline,
-            isAvailable: driverProfile.isAvailable,
-            canAcceptDeliveries: driverProfile.canAcceptDeliveries,
-            currentLocation: driverProfile.currentLocation,
-            rating: driverProfile.rating,
-            totalRides: driverProfile.totalRides,
-            earnings: driverProfile.earnings
-          } : null
-        }
-      }
+          driverProfile: driverProfile
+            ? {
+                _id: driverProfile._id,
+                licenseNumber: driverProfile.licenseNumber,
+                licenseExpiry: driverProfile.licenseExpiry,
+                vehicleType: driverProfile.vehicleType,
+                vehicleMake: driverProfile.vehicleMake,
+                vehicleModel: driverProfile.vehicleModel,
+                vehicleYear: driverProfile.vehicleYear,
+                vehicleColor: driverProfile.vehicleColor,
+                plateNumber: driverProfile.plateNumber,
+                approvalStatus: driverProfile.approvalStatus,
+                isOnline: driverProfile.isOnline,
+                isAvailable: driverProfile.isAvailable,
+                canAcceptDeliveries: driverProfile.canAcceptDeliveries,
+                currentLocation: driverProfile.currentLocation,
+                rating: driverProfile.rating,
+                totalRides: driverProfile.totalRides,
+                earnings: driverProfile.earnings,
+              }
+            : null,
+        },
+      },
     });
-
   } catch (error) {
-    console.error('❌ Login error:', error);
+    console.error("❌ Login error:", error);
     res.status(500).json({
       success: false,
       message: "Login failed",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -822,18 +808,19 @@ export const verifyEmail = async (req, res) => {
     if (!email || !token) {
       return res.status(400).json({
         success: false,
-        message: "Email and code are required"
+        message: "Email and code are required",
       });
     }
 
     // Find user
-    const user = await User.findOne({ email: email.toLowerCase() })
-      .select('+emailVerificationToken');
+    const user = await User.findOne({ email: email.toLowerCase() }).select(
+      "+emailVerificationToken"
+    );
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found"
+        message: "User not found",
       });
     }
 
@@ -841,28 +828,28 @@ export const verifyEmail = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Email already verified",
-        alreadyVerified: true
+        alreadyVerified: true,
       });
     }
 
     if (!user.emailVerificationToken || !user.emailVerificationExpires) {
       return res.status(400).json({
         success: false,
-        message: "No active verification found"
+        message: "No active verification found",
       });
     }
 
     if (Date.now() > user.emailVerificationExpires) {
       return res.status(400).json({
         success: false,
-        message: "Verification code expired"
+        message: "Verification code expired",
       });
     }
 
     if (user.emailVerificationToken !== token) {
       return res.status(400).json({
         success: false,
-        message: "Invalid verification code"
+        message: "Invalid verification code",
       });
     }
 
@@ -871,14 +858,14 @@ export const verifyEmail = async (req, res) => {
     user.emailVerificationToken = null;
     user.emailVerificationExpires = null;
     user.isVerified = true;
-    
+
     await user.save();
 
     // Generate new token for verified user
-    const newAccessToken = generateAccessToken({ 
-      userId: user._id, 
+    const newAccessToken = generateAccessToken({
+      userId: user._id,
       role: user.role,
-      isVerified: true
+      isVerified: true,
     });
 
     res.status(200).json({
@@ -892,17 +879,16 @@ export const verifyEmail = async (req, res) => {
           phone: user.phone,
           role: user.role,
           isVerified: true,
-          companyId: user.companyId
+          companyId: user.companyId,
         },
-        accessToken: newAccessToken
-      }
+        accessToken: newAccessToken,
+      },
     });
-
   } catch (error) {
-    console.error('❌ Email verification error:', error);
+    console.error("❌ Email verification error:", error);
     res.status(500).json({
       success: false,
-      message: "Verification failed"
+      message: "Verification failed",
     });
   }
 };
@@ -919,17 +905,18 @@ export const forgotPassword = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email is required"
+        message: "Email is required",
       });
     }
 
     const user = await User.findOne({ email: email.toLowerCase() });
-    
+
     if (!user) {
       // Don't reveal that user doesn't exist for security
       return res.status(200).json({
         success: true,
-        message: "If an account exists with this email, a reset code will be sent"
+        message:
+          "If an account exists with this email, a reset code will be sent",
       });
     }
 
@@ -948,16 +935,15 @@ export const forgotPassword = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Password reset code sent to your email",
-      ...(process.env.NODE_ENV === 'development' && {
-        debug: { otp }
-      })
+      ...(process.env.NODE_ENV === "development" && {
+        debug: { otp },
+      }),
     });
-
   } catch (error) {
-    console.error('❌ Forgot password error:', error);
+    console.error("❌ Forgot password error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to process request"
+      message: "Failed to process request",
     });
   }
 };
@@ -974,27 +960,27 @@ export const resetPassword = async (req, res) => {
     if (!email || !otp || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: "Email, OTP and new password are required"
+        message: "Email, OTP and new password are required",
       });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 6 characters"
+        message: "Password must be at least 6 characters",
       });
     }
 
-    const user = await User.findOne({ 
+    const user = await User.findOne({
       email: email.toLowerCase(),
       resetPasswordToken: otp,
-      resetPasswordExpires: { $gt: Date.now() }
+      resetPasswordExpires: { $gt: Date.now() },
     });
 
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Invalid or expired OTP"
+        message: "Invalid or expired OTP",
       });
     }
 
@@ -1008,19 +994,19 @@ export const resetPassword = async (req, res) => {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.refreshToken = null; // Force re-login on all devices
-    
+
     await user.save();
 
     res.status(200).json({
       success: true,
-      message: "Password reset successfully. Please login with your new password."
+      message:
+        "Password reset successfully. Please login with your new password.",
     });
-
   } catch (error) {
-    console.error('❌ Reset password error:', error);
+    console.error("❌ Reset password error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to reset password"
+      message: "Failed to reset password",
     });
   }
 };
@@ -1038,21 +1024,21 @@ export const changePassword = async (req, res) => {
     if (!currentPassword || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: "Current and new passwords are required"
+        message: "Current and new passwords are required",
       });
     }
 
     if (currentPassword === newPassword) {
       return res.status(400).json({
         success: false,
-        message: "New password must be different"
+        message: "New password must be different",
       });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 6 characters"
+        message: "Password must be at least 6 characters",
       });
     }
 
@@ -1063,7 +1049,7 @@ export const changePassword = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Current password is incorrect"
+        message: "Current password is incorrect",
       });
     }
 
@@ -1074,14 +1060,13 @@ export const changePassword = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Password changed successfully"
+      message: "Password changed successfully",
     });
-
   } catch (error) {
-    console.error('❌ Change password error:', error);
+    console.error("❌ Change password error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to change password"
+      message: "Failed to change password",
     });
   }
 };
@@ -1098,7 +1083,7 @@ export const resendVerification = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email is required"
+        message: "Email is required",
       });
     }
 
@@ -1107,37 +1092,36 @@ export const resendVerification = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found"
+        message: "User not found",
       });
     }
 
     if (user.isVerified) {
       return res.status(400).json({
         success: false,
-        message: "User already verified"
+        message: "User already verified",
       });
     }
 
     // Generate new email verification code
     const newCode = generateVerificationCode();
-    
+
     user.emailVerificationToken = newCode;
     user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
-    
+
     // Send verification email
     await sendVerificationEmail(email, newCode, user.name);
-    
+
     res.status(200).json({
       success: true,
-      message: "Verification code resent to your email"
+      message: "Verification code resent to your email",
     });
-
   } catch (error) {
-    console.error('❌ Resend verification error:', error);
+    console.error("❌ Resend verification error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to resend code"
+      message: "Failed to resend code",
     });
   }
 };
@@ -1154,7 +1138,7 @@ export const refreshToken = async (req, res) => {
     if (!oldRefreshToken) {
       return res.status(400).json({
         success: false,
-        message: "Refresh token required"
+        message: "Refresh token required",
       });
     }
 
@@ -1162,38 +1146,40 @@ export const refreshToken = async (req, res) => {
     let decoded;
     try {
       decoded = jwt.verify(
-        oldRefreshToken, 
-        process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'fallback-secret-key-change-in-production'
+        oldRefreshToken,
+        process.env.JWT_REFRESH_SECRET ||
+          process.env.JWT_SECRET ||
+          "fallback-secret-key-change-in-production"
       );
     } catch (err) {
       return res.status(401).json({
         success: false,
-        message: "Invalid refresh token"
+        message: "Invalid refresh token",
       });
     }
 
     // Find user
     const user = await User.findOne({
       _id: decoded.userId,
-      refreshToken: oldRefreshToken
+      refreshToken: oldRefreshToken,
     });
 
     if (!user || !user.isActive) {
       return res.status(401).json({
         success: false,
-        message: "Invalid token or account deactivated"
+        message: "Invalid token or account deactivated",
       });
     }
 
     // Generate new tokens
-    const newAccessToken = generateAccessToken({ 
-      userId: user._id, 
+    const newAccessToken = generateAccessToken({
+      userId: user._id,
       role: user.role,
-      isVerified: user.isVerified
+      isVerified: user.isVerified,
     });
-    
-    const newRefreshToken = generateRefreshToken({ 
-      userId: user._id 
+
+    const newRefreshToken = generateRefreshToken({
+      userId: user._id,
     });
 
     user.refreshToken = newRefreshToken;
@@ -1203,15 +1189,14 @@ export const refreshToken = async (req, res) => {
       success: true,
       data: {
         accessToken: newAccessToken,
-        refreshToken: newRefreshToken
-      }
+        refreshToken: newRefreshToken,
+      },
     });
-
   } catch (error) {
-    console.error('❌ Token refresh error:', error);
+    console.error("❌ Token refresh error:", error);
     res.status(500).json({
       success: false,
-      message: "Token refresh failed"
+      message: "Token refresh failed",
     });
   }
 };
@@ -1231,14 +1216,13 @@ export const logout = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Logged out successfully"
+      message: "Logged out successfully",
     });
-
   } catch (error) {
-    console.error('❌ Logout error:', error);
+    console.error("❌ Logout error:", error);
     res.status(500).json({
       success: false,
-      message: "Logout failed"
+      message: "Logout failed",
     });
   }
 };
@@ -1251,22 +1235,24 @@ export const logout = async (req, res) => {
 export const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
-      .populate('companyId')
-      .select('-password -refreshToken -emailVerificationToken -resetPasswordToken');
+      .populate("companyId")
+      .select(
+        "-password -refreshToken -emailVerificationToken -resetPasswordToken"
+      );
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found"
+        message: "User not found",
       });
     }
 
     // For drivers, fetch driver profile
     let driverProfile = null;
     if (user.role === "driver") {
-      driverProfile = await Driver.findOne({ 
+      driverProfile = await Driver.findOne({
         userId: user._id,
-        companyId: user.companyId 
+        companyId: user.companyId,
       });
     }
 
@@ -1276,33 +1262,34 @@ export const getMe = async (req, res) => {
       success: true,
       data: {
         ...userObject,
-        driverProfile: driverProfile ? {
-          _id: driverProfile._id,
-          licenseNumber: driverProfile.licenseNumber,
-          licenseExpiry: driverProfile.licenseExpiry,
-          vehicleType: driverProfile.vehicleType,
-          vehicleMake: driverProfile.vehicleMake,
-          vehicleModel: driverProfile.vehicleModel,
-          vehicleYear: driverProfile.vehicleYear,
-          vehicleColor: driverProfile.vehicleColor,
-          plateNumber: driverProfile.plateNumber,
-          approvalStatus: driverProfile.approvalStatus,
-          isOnline: driverProfile.isOnline,
-          isAvailable: driverProfile.isAvailable,
-          canAcceptDeliveries: driverProfile.canAcceptDeliveries,
-          currentLocation: driverProfile.currentLocation,
-          rating: driverProfile.rating,
-          totalRides: driverProfile.totalRides,
-          earnings: driverProfile.earnings
-        } : null
-      }
+        driverProfile: driverProfile
+          ? {
+              _id: driverProfile._id,
+              licenseNumber: driverProfile.licenseNumber,
+              licenseExpiry: driverProfile.licenseExpiry,
+              vehicleType: driverProfile.vehicleType,
+              vehicleMake: driverProfile.vehicleMake,
+              vehicleModel: driverProfile.vehicleModel,
+              vehicleYear: driverProfile.vehicleYear,
+              vehicleColor: driverProfile.vehicleColor,
+              plateNumber: driverProfile.plateNumber,
+              approvalStatus: driverProfile.approvalStatus,
+              isOnline: driverProfile.isOnline,
+              isAvailable: driverProfile.isAvailable,
+              canAcceptDeliveries: driverProfile.canAcceptDeliveries,
+              currentLocation: driverProfile.currentLocation,
+              rating: driverProfile.rating,
+              totalRides: driverProfile.totalRides,
+              earnings: driverProfile.earnings,
+            }
+          : null,
+      },
     });
-
   } catch (error) {
-    console.error('❌ Get me error:', error);
+    console.error("❌ Get me error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get user data"
+      message: "Failed to get user data",
     });
   }
 };
@@ -1327,13 +1314,13 @@ export const updateProfile = async (req, res) => {
       // Check if phone is already taken
       const existingUser = await User.findOne({
         phone,
-        _id: { $ne: userId }
+        _id: { $ne: userId },
       });
 
       if (existingUser) {
         return res.status(409).json({
           success: false,
-          message: "Phone number already in use"
+          message: "Phone number already in use",
         });
       }
       updates.phone = phone;
@@ -1346,7 +1333,7 @@ export const updateProfile = async (req, res) => {
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No valid fields to update"
+        message: "No valid fields to update",
       });
     }
 
@@ -1359,14 +1346,13 @@ export const updateProfile = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Profile updated successfully",
-      data: updatedUser
+      data: updatedUser,
     });
-
   } catch (error) {
-    console.error('❌ Update profile error:', error);
+    console.error("❌ Update profile error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update profile"
+      message: "Failed to update profile",
     });
   }
 };
@@ -1380,6 +1366,6 @@ export const testEndpoint = async (req, res) => {
   res.status(200).json({
     success: true,
     message: "Auth endpoint is working!",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 };
