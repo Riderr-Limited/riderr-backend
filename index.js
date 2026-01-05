@@ -5,8 +5,19 @@ import app from './app.js';
 import dotenv from 'dotenv';
 import { setupDeliverySocket } from './socket/deliverySocket.js';
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+import express from 'express'; // Add this import
+
 // Load environment variables
 dotenv.config();
+
+// Configure static file serving
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const PORT = process.env.PORT || 5000;
 const MONGODB_URL = process.env.MONGODB_URL || 'mongodb://localhost:27017/riderr';
@@ -107,7 +118,8 @@ const startServer = async () => {
       console.log(`📡 API available at: http://localhost:${PORT}/api`);
       console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
       console.log(`🔌 WebSocket available at: ws://localhost:${PORT}`);
-     });
+      console.log(`📁 Uploads available at: http://localhost:${PORT}/uploads`);
+    });
     
     // Handle server errors
     httpServer.on('error', (error) => {

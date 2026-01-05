@@ -250,18 +250,29 @@ export const updateDriverProfile = async (req, res) => {
  * @route   POST /api/driver/documents
  * @access  Private (Driver)
  */
+// Update the uploadDriverDocuments function in driver.controller.js
+/**
+ * @desc    Upload driver documents
+ * @route   POST /api/driver/documents
+ * @access  Private (Driver)
+ */
 export const uploadDriverDocuments = async (req, res) => {
   try {
     const driverUser = req.user;
     
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
+      // Delete uploaded files if driver not found
+      if (req.files) {
+        await Promise.all(req.files.map(file => deleteFile(file.path)));
+      }
       return res.status(404).json({
         success: false,
         message: "Driver profile not found"
       });
     }
 
+    // Get document types from request body
     const {
       licensePhoto,
       vehiclePhoto,
@@ -270,14 +281,39 @@ export const uploadDriverDocuments = async (req, res) => {
       vehicleRegistrationPhoto
     } = req.body;
 
-    // Update document URLs
+    // Update document URLs based on file field names
     const updates = {};
+    const uploadedFiles = req.files || [];
     
-    if (licensePhoto !== undefined) updates.licensePhoto = licensePhoto;
-    if (vehiclePhoto !== undefined) updates.vehiclePhoto = vehiclePhoto;
-    if (insurancePhoto !== undefined) updates.insurancePhoto = insurancePhoto;
-    if (idCardPhoto !== undefined) updates.idCardPhoto = idCardPhoto;
-    if (vehicleRegistrationPhoto !== undefined) updates.vehicleRegistrationPhoto = vehicleRegistrationPhoto;
+    // Map uploaded files to document types
+    uploadedFiles.forEach(file => {
+      const fieldName = file.fieldname;
+      
+      switch(fieldName) {
+        case 'licensePhoto':
+          updates.licensePhoto = file.path;
+          break;
+        case 'vehiclePhoto':
+          updates.vehiclePhoto = file.path;
+          break;
+        case 'insurancePhoto':
+          updates.insurancePhoto = file.path;
+          break;
+        case 'idCardPhoto':
+          updates.idCardPhoto = file.path;
+          break;
+        case 'vehicleRegistrationPhoto':
+          updates.vehicleRegistrationPhoto = file.path;
+          break;
+      }
+    });
+
+    // Also update from request body (for URLs from external storage)
+    if (licensePhoto && !updates.licensePhoto) updates.licensePhoto = licensePhoto;
+    if (vehiclePhoto && !updates.vehiclePhoto) updates.vehiclePhoto = vehiclePhoto;
+    if (insurancePhoto && !updates.insurancePhoto) updates.insurancePhoto = insurancePhoto;
+    if (idCardPhoto && !updates.idCardPhoto) updates.idCardPhoto = idCardPhoto;
+    if (vehicleRegistrationPhoto && !updates.vehicleRegistrationPhoto) updates.vehicleRegistrationPhoto = vehicleRegistrationPhoto;
 
     // Mark as unverified if documents are changed
     if (Object.keys(updates).length > 0) {
@@ -295,17 +331,21 @@ export const uploadDriverDocuments = async (req, res) => {
       success: true,
       message: "Documents uploaded successfully",
       data: {
-        licensePhoto: updatedDriver.licensePhoto,
-        vehiclePhoto: updatedDriver.vehiclePhoto,
-        insurancePhoto: updatedDriver.insurancePhoto,
-        idCardPhoto: updatedDriver.idCardPhoto,
-        vehicleRegistrationPhoto: updatedDriver.vehicleRegistrationPhoto,
+        licensePhoto: getFileUrl(req, updatedDriver.licensePhoto),
+        vehiclePhoto: getFileUrl(req, updatedDriver.vehiclePhoto),
+        insurancePhoto: getFileUrl(req, updatedDriver.insurancePhoto),
+        idCardPhoto: getFileUrl(req, updatedDriver.idCardPhoto),
+        vehicleRegistrationPhoto: getFileUrl(req, updatedDriver.vehicleRegistrationPhoto),
         isVerified: updatedDriver.isVerified,
         approvalStatus: updatedDriver.approvalStatus
       }
     });
 
   } catch (error) {
+    // Delete uploaded files if error occurs
+    if (req.files) {
+      await Promise.all(req.files.map(file => deleteFile(file.path)));
+    }
     console.error("❌ Upload driver documents error:", error);
     res.status(500).json({
       success: false,
@@ -1528,6 +1568,1246 @@ export const getDriverDeliveries = async (req, res) => {
       success: false,
       message: "Failed to get deliveries",
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Add these company controller functions to your existing driver.controller.js
+
+/**
+ * @desc    Get company profile
+ * @route   GET /api/company/profile
+ * @access  Private (Company)
+ */
+export const getCompanyProfile = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    // Get company statistics
+    const [driverStats, deliveryStats, earnings] = await Promise.all([
+      Driver.countDocuments({ companyId: company._id }),
+      Driver.countDocuments({ companyId: company._id, isOnline: true }),
+      Delivery.countDocuments({ companyId: company._id }),
+      Delivery.aggregate([
+        {
+          $match: {
+            companyId: company._id,
+            status: 'delivered',
+            deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+            totalDeliveries: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    const earningsData = earnings[0] || { totalEarnings: 0, totalDeliveries: 0 };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...company.toObject(),
+        stats: {
+          totalDrivers: driverStats,
+          onlineDrivers: deliveryStats,
+          totalDeliveries: earningsData.totalDeliveries,
+          totalEarnings: earningsData.totalEarnings
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company profile error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company profile"
+    });
+  }
+};
+
+/**
+ * @desc    Update company profile
+ * @route   PUT /api/company/profile
+ * @access  Private (Company)
+ */
+export const updateCompanyProfile = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors.array()
+      });
+    }
+
+    const {
+      name,
+      address,
+      city,
+      state,
+      lga,
+      contactPhone,
+      contactEmail,
+      logoUrl,
+      operatingHours
+    } = req.body;
+
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    // Update allowed fields
+    const updates = {};
+    
+    if (name !== undefined) updates.name = name;
+    if (address !== undefined) updates.address = address;
+    if (city !== undefined) updates.city = city;
+    if (state !== undefined) updates.state = state;
+    if (lga !== undefined) updates.lga = lga;
+    if (contactPhone !== undefined) updates.contactPhone = contactPhone;
+    if (contactEmail !== undefined) updates.contactEmail = contactEmail;
+    if (logoUrl !== undefined) updates.logoUrl = logoUrl;
+    if (operatingHours !== undefined) {
+      updates.settings = { ...company.settings, operatingHours };
+    }
+
+    const updatedCompany = await Company.findByIdAndUpdate(
+      company._id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Company profile updated successfully",
+      data: updatedCompany
+    });
+
+  } catch (error) {
+    console.error("❌ Update company profile error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update company profile"
+    });
+  }
+};
+
+/**
+ * @desc    Get company drivers
+ * @route   GET /api/company/drivers
+ * @access  Private (Company)
+ */
+export const getCompanyDrivers = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { 
+      status, 
+      isOnline, 
+      isVerified,
+      page = 1, 
+      limit = 10,
+      search
+    } = req.query;
+
+    const query = { companyId: company._id };
+    
+    // Apply filters
+    if (status && status !== 'all') {
+      query.approvalStatus = status;
+    }
+    if (isOnline !== undefined) {
+      query.isOnline = isOnline === 'true';
+    }
+    if (isVerified !== undefined) {
+      query.isVerified = isVerified === 'true';
+    }
+    if (search) {
+      query.$or = [
+        { licenseNumber: { $regex: search, $options: 'i' } },
+        { plateNumber: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [drivers, total] = await Promise.all([
+      Driver.find(query)
+        .populate('userId', 'name phone email avatarUrl')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Driver.countDocuments(query)
+    ]);
+
+    // Get driver statistics
+    const driversWithStats = await Promise.all(
+      drivers.map(async (driver) => {
+        const driverObj = driver.toObject();
+        
+        // Get driver delivery stats
+        const [deliveryStats, earnings] = await Promise.all([
+          Delivery.aggregate([
+            {
+              $match: {
+                driverId: driver._id,
+                status: 'delivered',
+                deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalDeliveries: { $sum: 1 },
+                averageRating: { $avg: '$rating' }
+              }
+            }
+          ]),
+          Delivery.aggregate([
+            {
+              $match: {
+                driverId: driver._id,
+                status: 'delivered',
+                deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalEarnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } }
+              }
+            }
+          ])
+        ]);
+
+        const stats = deliveryStats[0] || { totalDeliveries: 0, averageRating: 0 };
+        const earningsData = earnings[0] || { totalEarnings: 0 };
+
+        return {
+          ...driverObj,
+          stats: {
+            ...stats,
+            totalEarnings: earningsData.totalEarnings,
+            acceptanceRate: driver.totalRequests 
+              ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+              : 0
+          }
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: driversWithStats,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company drivers error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company drivers"
+    });
+  }
+};
+
+/**
+ * @desc    Get company statistics
+ * @route   GET /api/company/statistics
+ * @access  Private (Company)
+ */
+export const getCompanyStatistics = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { period = 'month' } = req.query;
+    
+    let dateFilter = {};
+    const now = new Date();
+    
+    switch (period) {
+      case 'today':
+        dateFilter = {
+          $gte: new Date(now.setHours(0, 0, 0, 0))
+        };
+        break;
+      case 'week':
+        dateFilter = {
+          $gte: new Date(now.setDate(now.getDate() - 7))
+        };
+        break;
+      case 'month':
+        dateFilter = {
+          $gte: new Date(now.setMonth(now.getMonth() - 1))
+        };
+        break;
+      case 'year':
+        dateFilter = {
+          $gte: new Date(now.setFullYear(now.getFullYear() - 1))
+        };
+        break;
+    }
+
+    const [
+      driverStats,
+      deliveryStats,
+      earningsData,
+      dailyDeliveries,
+      topDrivers
+    ] = await Promise.all([
+      // Driver statistics
+      Driver.aggregate([
+        {
+          $match: { companyId: company._id }
+        },
+        {
+          $group: {
+            _id: null,
+            totalDrivers: { $sum: 1 },
+            onlineDrivers: {
+              $sum: { $cond: [{ $eq: ['$isOnline', true] }, 1, 0] }
+            },
+            verifiedDrivers: {
+              $sum: { $cond: [{ $eq: ['$isVerified', true] }, 1, 0] }
+            },
+            averageRating: { $avg: '$rating.average' }
+          }
+        }
+      ]),
+
+      // Delivery statistics
+      Delivery.aggregate([
+        {
+          $match: {
+            companyId: company._id,
+            status: { $in: ['delivered', 'cancelled', 'failed'] },
+            createdAt: dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+
+      // Earnings statistics
+      Delivery.aggregate([
+        {
+          $match: {
+            companyId: company._id,
+            status: 'delivered',
+            createdAt: dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+            totalDeliveries: { $sum: 1 },
+            averageFare: { $avg: '$fare.totalFare' },
+            totalCommission: { 
+              $sum: { 
+                $multiply: [
+                  { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] },
+                  company.settings.commissionRate / 100
+                ]
+              }
+            }
+          }
+        }
+      ]),
+
+      // Daily deliveries for chart
+      Delivery.aggregate([
+        {
+          $match: {
+            companyId: company._id,
+            status: 'delivered',
+            createdAt: {
+              $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+            }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            deliveries: { $sum: 1 },
+            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } }
+          }
+        },
+        { $sort: { "_id": 1 } },
+        { $limit: 30 }
+      ]),
+
+      // Top drivers
+      Delivery.aggregate([
+        {
+          $match: {
+            companyId: company._id,
+            status: 'delivered',
+            createdAt: dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: '$driverId',
+            deliveries: { $sum: 1 },
+            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+            averageRating: { $avg: '$rating' }
+          }
+        },
+        { $sort: { deliveries: -1 } },
+        { $limit: 5 }
+      ])
+    ]);
+
+    // Format delivery stats
+    const deliveryStatsFormatted = {
+      delivered: 0,
+      cancelled: 0,
+      failed: 0
+    };
+    
+    deliveryStats.forEach(stat => {
+      deliveryStatsFormatted[stat._id] = stat.count;
+    });
+
+    // Populate top drivers with driver info
+    const topDriversPopulated = await Promise.all(
+      topDrivers.map(async (driver) => {
+        const driverInfo = await Driver.findById(driver._id)
+          .populate('userId', 'name phone avatarUrl');
+        
+        return {
+          driver: driverInfo?.userId || { name: 'Unknown Driver' },
+          deliveries: driver.deliveries,
+          earnings: driver.earnings,
+          averageRating: driver.averageRating || 0
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        driverStats: driverStats[0] || {
+          totalDrivers: 0,
+          onlineDrivers: 0,
+          verifiedDrivers: 0,
+          averageRating: 0
+        },
+        deliveryStats: deliveryStatsFormatted,
+        earnings: earningsData[0] || {
+          totalEarnings: 0,
+          totalDeliveries: 0,
+          averageFare: 0,
+          totalCommission: 0
+        },
+        dailyDeliveries,
+        topDrivers: topDriversPopulated,
+        period
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company statistics error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company statistics"
+    });
+  }
+};
+
+/**
+ * @desc    Get company deliveries
+ * @route   GET /api/company/deliveries
+ * @access  Private (Company)
+ */
+export const getCompanyDeliveries = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { 
+      status, 
+      startDate, 
+      endDate,
+      driverId,
+      page = 1, 
+      limit = 10
+    } = req.query;
+
+    const query = { companyId: company._id };
+    
+    // Apply filters
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (driverId) {
+      query.driverId = driverId;
+    }
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate('customerId', 'name phone')
+        .populate('driverId')
+        .populate('driverDetails.userId', 'name phone')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Delivery.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company deliveries"
+    });
+  }
+};
+
+/**
+ * @desc    Get company earnings
+ * @route   GET /api/company/earnings
+ * @access  Private (Company)
+ */
+export const getCompanyEarnings = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { period = 'month', startDate, endDate } = req.query;
+    
+    let matchStage = { companyId: company._id, status: 'delivered' };
+    
+    // Apply date filter
+    if (startDate && endDate) {
+      matchStage.deliveredAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    } else {
+      // Default to period filter
+      const date = new Date();
+      switch (period) {
+        case 'today':
+          date.setHours(0, 0, 0, 0);
+          matchStage.deliveredAt = { $gte: date };
+          break;
+        case 'week':
+          date.setDate(date.getDate() - 7);
+          matchStage.deliveredAt = { $gte: date };
+          break;
+        case 'month':
+          date.setMonth(date.getMonth() - 1);
+          matchStage.deliveredAt = { $gte: date };
+          break;
+        case 'year':
+          date.setFullYear(date.getFullYear() - 1);
+          matchStage.deliveredAt = { $gte: date };
+          break;
+      }
+    }
+
+    const earnings = await Delivery.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+          totalDeliveries: { $sum: 1 },
+          averageFare: { $avg: '$fare.totalFare' },
+          totalTips: { $sum: { $ifNull: ['$tip.amount', 0] } },
+          totalCommission: { 
+            $sum: { 
+              $multiply: [
+                { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] },
+                company.settings.commissionRate / 100
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    // Get daily earnings for chart
+    const dailyEarnings = await Delivery.aggregate([
+      {
+        $match: {
+          companyId: company._id,
+          status: 'delivered',
+          deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$deliveredAt" } },
+          revenue: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+          commission: { 
+            $sum: { 
+              $multiply: [
+                { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] },
+                company.settings.commissionRate / 100
+              ]
+            }
+          },
+          deliveries: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]);
+
+    const result = earnings[0] || {
+      totalRevenue: 0,
+      totalDeliveries: 0,
+      averageFare: 0,
+      totalTips: 0,
+      totalCommission: 0
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: result,
+        dailyEarnings,
+        period,
+        currency: "NGN",
+        commissionRate: company.settings.commissionRate
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company earnings error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company earnings"
+    });
+  }
+};
+
+/**
+ * @desc    Update company settings
+ * @route   PUT /api/company/settings
+ * @access  Private (Company)
+ */
+export const updateCompanySettings = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const {
+      autoAccept,
+      commissionRate,
+      notificationChannels,
+      operatingHours
+    } = req.body;
+
+    // Update settings
+    const updates = { settings: { ...company.settings } };
+    
+    if (autoAccept !== undefined) updates.settings.autoAccept = autoAccept;
+    if (commissionRate !== undefined) {
+      if (commissionRate < 0 || commissionRate > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission rate must be between 0 and 100"
+        });
+      }
+      updates.settings.commissionRate = commissionRate;
+    }
+    if (notificationChannels !== undefined) {
+      updates.settings.notificationChannels = notificationChannels;
+    }
+    if (operatingHours !== undefined) {
+      updates.settings.operatingHours = operatingHours;
+    }
+
+    const updatedCompany = await Company.findByIdAndUpdate(
+      company._id,
+      { $set: updates },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Settings updated successfully",
+      data: {
+        settings: updatedCompany.settings
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Update company settings error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update settings"
+    });
+  }
+};
+
+/**
+ * @desc    Manage company documents
+ * @route   POST /api/company/documents
+ * @access  Private (Company)
+ */
+// Update the manageCompanyDocuments function in driver.controller.js
+/**
+ * @desc    Manage company documents
+ * @route   POST /api/company/documents
+ * @access  Private (Company)
+ */
+export const manageCompanyDocuments = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      // Delete uploaded file if company not found
+      if (req.file) {
+        await deleteFile(req.file.path);
+      }
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { documentType } = req.body;
+    
+    if (!documentType || !req.file) {
+      // Delete uploaded file if validation fails
+      if (req.file) {
+        await deleteFile(req.file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Document type and file are required"
+      });
+    }
+
+    // Add or update document
+    const documentIndex = company.onboardingDocs.findIndex(
+      doc => doc.name === documentType
+    );
+
+    const document = {
+      name: documentType,
+      url: req.file.path,
+      uploadedAt: new Date(),
+      verified: false
+    };
+
+    if (documentIndex >= 0) {
+      // Delete old file if exists
+      if (company.onboardingDocs[documentIndex].url) {
+        await deleteFile(company.onboardingDocs[documentIndex].url);
+      }
+      company.onboardingDocs[documentIndex] = document;
+    } else {
+      company.onboardingDocs.push(document);
+    }
+
+    await company.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Document uploaded successfully",
+      data: {
+        documents: company.onboardingDocs.map(doc => ({
+          name: doc.name,
+          url: getFileUrl(req, doc.url), // Get full URL
+          uploadedAt: doc.uploadedAt,
+          verified: doc.verified
+        }))
+      }
+    });
+
+  } catch (error) {
+    // Delete uploaded file if error occurs
+    if (req.file) {
+      await deleteFile(req.file.path);
+    }
+    console.error("❌ Manage company documents error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to upload document"
+    });
+  }
+};
+
+/**
+ * @desc    Get company driver requests (pending approvals)
+ * @route   GET /api/company/driver-requests
+ * @access  Private (Company)
+ */
+export const getCompanyDriverRequests = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [drivers, total] = await Promise.all([
+      Driver.find({
+        companyId: company._id,
+        approvalStatus: 'pending'
+      })
+        .populate('userId', 'name phone email avatarUrl')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Driver.countDocuments({
+        companyId: company._id,
+        approvalStatus: 'pending'
+      })
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: drivers,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company driver requests error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get driver requests"
+    });
+  }
+};
+
+/**
+ * @desc    Approve driver document
+ * @route   POST /api/company/drivers/:driverId/approve-document
+ * @access  Private (Company)
+ */
+export const approveDriverDocument = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    const { documentType } = req.body;
+
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const driver = await Driver.findOne({
+      _id: driverId,
+      companyId: company._id
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver not found"
+      });
+    }
+
+    // Mark driver as verified if all required documents are verified
+    const requiredDocs = ['licensePhoto', 'vehiclePhoto', 'insurancePhoto'];
+    const hasAllDocs = requiredDocs.every(doc => driver[doc]);
+    
+    if (hasAllDocs) {
+      driver.isVerified = true;
+      driver.approvalStatus = "approved";
+      driver.approvedBy = req.user._id;
+      driver.approvedAt = new Date();
+    }
+
+    await driver.save();
+
+    // Notify driver
+    const driverUser = await User.findById(driver.userId);
+    if (driverUser) {
+      await sendNotification({
+        userId: driverUser._id,
+        title: "✅ Account Verified",
+        message: "Your driver account has been verified and approved",
+        data: {
+          type: "driver_approved",
+          driverId: driver._id
+        }
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Driver approved successfully",
+      data: {
+        isVerified: driver.isVerified,
+        approvalStatus: driver.approvalStatus,
+        approvedAt: driver.approvedAt
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Approve driver document error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to approve driver document"
+    });
+  }
+};
+
+/**
+ * @desc    Suspend driver
+ * @route   POST /api/company/drivers/:driverId/suspend
+ * @access  Private (Company)
+ */
+export const suspendDriver = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    const { reason } = req.body;
+
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const driver = await Driver.findOne({
+      _id: driverId,
+      companyId: company._id
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver not found"
+      });
+    }
+
+    driver.isSuspended = true;
+    driver.suspensionReason = reason;
+    driver.suspendedAt = new Date();
+    driver.isOnline = false;
+    driver.isAvailable = false;
+
+    await driver.save();
+
+    // Notify driver
+    const driverUser = await User.findById(driver.userId);
+    if (driverUser) {
+      await sendNotification({
+        userId: driverUser._id,
+        title: "⚠️ Account Suspended",
+        message: `Your driver account has been suspended. Reason: ${reason}`,
+        data: {
+          type: "driver_suspended",
+          driverId: driver._id,
+          reason: reason
+        }
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Driver suspended successfully",
+      data: {
+        isSuspended: driver.isSuspended,
+        suspensionReason: driver.suspensionReason,
+        suspendedAt: driver.suspendedAt
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Suspend driver error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to suspend driver"
+    });
+  }
+};
+
+/**
+ * @desc    Activate driver
+ * @route   POST /api/company/drivers/:driverId/activate
+ * @access  Private (Company)
+ */
+export const activateDriver = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const driver = await Driver.findOne({
+      _id: driverId,
+      companyId: company._id
+    });
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver not found"
+      });
+    }
+
+    driver.isSuspended = false;
+    driver.suspensionReason = "";
+    driver.suspendedAt = null;
+
+    await driver.save();
+
+    // Notify driver
+    const driverUser = await User.findById(driver.userId);
+    if (driverUser) {
+      await sendNotification({
+        userId: driverUser._id,
+        title: "✅ Account Reactivated",
+        message: "Your driver account has been reactivated",
+        data: {
+          type: "driver_reactivated",
+          driverId: driver._id
+        }
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Driver activated successfully",
+      data: {
+        isSuspended: driver.isSuspended
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Activate driver error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to activate driver"
+    });
+  }
+};
+
+/**
+ * @desc    Get company notifications
+ * @route   GET /api/company/notifications
+ * @access  Private (Company)
+ */
+export const getCompanyNotifications = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // In a real app, you would have a Notification model
+    // For now, we'll return a placeholder
+    const notifications = [
+      {
+        id: "1",
+        title: "New Driver Request",
+        message: "John Doe has requested to join your company",
+        type: "driver_request",
+        read: false,
+        createdAt: new Date(),
+        data: { driverId: "123" }
+      },
+      {
+        id: "2",
+        title: "Delivery Completed",
+        message: "Delivery #D-12345 has been completed successfully",
+        type: "delivery_completed",
+        read: true,
+        createdAt: new Date(Date.now() - 3600000),
+        data: { deliveryId: "D-12345" }
+      }
+    ];
+
+    res.status(200).json({
+      success: true,
+      data: notifications,
+      pagination: {
+        total: notifications.length,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(notifications.length / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company notifications error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get notifications"
+    });
+  }
+};
+
+/**
+ * @desc    Get company transactions
+ * @route   GET /api/company/transactions
+ * @access  Private (Company)
+ */
+export const getCompanyTransactions = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Get company deliveries with earnings
+    const deliveries = await Delivery.find({
+      companyId: company._id,
+      status: 'delivered'
+    })
+      .select('deliveredAt fare.totalFare tip.amount driverId customerId')
+      .populate('driverId', 'plateNumber')
+      .populate('driverDetails.userId', 'name')
+      .populate('customerId', 'name')
+      .sort({ deliveredAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Delivery.countDocuments({
+      companyId: company._id,
+      status: 'delivered'
+    });
+
+    const transactions = deliveries.map(delivery => ({
+      id: delivery._id,
+      date: delivery.deliveredAt,
+      amount: delivery.fare.totalFare + (delivery.tip?.amount || 0),
+      commission: (delivery.fare.totalFare + (delivery.tip?.amount || 0)) * (company.settings.commissionRate / 100),
+      driver: delivery.driverDetails?.userId?.name || 'Unknown Driver',
+      customer: delivery.customerId?.name || 'Unknown Customer',
+      type: 'delivery',
+      status: 'completed'
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: transactions,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get company transactions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get transactions"
     });
   }
 };

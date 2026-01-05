@@ -71,16 +71,17 @@ const CompanySchema = new mongoose.Schema(
     logoUrl: String,
     
     // Contact Information
-    contactPhone: {
-      type: String,
-      required: [true, "Contact phone is required"],
-      validate: {
-        validator: function(v) {
-          return /^(\+234|0)[7-9][0-1]\d{8}$/.test(v); // Nigerian phone format
-        },
-        message: "Please provide a valid Nigerian phone number"
-      }
+contactPhone: {
+  type: String,
+  required: [true, "Contact phone is required"],
+  validate: {
+    validator: function(v) {
+      // Accept exactly: 08012345678 (11 digits) or +2348012345678 (14 digits)
+      return /^(?:\+234\d{10}|0\d{10})$/.test(v);
     },
+    message: "Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)"
+  }
+},
     
     contactEmail: {
       type: String,

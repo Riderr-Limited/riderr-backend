@@ -17,7 +17,7 @@ import { protect, authorize } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
-// Customer routes ONLY
+// Customer routes  
 router.post('/request', protect, authorize('customer'), createDeliveryRequest);
 router.get('/nearby-drivers', protect, authorize('customer'), getNearbyDrivers);
 router.get('/my', protect, authorize('customer'), getMyDeliveries);

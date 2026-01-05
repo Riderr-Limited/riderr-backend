@@ -5,8 +5,8 @@ import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
 import deliveryPersonRoutes from './deliveryPerson.routes.js';
-// import paymentRoutes from './payment.routes.js';
 import driverRoutes from './driver.routes.js';
+import companyRoutes from './company.routes.js'; // Add this
 
 const router = express.Router();
 
@@ -71,44 +71,43 @@ router.get("/", (req, res) => {
         startDelivery: "POST /api/deliveries/:deliveryId/start (driver)",
         completeDelivery: "POST /api/deliveries/:deliveryId/complete (driver)",
         updateLocation: "POST /api/deliveries/:deliveryId/location (driver)",
-        // Only customer endpoints
-        create: "POST /api/deliveries/request (customer)",
-        getNearbyDrivers: "GET /api/deliveries/nearby-drivers (customer)",
-        getMyDeliveries: "GET /api/deliveries/my (customer)",
-        // Shared endpoints
-        getDeliveryDetails: "GET /api/deliveries/:deliveryId",
-        trackDelivery: "GET /api/deliveries/:deliveryId/track",
-        cancelDelivery: "POST /api/deliveries/:deliveryId/cancel",
-        rateDelivery: "POST /api/deliveries/:deliveryId/rate (customer)",
         // Admin endpoints
         getAllDeliveries: "GET /api/deliveries (admin)",
         getCompanyDeliveries: "GET /api/deliveries/company/:companyId/deliveries (company_admin, admin)"
       },
- drivers: {
-  getProfile: "GET /api/driver/profile (driver)",
-  updateProfile: "PUT /api/driver/profile (driver)",
-  uploadDocuments: "POST /api/driver/documents (driver)",
-  updateLocation: "POST /api/driver/location (driver)",
-  toggleOnlineStatus: "POST /api/driver/online-status (driver)",
-  updateAvailability: "POST /api/driver/availability (driver)",
-  getCurrentDelivery: "GET /api/driver/current-delivery (driver)",
-  getDeliveryRequests: "GET /api/driver/requests (driver)",
-  getEarnings: "GET /api/driver/earnings (driver)",
-  getStats: "GET /api/driver/stats (driver)",
-  getDeliveries: "GET /api/driver/deliveries (driver)",
-  updateSettings: "PUT /api/driver/settings (driver)",
-  // New delivery action endpoints
-  acceptDelivery: "POST /api/driver/deliveries/accept/:deliveryId (driver)",
-  startDelivery: "POST /api/driver/deliveries/start/:deliveryId (driver)",
-  completeDelivery: "POST /api/driver/deliveries/complete/:deliveryId (driver)",
-  getDeliveries: "GET /api/driver/deliveries (driver)",
-  getCurrentDelivery: "GET /api/driver/current-delivery (driver)",
-  getDeliveryRequests: "GET /api/driver/requests (driver)",
-  acceptDelivery: "POST /api/driver/deliveries/accept/:deliveryId (driver)",
-  startDelivery: "POST /api/driver/deliveries/start/:deliveryId (driver)",
-  completeDelivery: "POST /api/driver/deliveries/complete/:deliveryId (driver)",
-  getDriverDeliveries: "GET /api/deliveries/driver/my-deliveries (driver)"
-},
+      driver: {
+        getProfile: "GET /api/driver/profile",
+        updateProfile: "PUT /api/driver/profile",
+        uploadDocuments: "POST /api/driver/documents",
+        updateLocation: "POST /api/driver/location",
+        toggleOnlineStatus: "POST /api/driver/online-status",
+        updateAvailability: "POST /api/driver/availability",
+        getCurrentDelivery: "GET /api/driver/current-delivery",
+        getDeliveryRequests: "GET /api/driver/requests",
+        getEarnings: "GET /api/driver/earnings",
+        getStats: "GET /api/driver/stats",
+        getDeliveries: "GET /api/driver/deliveries",
+        updateSettings: "PUT /api/driver/settings",
+        acceptDelivery: "POST /api/driver/deliveries/accept/:deliveryId",
+        startDelivery: "POST /api/driver/deliveries/start/:deliveryId",
+        completeDelivery: "POST /api/driver/deliveries/complete/:deliveryId"
+      },
+      company: {
+        getProfile: "GET /api/company/profile",
+        updateProfile: "PUT /api/company/profile",
+        updateSettings: "PUT /api/company/settings",
+        uploadDocuments: "POST /api/company/documents",
+        getDrivers: "GET /api/company/drivers",
+        getDriverRequests: "GET /api/company/driver-requests",
+        approveDriverDocument: "POST /api/company/drivers/:driverId/approve-document",
+        suspendDriver: "POST /api/company/drivers/:driverId/suspend",
+        activateDriver: "POST /api/company/drivers/:driverId/activate",
+        getDeliveries: "GET /api/company/deliveries",
+        getStatistics: "GET /api/company/statistics",
+        getEarnings: "GET /api/company/earnings",
+        getTransactions: "GET /api/company/transactions",
+        getNotifications: "GET /api/company/notifications"
+      },
       rides: {
         createRide: "POST /api/rides (customer)",
         myRides: "GET /api/rides/my-rides (customer)",
@@ -132,8 +131,7 @@ router.get("/", (req, res) => {
         onlineStatus: "PATCH /api/delivery-persons/online-status",
         getProfile: "GET /api/delivery-persons/profile",
         updateServices: "PATCH /api/delivery-persons/services"
-      },
-      
+      }
     },
     documentation: "https://api-docs.example.com"
   });
@@ -145,8 +143,8 @@ router.use("/users", userRoutes);
 router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
 router.use("/delivery-persons", deliveryPersonRoutes);
-//router.use("/payments", paymentRoutes);
 router.use("/driver", driverRoutes);
+router.use("/company", companyRoutes); // Add this
 
 /**
  * @route   ALL *
