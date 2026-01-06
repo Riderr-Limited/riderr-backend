@@ -13,11 +13,14 @@ import { sendNotification } from "../utils/notification.js";
 // Calculate distance between two coordinates
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
@@ -28,7 +31,7 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
     const delivery = await Delivery.findById(deliveryId);
     if (delivery && driver && driver.userId) {
       const driverUser = await User.findById(driver.userId);
-      
+
       delivery.driverDetails = {
         driverId: driver._id,
         userId: driver.userId,
@@ -39,8 +42,8 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
           type: driver.vehicleType || "bike",
           make: driver.vehicleMake || "",
           model: driver.vehicleModel || "",
-          plateNumber: driver.plateNumber || ""
-        }
+          plateNumber: driver.plateNumber || "",
+        },
       };
       await delivery.save();
       console.log(`✅ Driver details saved for delivery ${deliveryId}`);
@@ -60,11 +63,11 @@ const validateDriverForOnline = async (driver) => {
     errors.push("Driver must be verified by admin");
   }
 
-  const requiredDocs = ['licensePhoto', 'vehiclePhoto', 'insurancePhoto'];
-  const missingDocs = requiredDocs.filter(doc => !driver[doc]);
-  
+  const requiredDocs = ["licensePhoto", "vehiclePhoto", "insurancePhoto"];
+  const missingDocs = requiredDocs.filter((doc) => !driver[doc]);
+
   if (missingDocs.length > 0) {
-    errors.push(`Missing required documents: ${missingDocs.join(', ')}`);
+    errors.push(`Missing required documents: ${missingDocs.join(", ")}`);
   }
 
   if (driver.licenseExpiry && new Date(driver.licenseExpiry) < new Date()) {
@@ -73,7 +76,7 @@ const validateDriverForOnline = async (driver) => {
 
   return {
     isValid: errors.length === 0,
-    errors
+    errors,
   };
 };
 
@@ -89,15 +92,15 @@ const validateDriverForOnline = async (driver) => {
 export const getDriverProfile = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id })
-      .populate('userId', 'name email phone avatarUrl')
-      .populate('companyId', 'name logo contactPhone address');
-    
+      .populate("userId", "name email phone avatarUrl")
+      .populate("companyId", "name logo contactPhone address");
+
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -110,36 +113,42 @@ export const getDriverProfile = async (req, res) => {
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered',
-            deliveredAt: { $gte: thirtyDaysAgo }
-          }
+            status: "delivered",
+            deliveredAt: { $gte: thirtyDaysAgo },
+          },
         },
         {
           $group: {
             _id: null,
             totalDeliveries: { $sum: 1 },
-            totalEarnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
-            averageRating: { $avg: '$rating' }
-          }
-        }
+            totalEarnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            averageRating: { $avg: "$rating" },
+          },
+        },
       ]),
       Delivery.find({
         driverId: driver._id,
-        status: 'delivered'
+        status: "delivered",
       })
-      .sort({ deliveredAt: -1 })
-      .limit(5)
-      .select('deliveredAt fare.totalFare tip.amount rating pickup.address dropoff.address')
+        .sort({ deliveredAt: -1 })
+        .limit(5)
+        .select(
+          "deliveredAt fare.totalFare tip.amount rating pickup.address dropoff.address"
+        ),
     ]);
 
     const driverStats = stats[0] || {
       totalDeliveries: 0,
       totalEarnings: 0,
-      averageRating: 0
+      averageRating: 0,
     };
 
     // Calculate acceptance rate
-    const acceptanceRate = driver.totalRequests 
+    const acceptanceRate = driver.totalRequests
       ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
       : 0;
 
@@ -152,19 +161,18 @@ export const getDriverProfile = async (req, res) => {
           acceptanceRate,
           totalOnlineHours: driver.totalOnlineHours || 0,
           totalRequests: driver.totalRequests || 0,
-          acceptedRequests: driver.acceptedRequests || 0
+          acceptedRequests: driver.acceptedRequests || 0,
         },
         recentDeliveries,
-        canGoOnline: (await validateDriverForOnline(driver)).isValid
-      }
+        canGoOnline: (await validateDriverForOnline(driver)).isValid,
+      },
     });
-
   } catch (error) {
     console.error("❌ Get driver profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get driver profile",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -177,13 +185,13 @@ export const getDriverProfile = async (req, res) => {
 export const updateDriverProfile = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
         success: false,
         message: "Validation failed",
-        errors: errors.array()
+        errors: errors.array(),
       });
     }
 
@@ -191,7 +199,7 @@ export const updateDriverProfile = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -203,20 +211,24 @@ export const updateDriverProfile = async (req, res) => {
       plateNumber,
       licenseNumber,
       licenseExpiry,
-      canAcceptDeliveries
+      canAcceptDeliveries,
     } = req.body;
 
     // Update allowed fields
     const updates = {};
-    
+
     if (vehicleMake !== undefined) updates.vehicleMake = vehicleMake;
     if (vehicleModel !== undefined) updates.vehicleModel = vehicleModel;
     if (vehicleYear !== undefined) updates.vehicleYear = vehicleYear;
     if (vehicleColor !== undefined) updates.vehicleColor = vehicleColor;
-    if (plateNumber !== undefined) updates.plateNumber = plateNumber.toUpperCase();
-    if (licenseNumber !== undefined) updates.licenseNumber = licenseNumber.toUpperCase();
-    if (licenseExpiry !== undefined) updates.licenseExpiry = new Date(licenseExpiry);
-    if (canAcceptDeliveries !== undefined) updates.canAcceptDeliveries = canAcceptDeliveries;
+    if (plateNumber !== undefined)
+      updates.plateNumber = plateNumber.toUpperCase();
+    if (licenseNumber !== undefined)
+      updates.licenseNumber = licenseNumber.toUpperCase();
+    if (licenseExpiry !== undefined)
+      updates.licenseExpiry = new Date(licenseExpiry);
+    if (canAcceptDeliveries !== undefined)
+      updates.canAcceptDeliveries = canAcceptDeliveries;
 
     // If license details changed, mark as unverified
     if (licenseNumber || licenseExpiry) {
@@ -228,19 +240,18 @@ export const updateDriverProfile = async (req, res) => {
       driver._id,
       { $set: updates },
       { new: true, runValidators: true }
-    ).populate('userId', 'name email phone');
+    ).populate("userId", "name email phone");
 
     res.status(200).json({
       success: true,
       message: "Profile updated successfully",
-      data: updatedDriver
+      data: updatedDriver,
     });
-
   } catch (error) {
     console.error("❌ Update driver profile error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update profile"
+      message: "Failed to update profile",
     });
   }
 };
@@ -253,12 +264,12 @@ export const updateDriverProfile = async (req, res) => {
 export const uploadDriverDocuments = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -267,17 +278,18 @@ export const uploadDriverDocuments = async (req, res) => {
       vehiclePhoto,
       insurancePhoto,
       idCardPhoto,
-      vehicleRegistrationPhoto
+      vehicleRegistrationPhoto,
     } = req.body;
 
     // Update document URLs
     const updates = {};
-    
+
     if (licensePhoto !== undefined) updates.licensePhoto = licensePhoto;
     if (vehiclePhoto !== undefined) updates.vehiclePhoto = vehiclePhoto;
     if (insurancePhoto !== undefined) updates.insurancePhoto = insurancePhoto;
     if (idCardPhoto !== undefined) updates.idCardPhoto = idCardPhoto;
-    if (vehicleRegistrationPhoto !== undefined) updates.vehicleRegistrationPhoto = vehicleRegistrationPhoto;
+    if (vehicleRegistrationPhoto !== undefined)
+      updates.vehicleRegistrationPhoto = vehicleRegistrationPhoto;
 
     // Mark as unverified if documents are changed
     if (Object.keys(updates).length > 0) {
@@ -301,15 +313,14 @@ export const uploadDriverDocuments = async (req, res) => {
         idCardPhoto: updatedDriver.idCardPhoto,
         vehicleRegistrationPhoto: updatedDriver.vehicleRegistrationPhoto,
         isVerified: updatedDriver.isVerified,
-        approvalStatus: updatedDriver.approvalStatus
-      }
+        approvalStatus: updatedDriver.approvalStatus,
+      },
     });
-
   } catch (error) {
     console.error("❌ Upload driver documents error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to upload documents"
+      message: "Failed to upload documents",
     });
   }
 };
@@ -322,13 +333,13 @@ export const uploadDriverDocuments = async (req, res) => {
 export const updateDriverLocation = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const { lat, lng, address, accuracy } = req.body;
 
     if (!lat || !lng) {
       return res.status(400).json({
         success: false,
-        message: "Latitude and longitude are required"
+        message: "Latitude and longitude are required",
       });
     }
 
@@ -336,7 +347,7 @@ export const updateDriverLocation = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -344,7 +355,7 @@ export const updateDriverLocation = async (req, res) => {
     if (!driver.isOnline) {
       return res.status(400).json({
         success: false,
-        message: "Driver must be online to update location"
+        message: "Driver must be online to update location",
       });
     }
 
@@ -354,7 +365,7 @@ export const updateDriverLocation = async (req, res) => {
       lng: parseFloat(lng),
       address: address || driver.currentLocation?.address,
       accuracy: accuracy ? parseFloat(accuracy) : null,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     };
 
     driver.lastLocationUpdate = new Date();
@@ -368,7 +379,7 @@ export const updateDriverLocation = async (req, res) => {
         if (!delivery.tracking) {
           delivery.tracking = {
             startedAt: new Date(),
-            locations: []
+            locations: [],
           };
         }
 
@@ -376,7 +387,7 @@ export const updateDriverLocation = async (req, res) => {
           lat: parseFloat(lat),
           lng: parseFloat(lng),
           timestamp: new Date(),
-          accuracy: accuracy ? parseFloat(accuracy) : null
+          accuracy: accuracy ? parseFloat(accuracy) : null,
         });
 
         // Keep only last 100 locations
@@ -393,15 +404,14 @@ export const updateDriverLocation = async (req, res) => {
       message: "Location updated successfully",
       data: {
         location: driver.currentLocation,
-        updatedAt: driver.lastLocationUpdate
-      }
+        updatedAt: driver.lastLocationUpdate,
+      },
     });
-
   } catch (error) {
     console.error("❌ Update driver location error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update location"
+      message: "Failed to update location",
     });
   }
 };
@@ -414,13 +424,13 @@ export const updateDriverLocation = async (req, res) => {
 export const toggleDriverOnlineStatus = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const { isOnline } = req.body;
 
     if (typeof isOnline !== "boolean") {
       return res.status(400).json({
         success: false,
-        message: "isOnline must be a boolean"
+        message: "isOnline must be a boolean",
       });
     }
 
@@ -428,7 +438,7 @@ export const toggleDriverOnlineStatus = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -446,39 +456,39 @@ export const toggleDriverOnlineStatus = async (req, res) => {
 
     // Update status
     driver.isOnline = isOnline;
-    
+
     if (!isOnline) {
       driver.isAvailable = false;
       driver.canAcceptDeliveries = false;
-      
+
       // Record online session
       if (driver.lastOnlineStart) {
         const sessionDuration = Date.now() - driver.lastOnlineStart.getTime();
-        driver.totalOnlineHours = (driver.totalOnlineHours || 0) + (sessionDuration / 3600000);
+        driver.totalOnlineHours =
+          (driver.totalOnlineHours || 0) + sessionDuration / 3600000;
         driver.lastOnlineStart = null;
       }
     } else {
       driver.canAcceptDeliveries = true;
       driver.lastOnlineStart = new Date();
     }
-    
+
     await driver.save();
 
     res.status(200).json({
       success: true,
-      message: `Driver is now ${isOnline ? 'online' : 'offline'}`,
+      message: `Driver is now ${isOnline ? "online" : "offline"}`,
       data: {
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
-        canAcceptDeliveries: driver.canAcceptDeliveries
-      }
+        canAcceptDeliveries: driver.canAcceptDeliveries,
+      },
     });
-
   } catch (error) {
     console.error("❌ Toggle driver online status error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update online status"
+      message: "Failed to update online status",
     });
   }
 };
@@ -491,13 +501,13 @@ export const toggleDriverOnlineStatus = async (req, res) => {
 export const updateDriverAvailability = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const { isAvailable } = req.body;
 
     if (typeof isAvailable !== "boolean") {
       return res.status(400).json({
         success: false,
-        message: "isAvailable must be a boolean"
+        message: "isAvailable must be a boolean",
       });
     }
 
@@ -505,7 +515,7 @@ export const updateDriverAvailability = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -514,16 +524,19 @@ export const updateDriverAvailability = async (req, res) => {
       if (!driver.isOnline) {
         return res.status(400).json({
           success: false,
-          message: "Must be online to become available"
+          message: "Must be online to become available",
         });
       }
 
       if (driver.currentDeliveryId) {
         const delivery = await Delivery.findById(driver.currentDeliveryId);
-        if (delivery && !['delivered', 'cancelled', 'failed'].includes(delivery.status)) {
+        if (
+          delivery &&
+          !["delivered", "cancelled", "failed"].includes(delivery.status)
+        ) {
           return res.status(400).json({
             success: false,
-            message: "Cannot become available while on a delivery"
+            message: "Cannot become available while on a delivery",
           });
         }
       }
@@ -534,17 +547,18 @@ export const updateDriverAvailability = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Driver is now ${isAvailable ? 'available' : 'unavailable'} for deliveries`,
+      message: `Driver is now ${
+        isAvailable ? "available" : "unavailable"
+      } for deliveries`,
       data: {
-        isAvailable: driver.isAvailable
-      }
+        isAvailable: driver.isAvailable,
+      },
     });
-
   } catch (error) {
     console.error("❌ Update driver availability error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update availability"
+      message: "Failed to update availability",
     });
   }
 };
@@ -557,12 +571,12 @@ export const updateDriverAvailability = async (req, res) => {
 export const getCurrentDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -570,24 +584,24 @@ export const getCurrentDelivery = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "No active delivery",
-        data: null
+        data: null,
       });
     }
 
     const delivery = await Delivery.findById(driver.currentDeliveryId)
-      .populate('customerId', 'name phone avatarUrl rating')
-      .populate('companyId', 'name contactPhone logo');
+      .populate("customerId", "name phone avatarUrl rating")
+      .populate("companyId", "name contactPhone logo");
 
     if (!delivery) {
       // If delivery doesn't exist, clear the reference
       driver.currentDeliveryId = null;
       driver.isAvailable = true;
       await driver.save();
-      
+
       return res.status(200).json({
         success: true,
         message: "No active delivery",
-        data: null
+        data: null,
       });
     }
 
@@ -595,7 +609,9 @@ export const getCurrentDelivery = async (req, res) => {
     if (!delivery.driverDetails) {
       await saveDriverDetailsToDelivery(delivery._id, driver);
       // Refresh delivery
-      const refreshedDelivery = await Delivery.findById(driver.currentDeliveryId);
+      const refreshedDelivery = await Delivery.findById(
+        driver.currentDeliveryId
+      );
       if (refreshedDelivery) {
         delivery.driverDetails = refreshedDelivery.driverDetails;
       }
@@ -603,9 +619,13 @@ export const getCurrentDelivery = async (req, res) => {
 
     // Calculate ETA if in transit
     let etaMinutes = null;
-    
-    if (delivery.status === "picked_up" && delivery.tracking?.locations?.length > 0) {
-      const lastLocation = delivery.tracking.locations[delivery.tracking.locations.length - 1];
+
+    if (
+      delivery.status === "picked_up" &&
+      delivery.tracking?.locations?.length > 0
+    ) {
+      const lastLocation =
+        delivery.tracking.locations[delivery.tracking.locations.length - 1];
       const distanceToDropoff = calculateDistance(
         lastLocation.lat,
         lastLocation.lng,
@@ -620,17 +640,19 @@ export const getCurrentDelivery = async (req, res) => {
       data: {
         ...delivery.toObject(),
         etaMinutes,
-        nextAction: delivery.status === "assigned" ? "Proceed to pickup location" :
-                   delivery.status === "picked_up" ? "Proceed to dropoff location" :
-                   "Wait for instructions"
-      }
+        nextAction:
+          delivery.status === "assigned"
+            ? "Proceed to pickup location"
+            : delivery.status === "picked_up"
+            ? "Proceed to dropoff location"
+            : "Wait for instructions",
+      },
     });
-
   } catch (error) {
     console.error("❌ Get current delivery error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get current delivery"
+      message: "Failed to get current delivery",
     });
   }
 };
@@ -643,42 +665,42 @@ export const getCurrentDelivery = async (req, res) => {
 export const getDriverEarnings = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
-    const { period = 'week', startDate, endDate } = req.query;
-    
-    let matchStage = { driverId: driver._id, status: 'delivered' };
-    
+    const { period = "week", startDate, endDate } = req.query;
+
+    let matchStage = { driverId: driver._id, status: "delivered" };
+
     // Apply date filter
     if (startDate && endDate) {
       matchStage.deliveredAt = {
         $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $lte: new Date(endDate),
       };
     } else {
       // Default to period filter
       const date = new Date();
       switch (period) {
-        case 'today':
+        case "today":
           date.setHours(0, 0, 0, 0);
           matchStage.deliveredAt = { $gte: date };
           break;
-        case 'week':
+        case "week":
           date.setDate(date.getDate() - 7);
           matchStage.deliveredAt = { $gte: date };
           break;
-        case 'month':
+        case "month":
           date.setMonth(date.getMonth() - 1);
           matchStage.deliveredAt = { $gte: date };
           break;
-        case 'year':
+        case "year":
           date.setFullYear(date.getFullYear() - 1);
           matchStage.deliveredAt = { $gte: date };
           break;
@@ -690,12 +712,16 @@ export const getDriverEarnings = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalEarnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+          totalEarnings: {
+            $sum: {
+              $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+            },
+          },
           totalDeliveries: { $sum: 1 },
-          totalTips: { $sum: { $ifNull: ['$tip.amount', 0] } },
-          averageRating: { $avg: '$rating' }
-        }
-      }
+          totalTips: { $sum: { $ifNull: ["$tip.amount", 0] } },
+          averageRating: { $avg: "$rating" },
+        },
+      },
     ]);
 
     // Get daily earnings for chart
@@ -703,25 +729,31 @@ export const getDriverEarnings = async (req, res) => {
       {
         $match: {
           driverId: driver._id,
-          status: 'delivered',
-          deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
-        }
+          status: "delivered",
+          deliveredAt: {
+            $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+          },
+        },
       },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$deliveredAt" } },
-          earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
-          deliveries: { $sum: 1 }
-        }
+          earnings: {
+            $sum: {
+              $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+            },
+          },
+          deliveries: { $sum: 1 },
+        },
       },
-      { $sort: { "_id": 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
     const result = earnings[0] || {
       totalEarnings: 0,
       totalDeliveries: 0,
       totalTips: 0,
-      averageRating: 0
+      averageRating: 0,
     };
 
     res.status(200).json({
@@ -730,15 +762,14 @@ export const getDriverEarnings = async (req, res) => {
         summary: result,
         dailyEarnings,
         period,
-        currency: "NGN"
-      }
+        currency: "NGN",
+      },
     });
-
   } catch (error) {
     console.error("❌ Get driver earnings error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get earnings"
+      message: "Failed to get earnings",
     });
   }
 };
@@ -751,22 +782,22 @@ export const getDriverEarnings = async (req, res) => {
 export const getDriverStats = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
     // Calculate various stats
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
-    
+
     const monthAgo = new Date();
     monthAgo.setMonth(monthAgo.getMonth() - 1);
 
@@ -775,101 +806,117 @@ export const getDriverStats = async (req, res) => {
       weekStats,
       monthStats,
       allTimeStats,
-      ratingDistribution
+      ratingDistribution,
     ] = await Promise.all([
       // Today's stats
       Delivery.aggregate([
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered',
-            deliveredAt: { $gte: today }
-          }
+            status: "delivered",
+            deliveredAt: { $gte: today },
+          },
         },
         {
           $group: {
             _id: null,
-            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
-            deliveries: { $sum: 1 }
-          }
-        }
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            deliveries: { $sum: 1 },
+          },
+        },
       ]),
-      
+
       // Week's stats
       Delivery.aggregate([
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered',
-            deliveredAt: { $gte: weekAgo }
-          }
+            status: "delivered",
+            deliveredAt: { $gte: weekAgo },
+          },
         },
         {
           $group: {
             _id: null,
-            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
-            deliveries: { $sum: 1 }
-          }
-        }
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            deliveries: { $sum: 1 },
+          },
+        },
       ]),
-      
+
       // Month's stats
       Delivery.aggregate([
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered',
-            deliveredAt: { $gte: monthAgo }
-          }
+            status: "delivered",
+            deliveredAt: { $gte: monthAgo },
+          },
         },
         {
           $group: {
             _id: null,
-            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
-            deliveries: { $sum: 1 }
-          }
-        }
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            deliveries: { $sum: 1 },
+          },
+        },
       ]),
-      
+
       // All time stats
       Delivery.aggregate([
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered'
-          }
+            status: "delivered",
+          },
         },
         {
           $group: {
             _id: null,
-            earnings: { $sum: { $add: ['$fare.totalFare', { $ifNull: ['$tip.amount', 0] }] } },
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
             deliveries: { $sum: 1 },
-            averageRating: { $avg: '$rating' }
-          }
-        }
+            averageRating: { $avg: "$rating" },
+          },
+        },
       ]),
-      
+
       // Rating distribution
       Delivery.aggregate([
         {
           $match: {
             driverId: driver._id,
-            status: 'delivered',
-            rating: { $exists: true }
-          }
+            status: "delivered",
+            rating: { $exists: true },
+          },
         },
         {
           $group: {
-            _id: '$rating',
-            count: { $sum: 1 }
-          }
+            _id: "$rating",
+            count: { $sum: 1 },
+          },
         },
-        { $sort: { _id: 1 } }
-      ])
+        { $sort: { _id: 1 } },
+      ]),
     ]);
 
     // Calculate acceptance rate
-    const acceptanceRate = driver.totalRequests 
+    const acceptanceRate = driver.totalRequests
       ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
       : 0;
 
@@ -882,7 +929,11 @@ export const getDriverStats = async (req, res) => {
         today: todayStats[0] || { earnings: 0, deliveries: 0 },
         week: weekStats[0] || { earnings: 0, deliveries: 0 },
         month: monthStats[0] || { earnings: 0, deliveries: 0 },
-        allTime: allTimeStats[0] || { earnings: 0, deliveries: 0, averageRating: 0 },
+        allTime: allTimeStats[0] || {
+          earnings: 0,
+          deliveries: 0,
+          averageRating: 0,
+        },
         ratingDistribution: ratingDistribution.reduce((acc, curr) => {
           acc[curr._id] = curr.count;
           return acc;
@@ -892,16 +943,15 @@ export const getDriverStats = async (req, res) => {
         currentStatus: {
           isOnline: driver.isOnline,
           isAvailable: driver.isAvailable,
-          hasActiveDelivery: !!driver.currentDeliveryId
-        }
-      }
+          hasActiveDelivery: !!driver.currentDeliveryId,
+        },
+      },
     });
-
   } catch (error) {
     console.error("❌ Get driver stats error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get statistics"
+      message: "Failed to get statistics",
     });
   }
 };
@@ -914,12 +964,12 @@ export const getDriverStats = async (req, res) => {
 export const getDeliveryRequests = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -927,7 +977,7 @@ export const getDeliveryRequests = async (req, res) => {
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
       return res.status(400).json({
         success: false,
-        message: "Driver is not available for new requests"
+        message: "Driver is not available for new requests",
       });
     }
 
@@ -940,51 +990,52 @@ export const getDeliveryRequests = async (req, res) => {
     if (!latitude || !longitude) {
       return res.status(400).json({
         success: false,
-        message: "Location is required"
+        message: "Location is required",
       });
     }
 
     // Find available deliveries
     const deliveries = await Delivery.find({
       status: "created",
-      driverId: { $exists: false }
+      driverId: { $exists: false },
     })
-    .populate('customerId', 'name rating')
-    .sort({ createdAt: -1 })
-    .limit(20);
+      .populate("customerId", "name rating")
+      .sort({ createdAt: -1 })
+      .limit(20);
 
     // Calculate distance for each delivery
-    const deliveriesWithDistance = deliveries.map(delivery => {
-      if (!delivery.pickup?.lat || !delivery.pickup?.lng) {
-        return null;
-      }
-      
-      const distance = calculateDistance(
-        latitude,
-        longitude,
-        delivery.pickup.lat,
-        delivery.pickup.lng
-      );
-      
-      return {
-        ...delivery.toObject(),
-        distance,
-        distanceText: `${distance.toFixed(1)} km away`,
-        estimatedPickupTime: Math.ceil(distance * 3)
-      };
-    }).filter(d => d !== null && d.distance <= radius);
+    const deliveriesWithDistance = deliveries
+      .map((delivery) => {
+        if (!delivery.pickup?.lat || !delivery.pickup?.lng) {
+          return null;
+        }
+
+        const distance = calculateDistance(
+          latitude,
+          longitude,
+          delivery.pickup.lat,
+          delivery.pickup.lng
+        );
+
+        return {
+          ...delivery.toObject(),
+          distance,
+          distanceText: `${distance.toFixed(1)} km away`,
+          estimatedPickupTime: Math.ceil(distance * 3),
+        };
+      })
+      .filter((d) => d !== null && d.distance <= radius);
 
     res.status(200).json({
       success: true,
       data: deliveriesWithDistance,
-      count: deliveriesWithDistance.length
+      count: deliveriesWithDistance.length,
     });
-
   } catch (error) {
     console.error("❌ Get delivery requests error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get delivery requests"
+      message: "Failed to get delivery requests",
     });
   }
 };
@@ -997,12 +1048,12 @@ export const getDeliveryRequests = async (req, res) => {
 export const updateDriverSettings = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -1012,15 +1063,16 @@ export const updateDriverSettings = async (req, res) => {
       maxDistance,
       minFare,
       workingHours,
-      preferredAreas
+      preferredAreas,
     } = req.body;
 
     // Update settings
     const updates = {};
-    
+
     if (notifications !== undefined) updates.notifications = notifications;
     if (autoAccept !== undefined) updates.autoAccept = autoAccept;
-    if (maxDistance !== undefined) updates.maxDistance = parseFloat(maxDistance);
+    if (maxDistance !== undefined)
+      updates.maxDistance = parseFloat(maxDistance);
     if (minFare !== undefined) updates.minFare = parseFloat(minFare);
     if (workingHours !== undefined) updates.workingHours = workingHours;
     if (preferredAreas !== undefined) updates.preferredAreas = preferredAreas;
@@ -1040,15 +1092,14 @@ export const updateDriverSettings = async (req, res) => {
         maxDistance: updatedDriver.maxDistance,
         minFare: updatedDriver.minFare,
         workingHours: updatedDriver.workingHours,
-        preferredAreas: updatedDriver.preferredAreas
-      }
+        preferredAreas: updatedDriver.preferredAreas,
+      },
     });
-
   } catch (error) {
     console.error("❌ Update driver settings error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update settings"
+      message: "Failed to update settings",
     });
   }
 };
@@ -1068,13 +1119,15 @@ export const acceptDelivery = async (req, res) => {
 
     console.log(`🚗 Driver ${driverUser._id} accepting delivery ${deliveryId}`);
 
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(
+      session
+    );
     if (!driver) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
@@ -1084,7 +1137,7 @@ export const acceptDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Driver is not available for new deliveries"
+        message: "Driver is not available for new deliveries",
       });
     }
 
@@ -1094,7 +1147,7 @@ export const acceptDelivery = async (req, res) => {
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Delivery not found"
+        message: "Delivery not found",
       });
     }
 
@@ -1104,7 +1157,7 @@ export const acceptDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Delivery is no longer available"
+        message: "Delivery is no longer available",
       });
     }
 
@@ -1123,7 +1176,9 @@ export const acceptDelivery = async (req, res) => {
     delivery.driverId = driver._id;
     delivery.status = "assigned";
     delivery.assignedAt = new Date();
-    delivery.estimatedPickupTime = new Date(Date.now() + (driverToPickupDistance * 3 * 60000));
+    delivery.estimatedPickupTime = new Date(
+      Date.now() + driverToPickupDistance * 3 * 60000
+    );
 
     // Update driver
     driver.currentDeliveryId = delivery._id;
@@ -1134,10 +1189,7 @@ export const acceptDelivery = async (req, res) => {
     // Save driver details to delivery
     await saveDriverDetailsToDelivery(delivery._id, driver);
 
-    await Promise.all([
-      delivery.save({ session }),
-      driver.save({ session })
-    ]);
+    await Promise.all([delivery.save({ session }), driver.save({ session })]);
 
     // Notify customer
     const customer = await User.findById(delivery.customerId);
@@ -1153,11 +1205,14 @@ export const acceptDelivery = async (req, res) => {
             name: driverUser.name,
             phone: driverUser.phone,
             avatarUrl: driverUser.avatarUrl,
-            vehicle: `${driver.vehicleMake || ''} ${driver.vehicleModel || ''}`.trim() || 'Vehicle',
-            plateNumber: driver.plateNumber
+            vehicle:
+              `${driver.vehicleMake || ""} ${
+                driver.vehicleModel || ""
+              }`.trim() || "Vehicle",
+            plateNumber: driver.plateNumber,
           },
-          estimatedPickupTime: delivery.estimatedPickupTime
-        }
+          estimatedPickupTime: delivery.estimatedPickupTime,
+        },
       });
     }
 
@@ -1176,18 +1231,19 @@ export const acceptDelivery = async (req, res) => {
           estimatedPickupTime: delivery.estimatedPickupTime,
           fare: delivery.fare,
           driverId: delivery.driverId,
-          driverDetails: delivery.driverDetails
+          driverDetails: delivery.driverDetails,
         },
         driver: {
           _id: driver._id,
           name: driverUser.name,
           phone: driverUser.phone,
-          vehicle: `${driver.vehicleMake || ''} ${driver.vehicleModel || ''}`.trim() || 'Vehicle',
-          plateNumber: driver.plateNumber
-        }
-      }
+          vehicle:
+            `${driver.vehicleMake || ""} ${driver.vehicleModel || ""}`.trim() ||
+            "Vehicle",
+          plateNumber: driver.plateNumber,
+        },
+      },
     });
-
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -1195,7 +1251,7 @@ export const acceptDelivery = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to accept delivery",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -1212,23 +1268,25 @@ export const startDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
-    const { otp, notes } = req.body;
+    const { otp, notes } = req.body || {};
 
     console.log(`🚚 Driver ${driverUser._id} starting delivery ${deliveryId}`);
 
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(
+      session
+    );
     if (!driver) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
     const delivery = await Delivery.findOne({
       _id: deliveryId,
-      driverId: driver._id
+      driverId: driver._id,
     }).session(session);
 
     if (!delivery) {
@@ -1236,7 +1294,7 @@ export const startDelivery = async (req, res) => {
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Delivery not found or not assigned to this driver"
+        message: "Delivery not found or not assigned to this driver",
       });
     }
 
@@ -1246,38 +1304,51 @@ export const startDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Cannot start delivery from status: ${delivery.status}`
+        message: `Cannot start delivery from status: ${delivery.status}`,
       });
     }
 
     // OTP verification (if required for high-value items)
-    if (delivery.pickup.otp && otp !== delivery.pickup.otp) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP"
-      });
+    if (delivery.pickup?.otp) {
+      if (!otp) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "OTP is required to start this delivery",
+        });
+      }
+
+      if (otp !== delivery.pickup.otp) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
     }
 
     // Update delivery status to "picked_up"
     delivery.status = "picked_up";
     delivery.pickedUpAt = new Date();
-    
+
     // Add pickup notes if provided
     if (notes) {
       delivery.pickup.notes = notes;
     }
-    
+
     // Start tracking
     delivery.tracking = {
       startedAt: new Date(),
-      locations: [{
-        lat: delivery.pickup.lat,
-        lng: delivery.pickup.lng,
-        timestamp: new Date(),
-        status: "picked_up"
-      }]
+      locations: [
+        {
+          lat: delivery.pickup.lat,
+          lng: delivery.pickup.lng,
+          timestamp: new Date(),
+          status: "picked_up",
+        },
+      ],
     };
 
     await delivery.save({ session });
@@ -1294,11 +1365,11 @@ export const startDelivery = async (req, res) => {
           deliveryId: delivery._id,
           driver: {
             name: driverUser.name,
-            phone: driverUser.phone
+            phone: driverUser.phone,
           },
           pickedUpAt: delivery.pickedUpAt,
-          nextStep: "On the way to dropoff location"
-        }
+          nextStep: "On the way to dropoff location",
+        },
       });
     }
 
@@ -1315,18 +1386,17 @@ export const startDelivery = async (req, res) => {
           pickedUpAt: delivery.pickedUpAt,
           pickup: delivery.pickup,
           dropoff: delivery.dropoff,
-          nextStep: "Proceed to dropoff location"
-        }
-      }
+          nextStep: "Proceed to dropoff location",
+        },
+      },
     });
-
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
     console.error("❌ Start delivery error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to start delivery"
+      message: "Failed to start delivery",
     });
   }
 };
@@ -1345,21 +1415,25 @@ export const completeDelivery = async (req, res) => {
     const { deliveryId } = req.params;
     const { otp } = req.body;
 
-    console.log(`✅ Driver ${driverUser._id} completing delivery ${deliveryId}`);
+    console.log(
+      `✅ Driver ${driverUser._id} completing delivery ${deliveryId}`
+    );
 
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(
+      session
+    );
     if (!driver) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
     const delivery = await Delivery.findOne({
       _id: deliveryId,
-      driverId: driver._id
+      driverId: driver._id,
     }).session(session);
 
     if (!delivery) {
@@ -1367,7 +1441,7 @@ export const completeDelivery = async (req, res) => {
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Delivery not found"
+        message: "Delivery not found",
       });
     }
 
@@ -1377,7 +1451,7 @@ export const completeDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Cannot complete delivery from status: ${delivery.status}`
+        message: `Cannot complete delivery from status: ${delivery.status}`,
       });
     }
 
@@ -1387,19 +1461,19 @@ export const completeDelivery = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Invalid OTP"
+        message: "Invalid OTP",
       });
     }
 
     // Update delivery status
     delivery.status = "delivered";
     delivery.deliveredAt = new Date();
-    
+
     // Update delivery proof
     delivery.deliveryProof = {
       deliveredAt: new Date(),
       recipientName: delivery.recipientName,
-      otpVerified: !!otp
+      otpVerified: !!otp,
     };
 
     // Update driver status
@@ -1407,10 +1481,7 @@ export const completeDelivery = async (req, res) => {
     driver.isAvailable = true;
     driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
 
-    await Promise.all([
-      delivery.save({ session }),
-      driver.save({ session })
-    ]);
+    await Promise.all([delivery.save({ session }), driver.save({ session })]);
 
     // Notify customer
     const customer = await User.findById(delivery.customerId);
@@ -1423,8 +1494,8 @@ export const completeDelivery = async (req, res) => {
           type: "delivery_completed",
           deliveryId: delivery._id,
           deliveredAt: delivery.deliveredAt,
-          requestRating: true
-        }
+          requestRating: true,
+        },
       });
     }
 
@@ -1439,19 +1510,18 @@ export const completeDelivery = async (req, res) => {
           _id: delivery._id,
           status: delivery.status,
           deliveredAt: delivery.deliveredAt,
-          fare: delivery.fare
+          fare: delivery.fare,
         },
-        driverAvailable: true
-      }
+        driverAvailable: true,
+      },
     });
-
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
     console.error("❌ Complete delivery error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to complete delivery"
+      message: "Failed to complete delivery",
     });
   }
 };
@@ -1464,31 +1534,27 @@ export const completeDelivery = async (req, res) => {
 export const getDriverDeliveries = async (req, res) => {
   try {
     const driverUser = req.user;
-    
+
     const driver = await Driver.findOne({ userId: driverUser._id });
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found"
+        message: "Driver profile not found",
       });
     }
 
-    const { 
-      status, 
-      page = 1, 
-      limit = 10
-    } = req.query;
+    const { status, page = 1, limit = 10 } = req.query;
 
     const query = { driverId: driver._id };
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       query.status = status;
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const deliveries = await Delivery.find(query)
-      .populate('customerId', 'name phone avatarUrl rating')
-      .populate('companyId', 'name logo')
+      .populate("customerId", "name phone avatarUrl rating")
+      .populate("companyId", "name logo")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -1499,14 +1565,14 @@ export const getDriverDeliveries = async (req, res) => {
     const deliveriesWithDriverDetails = await Promise.all(
       deliveries.map(async (delivery) => {
         const deliveryObj = delivery.toObject();
-        
+
         // If no driverDetails but has driverId, populate it
         if (!deliveryObj.driverDetails && deliveryObj.driverId) {
           await saveDriverDetailsToDelivery(delivery._id, driver);
           const refreshedDelivery = await Delivery.findById(delivery._id);
           deliveryObj.driverDetails = refreshedDelivery.driverDetails;
         }
-        
+
         return deliveryObj;
       })
     );
@@ -1518,16 +1584,15 @@ export const getDriverDeliveries = async (req, res) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
-
   } catch (error) {
     console.error("❌ Get driver deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get deliveries",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
