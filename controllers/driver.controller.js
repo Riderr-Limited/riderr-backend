@@ -1455,7 +1455,7 @@ export const completeDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
-    const { otp } = req.body;
+    const { otp } = req.body || {};
 
     console.log(
       `✅ Driver ${driverUser._id} completing delivery ${deliveryId}`
@@ -1498,14 +1498,26 @@ export const completeDelivery = async (req, res) => {
     }
 
     // OTP verification
-    if (delivery.dropoff.otp && otp !== delivery.dropoff.otp) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP",
-      });
+    if (delivery.dropoff?.otp) {
+      if (!otp) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "OTP is required to complete this delivery",
+        });
+      }
+
+      if (otp !== delivery.dropoff.otp) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
     }
+
 
     // Update delivery status
     delivery.status = "delivered";
