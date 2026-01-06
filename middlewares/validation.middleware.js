@@ -41,8 +41,18 @@ export const validateSignup = [
     .trim()
     .notEmpty()
     .withMessage("Phone number is required")
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678)"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      // Validate length
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Phone number must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Phone number must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
   
   body("password")
     .trim()
@@ -68,6 +78,69 @@ export const validateSignup = [
     .trim()
     .notEmpty()
     .withMessage("Business license is required for company admin"),
+  
+  body("address")
+    .if(body("role").equals("company_admin"))
+    .trim()
+    .notEmpty()
+    .withMessage("Address is required for company admin"),
+  
+  body("city")
+    .if(body("role").equals("company_admin"))
+    .trim()
+    .notEmpty()
+    .withMessage("City is required for company admin"),
+  
+  body("state")
+    .if(body("role").equals("company_admin"))
+    .trim()
+    .notEmpty()
+    .withMessage("State is required for company admin"),
+  
+  body("lga")
+    .if(body("role").equals("company_admin"))
+    .trim()
+    .notEmpty()
+    .withMessage("LGA is required for company admin"),
+  
+  body("companyPhone")
+    .if(body("role").equals("company_admin"))
+    .trim()
+    .notEmpty()
+    .withMessage("Company phone is required for company admin")
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number for company (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      // Validate length
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Company phone must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Company phone must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
+  
+  body("taxId")
+    .if(body("role").equals("company_admin"))
+    .optional()
+    .trim(),
+  
+  // Bank details (optional for company admin)
+  body("bankName")
+    .if(body("role").equals("company_admin"))
+    .optional()
+    .trim(),
+  
+  body("accountName")
+    .if(body("role").equals("company_admin"))
+    .optional()
+    .trim(),
+  
+  body("accountNumber")
+    .if(body("role").equals("company_admin"))
+    .optional()
+    .trim(),
   
   // Driver specific validation
   body("companyId")
@@ -95,6 +168,32 @@ export const validateSignup = [
     .trim()
     .notEmpty()
     .withMessage("Plate number is required for driver"),
+  
+  // Validate that company admin has all required company fields
+  (req, res, next) => {
+    if (req.body.role === "company_admin") {
+      const requiredFields = [
+        "companyName",
+        "address",
+        "city",
+        "state",
+        "lga",
+        "businessLicense",
+        "companyPhone"
+      ];
+      
+      const missingFields = requiredFields.filter(field => !req.body[field]);
+      
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields for company registration",
+          missingFields
+        });
+      }
+    }
+    next();
+  },
   
   validate
 ];
@@ -240,8 +339,19 @@ export const validateUpdateProfile = [
   body("phone")
     .optional()
     .trim()
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Please provide a valid Nigerian phone number"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value) {
+        if (value.startsWith('0') && value.length !== 11) {
+          throw new Error('Phone number must be 11 digits when starting with 0');
+        }
+        if (value.startsWith('+234') && value.length !== 14) {
+          throw new Error('Phone number must be 14 digits when starting with +234');
+        }
+      }
+      return true;
+    }),
   
   body("avatarUrl")
     .optional()
@@ -281,8 +391,17 @@ export const validateCreateDriver = [
     .trim()
     .notEmpty()
     .withMessage("Phone is required")
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Please provide a valid Nigerian phone number"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Phone number must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Phone number must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
   
   body("email")
     .optional()
@@ -513,7 +632,7 @@ export const validateUserQuery = [
 
 // ==================== DELIVERY VALIDATION ====================
 
-// Create delivery validation (UPDATED - matches your controller)
+// Create delivery validation
 export const validateCreateDelivery = [
   body("pickupAddress")
     .trim()
@@ -554,12 +673,22 @@ export const validateCreateDelivery = [
   body("pickupPhone")
     .optional()
     .trim()
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Invalid pickup phone number"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Invalid pickup phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value) {
+        if (value.startsWith('0') && value.length !== 11) {
+          throw new Error('Pickup phone must be 11 digits when starting with 0');
+        }
+        if (value.startsWith('+234') && value.length !== 14) {
+          throw new Error('Pickup phone must be 14 digits when starting with +234');
+        }
+      }
+      return true;
+    }),
   
   body("pickupInstructions").optional().trim(),
   
-  // UPDATED: Changed from dropoffName/dropoffPhone to recipientName/recipientPhone
   body("recipientName")
     .trim()
     .notEmpty()
@@ -571,8 +700,17 @@ export const validateCreateDelivery = [
     .trim()
     .notEmpty()
     .withMessage("Recipient phone is required")
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Invalid recipient phone number"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Invalid recipient phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Recipient phone must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Recipient phone must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
   
   body("dropoffInstructions").optional().trim(),
   
@@ -958,8 +1096,17 @@ export const validateSignUpCompanyDriver = [
     .trim()
     .notEmpty()
     .withMessage("Phone number is required")
-    .matches(/^(\+234|0)[7-9][0-1]\d{8}$/)
-    .withMessage("Please provide a valid Nigerian phone number"),
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Phone number must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Phone number must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
   
   body("licenseNumber")
     .trim()
@@ -988,6 +1135,121 @@ export const validateSignUpCompanyDriver = [
   body("vehicleModel").optional().trim(),
   body("vehicleYear").optional().isInt({ min: 1900, max: new Date().getFullYear() + 1 }),
   body("vehicleColor").optional().trim(),
+  
+  validate
+];
+
+// ==================== ADDITIONAL VALIDATIONS ====================
+
+// Update company validation
+export const validateUpdateCompany = [
+  param("companyId")
+    .isMongoId()
+    .withMessage("Invalid company ID format"),
+  
+  body("name")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("Company name cannot be empty"),
+  
+  body("address").optional().trim(),
+  body("city").optional().trim(),
+  body("state").optional().trim(),
+  body("lga").optional().trim(),
+  
+  body("contactPhone")
+    .optional()
+    .trim()
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value) {
+        if (value.startsWith('0') && value.length !== 11) {
+          throw new Error('Contact phone must be 11 digits when starting with 0');
+        }
+        if (value.startsWith('+234') && value.length !== 14) {
+          throw new Error('Contact phone must be 14 digits when starting with +234');
+        }
+      }
+      return true;
+    }),
+  
+  body("businessLicense").optional().trim(),
+  body("taxId").optional().trim(),
+  
+  body("bankDetails.bankName").optional().trim(),
+  body("bankDetails.accountName").optional().trim(),
+  body("bankDetails.accountNumber").optional().trim(),
+  
+  body("status")
+    .optional()
+    .isIn(["pending", "approved", "rejected", "suspended"])
+    .withMessage("Invalid company status"),
+  
+  validate
+];
+
+// Check verification status validation
+export const validateCheckVerification = [
+  query("email")
+    .trim()
+    .notEmpty()
+    .withMessage("Email is required")
+    .isEmail()
+    .withMessage("Please provide a valid email")
+    .normalizeEmail(),
+  
+  validate
+];
+
+// Admin update company validation
+export const validateAdminUpdateCompany = [
+  param("companyId")
+    .isMongoId()
+    .withMessage("Invalid company ID format"),
+  
+  body("status")
+    .notEmpty()
+    .withMessage("Status is required")
+    .isIn(["pending", "approved", "rejected", "suspended"])
+    .withMessage("Invalid status"),
+  
+  body("notes").optional().trim(),
+  
+  validate
+];
+
+// Simple email validation
+export const validateEmail = [
+  body("email")
+    .trim()
+    .notEmpty()
+    .withMessage("Email is required")
+    .isEmail()
+    .withMessage("Please provide a valid email")
+    .normalizeEmail(),
+  
+  validate
+];
+
+// Simple phone validation
+export const validatePhone = [
+  body("phone")
+    .trim()
+    .notEmpty()
+    .withMessage("Phone number is required")
+    .matches(/^(?:\+234\d{10}|0\d{10})$/)
+    .withMessage("Please provide a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)")
+    .custom((value) => {
+      if (value.startsWith('0') && value.length !== 11) {
+        throw new Error('Phone number must be 11 digits when starting with 0');
+      }
+      if (value.startsWith('+234') && value.length !== 14) {
+        throw new Error('Phone number must be 14 digits when starting with +234');
+      }
+      return true;
+    }),
   
   validate
 ];
