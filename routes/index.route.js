@@ -71,8 +71,7 @@ router.get("/", (req, res) => {
         startDelivery: "POST /api/deliveries/:deliveryId/start (driver)",
         completeDelivery: "POST /api/deliveries/:deliveryId/complete (driver)",
         updateLocation: "POST /api/deliveries/:deliveryId/location (driver)",
-        // Admin endpoints
-        getAllDeliveries: "GET /api/deliveries (admin)",
+         getAllDeliveries: "GET /api/deliveries (admin)",
         getCompanyDeliveries: "GET /api/deliveries/company/:companyId/deliveries (company_admin, admin)"
       },
       driver: {
