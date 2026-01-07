@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import rateLimit from "express-rate-limit";
 import mongoSanitize from "express-mongo-sanitize";
 import apiRoutes from "./routes/index.route.js";
 import newDriverRoutes from "./routes/newDriver.routes.js";
@@ -57,27 +56,7 @@ app.use(cors(corsOptions));
 app.use(helmet());
 app.set("trust proxy", true);
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: "Too many requests from this IP, please try again later.",
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.method === 'OPTIONS'
-});
 
-// Apply rate limiting to all routes
-app.use("/api/", limiter);
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: "Too many authentication attempts, please try again later.",
-});
-
-app.use("/api/auth/login", authLimiter);
-app.use("/api/auth/signup", authLimiter);
 
 /**
  * Body Parser Middleware
