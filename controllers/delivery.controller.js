@@ -403,6 +403,11 @@ export const getNearbyDrivers = async (req, res) => {
  * @route   GET /api/deliveries/my
  * @access  Private (Customer)
  */
+/**
+ * @desc    Get customer's deliveries
+ * @route   GET /api/deliveries/my
+ * @access  Private (Customer)
+ */
 export const getMyDeliveries = async (req, res) => {
   try {
     const customer = req.user;
@@ -421,6 +426,7 @@ export const getMyDeliveries = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Add error handling for the query
     const deliveries = await Delivery.find(query)
       .populate({
         path: "driverId",
@@ -436,27 +442,41 @@ export const getMyDeliveries = async (req, res) => {
 
     const total = await Delivery.countDocuments(query);
 
-    // Ensure driver details are included
+    // Safely handle deliveries array
     const deliveriesWithDriverDetails = deliveries.map((delivery) => {
-      const deliveryObj = delivery.toObject();
+      try {
+        const deliveryObj = delivery.toObject
+          ? delivery.toObject()
+          : delivery;
 
-      // If no driverDetails but has driverId, populate it
-      if (!deliveryObj.driverDetails && deliveryObj.driverId) {
-        deliveryObj.driverDetails = {
-          driverId: deliveryObj.driverId._id,
-          name: deliveryObj.driverId.userId?.name,
-          avatarUrl: deliveryObj.driverId.userId?.avatarUrl,
-          rating: deliveryObj.driverId.userId?.rating,
-          vehicle: {
-            type: deliveryObj.driverId.vehicleType,
-            make: deliveryObj.driverId.vehicleMake,
-            model: deliveryObj.driverId.vehicleModel,
-            plateNumber: deliveryObj.driverId.plateNumber,
-          },
+        // If no driverDetails but has driverId, populate it
+        if (!deliveryObj.driverDetails && deliveryObj.driverId) {
+          deliveryObj.driverDetails = {
+            driverId: deliveryObj.driverId?._id || null,
+            name: deliveryObj.driverId?.userId?.name || "Driver",
+            avatarUrl: deliveryObj.driverId?.userId?.avatarUrl || null,
+            rating: deliveryObj.driverId?.userId?.rating || 0,
+            vehicle: {
+              type: deliveryObj.driverId?.vehicleType || "bike",
+              make: deliveryObj.driverId?.vehicleMake || "",
+              model: deliveryObj.driverId?.vehicleModel || "",
+              plateNumber: deliveryObj.driverId?.plateNumber || "",
+            },
+          };
+        }
+
+        return deliveryObj;
+      } catch (error) {
+        console.error("Error processing delivery:", error);
+        // Return a minimal safe object
+        return {
+          _id: delivery._id,
+          status: delivery.status || "unknown",
+          pickup: delivery.pickup || {},
+          dropoff: delivery.dropoff || {},
+          createdAt: delivery.createdAt,
         };
       }
-
-      return deliveryObj;
     });
 
     res.status(200).json({
@@ -474,6 +494,7 @@ export const getMyDeliveries = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get deliveries",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
