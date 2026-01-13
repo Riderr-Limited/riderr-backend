@@ -66,7 +66,7 @@ const generateAccessToken = (payload) => {
   return jwt.sign(
     payload,
     process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "24h" }
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "30d" }
   );
 };
 
