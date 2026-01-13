@@ -2922,3 +2922,185 @@ export const getCompanyTransactions = async (req, res) => {
     });
   }
 };
+/**
+ * @desc    Get nearby delivery requests for driver
+ * @route   GET /api/driver/nearby-requests
+ * @access  Private (Driver)
+ */
+export const getNearbyDeliveryRequests = async (req, res) => {
+  try {
+    const driverUser = req.user;
+
+    if (driverUser.role !== "driver") {
+      return res.status(403).json({
+        success: false,
+        message: "Only drivers can view delivery requests",
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver profile not found",
+      });
+    }
+
+    // Check if driver is available
+    if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
+      return res.status(400).json({
+        success: false,
+        message: "Driver is not available for new requests",
+      });
+    }
+
+    // Get driver's location
+    const { lat, lng, maxDistance = 10 } = req.query;
+
+    let latitude, longitude;
+
+    if (lat && lng) {
+      latitude = parseFloat(lat);
+      longitude = parseFloat(lng);
+    } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+      latitude = driver.currentLocation.lat;
+      longitude = driver.currentLocation.lng;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Driver location is required",
+      });
+    }
+
+    // Find available deliveries that don't have a driver yet
+    const deliveries = await Delivery.find({
+      status: "created",
+      driverId: { $exists: false },
+    })
+      .populate("customerId", "name phone avatarUrl rating")
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Calculate distance for each delivery from driver's location
+    const nearbyDeliveries = [];
+
+    for (const delivery of deliveries) {
+      if (!delivery.pickup?.lat || !delivery.pickup?.lng) continue;
+
+      const distance = calculateDistance(
+        latitude,
+        longitude,
+        delivery.pickup.lat,
+        delivery.pickup.lng
+      );
+
+      if (distance <= parseFloat(maxDistance)) {
+        // Calculate pickup time estimate
+        const pickupTimeMinutes = Math.ceil(distance * 3);
+
+        // Format delivery for response
+        const formattedDelivery = {
+          _id: delivery._id,
+          pickup: {
+            address: delivery.pickup.address || "Address not specified",
+            lat: delivery.pickup.lat,
+            lng: delivery.pickup.lng,
+            name: delivery.pickup.name || "Pickup Location",
+            phone: delivery.pickup.phone || "Phone not specified",
+            instructions: delivery.pickup.instructions || "",
+          },
+          dropoff: {
+            address: delivery.dropoff.address || "Address not specified",
+            lat: delivery.dropoff.lat,
+            lng: delivery.dropoff.lng,
+            name: delivery.dropoff.name || "Dropoff Location",
+            phone: delivery.dropoff.phone || "Phone not specified",
+            instructions: delivery.dropoff.instructions || "",
+          },
+          recipientName: delivery.recipientName,
+          recipientPhone: delivery.recipientPhone,
+          itemDetails: delivery.itemDetails,
+          fare: delivery.fare,
+          estimatedDistanceKm: delivery.estimatedDistanceKm || distance,
+          estimatedDurationMin:
+            delivery.estimatedDurationMin || Math.ceil(distance * 3),
+          payment: delivery.payment,
+          customer: delivery.customerId,
+          createdAt: delivery.createdAt,
+          // Distance from driver to pickup
+          distanceFromDriver: parseFloat(distance.toFixed(2)),
+          distanceText: `${distance.toFixed(1)} km away`,
+          estimatedPickupTime: pickupTimeMinutes,
+          estimatedPickupTimeText: `${pickupTimeMinutes} min`,
+          canAccept: true,
+        };
+
+        nearbyDeliveries.push(formattedDelivery);
+      }
+    }
+
+    // Sort by distance (closest first)
+    nearbyDeliveries.sort(
+      (a, b) => a.distanceFromDriver - b.distanceFromDriver
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${nearbyDeliveries.length} nearby delivery requests`,
+      data: {
+        deliveries: nearbyDeliveries,
+        driverLocation: { lat: latitude, lng: longitude },
+        searchRadius: maxDistance,
+        count: nearbyDeliveries.length,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get nearby deliveries error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get nearby deliveries",
+    });
+  }
+};// Add these to driver.controller.js if they don't exist
+
+/**
+ * @desc    Driver rejects a delivery request
+ * @route   POST /api/driver/deliveries/reject/:deliveryId
+ * @access  Private (Driver)
+ */
+export const rejectDelivery = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    const { deliveryId } = req.params;
+
+    if (driverUser.role !== "driver") {
+      return res.status(403).json({
+        success: false,
+        message: "Only drivers can reject deliveries",
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver profile not found",
+      });
+    }
+
+    // Update driver stats
+    driver.totalRequests = (driver.totalRequests || 0) + 1;
+    await driver.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Delivery request rejected",
+    });
+  } catch (error) {
+    console.error("❌ Reject delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reject delivery",
+    });
+  }
+};

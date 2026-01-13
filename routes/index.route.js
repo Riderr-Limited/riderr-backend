@@ -4,9 +4,9 @@ import authRoutes from "./auth.routes.js";
 import userRoutes from "./user.routes.js";
 import deliveryRoutes from "./delivery.routes.js";
 import rideRoutes from "./ride.routes.js"; 
-import deliveryPersonRoutes from './deliveryPerson.routes.js';
 import driverRoutes from './driver.routes.js';
-import companyRoutes from './company.routes.js'; // Add this
+import companyRoutes from './company.routes.js'; 
+import paymentRoutes from './payment.routes.js';
 
 const router = express.Router();
 
@@ -123,13 +123,6 @@ router.get("/", (req, res) => {
         getDeliveryPersonRides: "GET /api/rides/delivery-person (delivery_person)",
         getAllRides: "GET /api/rides (admin)",
         getRideStatistics: "GET /api/rides/statistics"
-      },
-      deliveryPersons: {
-        nearby: "GET /api/delivery-persons/nearby",
-        updateLocation: "PATCH /api/delivery-persons/location",
-        onlineStatus: "PATCH /api/delivery-persons/online-status",
-        getProfile: "GET /api/delivery-persons/profile",
-        updateServices: "PATCH /api/delivery-persons/services"
       }
     },
     documentation: "https://api-docs.example.com"
@@ -141,10 +134,10 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
-router.use("/delivery-persons", deliveryPersonRoutes);
 router.use("/driver", driverRoutes);
 router.use("/company", companyRoutes); // Add this
-
+router.use("/payments", paymentRoutes);
+ 
 /**
  * @route   ALL *
  * @desc    404 handler for undefined API routes

@@ -742,31 +742,23 @@ export const acceptDelivery = async (req, res) => {
 
     // Notify customer
     const customer = await User.findById(delivery.customerId);
-    if (customer) {
-      await sendNotification({
-        userId: customer._id,
-        title: "🚗 Driver Assigned!",
-        message: `Driver ${driverUser.name} has accepted your delivery`,
-        data: {
-          type: "driver_assigned",
-          deliveryId: delivery._id,
-          driver: {
-            name: driverUser.name,
-            phone: driverUser.phone,
-            avatarUrl: driverUser.avatarUrl,
-            vehicle:
-              `${driver.vehicleMake || ""} ${
-                driver.vehicleModel || ""
-              }`.trim() || "Vehicle",
-            plateNumber: driver.plateNumber,
-            rating: driver.rating || 0,
-          },
-          estimatedPickupTime: delivery.estimatedPickupTime,
-          estimatedArrival: `${Math.ceil(driverToPickupDistance * 3)} minutes`,
-        },
-      });
-    }
+    
 
+// Notify customer to make payment
+if (customer) {
+  await sendNotification({
+    userId: customer._id,
+    title: "💳 Complete Payment",
+    message: `Please complete payment for your delivery with ${driverUser.name}`,
+    data: {
+      type: "payment_required",
+      deliveryId: delivery._id,
+      amount: delivery.fare.totalFare,
+      driverId: driver._id,
+      requiresPayment: true,
+    },
+  });
+}
     await session.commitTransaction();
     session.endSession();
 
@@ -1578,6 +1570,513 @@ export const rateDelivery = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to submit rating",
+    });
+  }
+};
+/**
+ * @desc    Get customer's active delivery
+ * @route   GET /api/deliveries/customer/active
+ * @access  Private (Customer)
+ */
+export const getCustomerActiveDelivery = async (req, res) => {
+  try {
+    const customer = req.user;
+
+    if (customer.role !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    // Find active delivery (in progress deliveries)
+    const delivery = await Delivery.findOne({
+      customerId: customer._id,
+      status: { $in: ["assigned", "picked_up", "in_transit"] }
+    })
+      .populate({
+        path: "driverId",
+        select: "vehicleType vehicleMake vehicleModel plateNumber",
+        populate: {
+          path: "userId",
+          select: "name avatarUrl phone rating",
+        },
+      })
+      .sort({ createdAt: -1 });
+
+    if (!delivery) {
+      return res.status(200).json({
+        success: true,
+        message: "No active delivery",
+        data: null,
+      });
+    }
+
+    // Get driver's current location if available
+    let driverLocation = null;
+    let etaMinutes = null;
+
+    if (delivery.driverId) {
+      const driver = await Driver.findById(delivery.driverId)
+        .select("currentLocation location");
+
+      if (driver) {
+        // Get driver location from appropriate field
+        if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+          driverLocation = {
+            lat: driver.currentLocation.lat,
+            lng: driver.currentLocation.lng,
+            updatedAt: driver.currentLocation.updatedAt,
+          };
+        } else if (driver.location?.coordinates) {
+          driverLocation = {
+            lat: driver.location.coordinates[1],
+            lng: driver.location.coordinates[0],
+            updatedAt: new Date(),
+          };
+        }
+
+        // Calculate ETA
+        if (driverLocation && delivery.status === "picked_up") {
+          // If picked up, calculate ETA to dropoff
+          const distance = calculateDistance(
+            driverLocation.lat,
+            driverLocation.lng,
+            delivery.dropoff.lat,
+            delivery.dropoff.lng
+          );
+          etaMinutes = Math.ceil(distance * 3); // 3 minutes per km
+        } else if (driverLocation && delivery.status === "assigned") {
+          // If assigned, calculate ETA to pickup
+          const distance = calculateDistance(
+            driverLocation.lat,
+            driverLocation.lng,
+            delivery.pickup.lat,
+            delivery.pickup.lng
+          );
+          etaMinutes = Math.ceil(distance * 3);
+        }
+      }
+
+      // Ensure driver details are saved to delivery
+      if (!delivery.driverDetails) {
+        await saveDriverDetailsToDelivery(delivery._id, driver);
+        // Refresh delivery to get updated driver details
+        const refreshedDelivery = await Delivery.findById(delivery._id);
+        delivery.driverDetails = refreshedDelivery.driverDetails;
+      }
+    }
+
+    // Get timeline
+    const timeline = [];
+    if (delivery.createdAt)
+      timeline.push({
+        event: "created",
+        time: delivery.createdAt,
+        description: "Order created",
+        icon: "📝"
+      });
+    if (delivery.assignedAt)
+      timeline.push({
+        event: "assigned",
+        time: delivery.assignedAt,
+        description: "Driver assigned",
+        icon: "🚗"
+      });
+    if (delivery.pickedUpAt)
+      timeline.push({
+        event: "picked_up",
+        time: delivery.pickedUpAt,
+        description: "Package picked up",
+        icon: "📦"
+      });
+
+    // Add current step
+    let currentStep = "awaiting_driver";
+    let nextStep = "";
+
+    switch (delivery.status) {
+      case "assigned":
+        currentStep = "driver_assigned";
+        nextStep = "Driver heading to pickup location";
+        break;
+      case "picked_up":
+        currentStep = "package_picked_up";
+        nextStep = "Driver heading to dropoff location";
+        break;
+      case "in_transit":
+        currentStep = "in_transit";
+        nextStep = "Driver on the way";
+        break;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        _id: delivery._id,
+        referenceId: delivery.referenceId,
+        status: delivery.status,
+        currentStep,
+        nextStep,
+        
+        // Pickup info
+        pickup: {
+          address: delivery.pickup.address,
+          lat: delivery.pickup.lat,
+          lng: delivery.pickup.lng,
+          name: delivery.pickup.name,
+          phone: delivery.pickup.phone,
+        },
+        
+        // Dropoff info
+        dropoff: {
+          address: delivery.dropoff.address,
+          lat: delivery.dropoff.lat,
+          lng: delivery.dropoff.lng,
+          name: delivery.dropoff.name,
+          phone: delivery.dropoff.phone,
+        },
+        
+        // Driver info with details
+        driver: delivery.driverDetails ? {
+          _id: delivery.driverDetails.driverId,
+          name: delivery.driverDetails.name,
+          phone: delivery.driverDetails.phone,
+          avatarUrl: delivery.driverDetails.avatarUrl,
+          rating: delivery.driverId?.userId?.rating || 0,
+          vehicle: delivery.driverDetails.vehicle,
+          currentLocation: driverLocation,
+        } : null,
+        
+        // Delivery details
+        itemDetails: delivery.itemDetails,
+        fare: delivery.fare,
+        
+        // ETA and tracking
+        etaMinutes,
+        estimatedDistanceKm: delivery.estimatedDistanceKm,
+        estimatedDurationMin: delivery.estimatedDurationMin,
+        
+        // Timeline
+        timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
+        
+        // Progress
+        progress: {
+          step: currentStep,
+          percentage: getDeliveryProgressPercentage(delivery.status),
+          message: getDeliveryStatusMessage(delivery.status),
+        },
+        
+        // Tracking data
+        canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
+        tracking: delivery.tracking || null,
+        
+        createdAt: delivery.createdAt,
+        updatedAt: delivery.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get customer active delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get active delivery",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Helper function to calculate delivery progress percentage
+ */
+const getDeliveryProgressPercentage = (status) => {
+  const progressMap = {
+    "created": 10,
+    "assigned": 30,
+    "picked_up": 60,
+    "in_transit": 80,
+    "delivered": 100,
+    "cancelled": 0,
+    "failed": 0,
+  };
+  return progressMap[status] || 10;
+};
+
+/**
+ * Helper function to get status message
+ */
+const getDeliveryStatusMessage = (status) => {
+  const messages = {
+    "created": "Looking for available drivers...",
+    "assigned": "Driver assigned and heading to pickup",
+    "picked_up": "Package picked up, heading to destination",
+    "in_transit": "On the way to delivery location",
+    "delivered": "Package delivered successfully",
+    "cancelled": "Delivery cancelled",
+    "failed": "Delivery failed",
+  };
+  return messages[status] || "Processing your delivery";
+};
+
+/**
+ * @desc    Get delivery status updates in real-time
+ * @route   GET /api/deliveries/:deliveryId/updates
+ * @access  Private (Customer/Driver)
+ */
+export const getDeliveryUpdates = async (req, res) => {
+  try {
+    const user = req.user;
+    const { deliveryId } = req.params;
+
+    const delivery = await Delivery.findById(deliveryId)
+      .select("status pickup dropoff driverId driverDetails tracking estimatedPickupTime pickedUpAt");
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found",
+      });
+    }
+
+    // Check access permissions
+    const isCustomer = user._id.toString() === delivery.customerId.toString();
+    const isDriver = user.role === "driver" && delivery.driverId;
+    const isAdmin = user.role === "admin";
+
+    if (!isCustomer && !isDriver && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    // Get driver current location
+    let driverLocation = null;
+    let etaMinutes = null;
+
+    if (delivery.driverId) {
+      const driver = await Driver.findById(delivery.driverId)
+        .select("currentLocation location");
+
+      if (driver) {
+        if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+          driverLocation = {
+            lat: driver.currentLocation.lat,
+            lng: driver.currentLocation.lng,
+            updatedAt: driver.currentLocation.updatedAt,
+          };
+        }
+
+        // Calculate ETA
+        if (driverLocation) {
+          if (delivery.status === "picked_up" || delivery.status === "in_transit") {
+            // Calculate to dropoff
+            const distance = calculateDistance(
+              driverLocation.lat,
+              driverLocation.lng,
+              delivery.dropoff.lat,
+              delivery.dropoff.lng
+            );
+            etaMinutes = Math.ceil(distance * 3);
+          } else if (delivery.status === "assigned") {
+            // Calculate to pickup
+            const distance = calculateDistance(
+              driverLocation.lat,
+              driverLocation.lng,
+              delivery.pickup.lat,
+              delivery.pickup.lng
+            );
+            etaMinutes = Math.ceil(distance * 3);
+          }
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        deliveryId: delivery._id,
+        status: delivery.status,
+        driverLocation,
+        etaMinutes,
+        tracking: delivery.tracking || null,
+        lastUpdate: new Date(),
+        canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get delivery updates error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get delivery updates",
+    });
+  }
+};
+
+/**
+ * @desc    Get driver's delivery statistics
+ * @route   GET /api/deliveries/driver/stats
+ * @access  Private (Driver)
+ */
+export const getDriverDeliveryStats = async (req, res) => {
+  try {
+    const driverUser = req.user;
+
+    if (driverUser.role !== "driver") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver profile not found",
+      });
+    }
+
+    // Get stats for different periods
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
+    const monthAgo = new Date();
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
+
+    const [todayStats, weekStats, monthStats, allTimeStats] = await Promise.all([
+      // Today's stats
+      Delivery.aggregate([
+        {
+          $match: {
+            driverId: driver._id,
+            status: "delivered",
+            deliveredAt: { $gte: today },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            averageRating: { $avg: "$rating" },
+          },
+        },
+      ]),
+
+      // Week's stats
+      Delivery.aggregate([
+        {
+          $match: {
+            driverId: driver._id,
+            status: "delivered",
+            deliveredAt: { $gte: weekAgo },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+          },
+        },
+      ]),
+
+      // Month's stats
+      Delivery.aggregate([
+        {
+          $match: {
+            driverId: driver._id,
+            status: "delivered",
+            deliveredAt: { $gte: monthAgo },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+          },
+        },
+      ]),
+
+      // All time stats
+      Delivery.aggregate([
+        {
+          $match: {
+            driverId: driver._id,
+            status: "delivered",
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            earnings: {
+              $sum: {
+                $add: ["$fare.totalFare", { $ifNull: ["$tip.amount", 0] }],
+              },
+            },
+            averageRating: { $avg: "$rating" },
+            averageEarning: { $avg: "$fare.totalFare" },
+          },
+        },
+      ]),
+    ]);
+
+    // Get recent deliveries for activity feed
+    const recentDeliveries = await Delivery.find({
+      driverId: driver._id,
+      status: "delivered",
+    })
+      .sort({ deliveredAt: -1 })
+      .limit(5)
+      .populate("customerId", "name avatarUrl")
+      .select("deliveredAt fare.totalFare tip.amount rating pickup.address dropoff.address");
+
+    res.status(200).json({
+      success: true,
+      data: {
+        today: todayStats[0] || { count: 0, earnings: 0 },
+        week: weekStats[0] || { count: 0, earnings: 0 },
+        month: monthStats[0] || { count: 0, earnings: 0 },
+        allTime: allTimeStats[0] || {
+          count: 0,
+          earnings: 0,
+          averageRating: 0,
+          averageEarning: 0,
+        },
+        recentDeliveries,
+        acceptanceRate: driver.totalRequests
+          ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+          : 0,
+        onlineHours: driver.totalOnlineHours || 0,
+        currentStatus: {
+          isOnline: driver.isOnline,
+          isAvailable: driver.isAvailable,
+          hasActiveDelivery: !!driver.currentDeliveryId,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get driver delivery stats error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get delivery statistics",
     });
   }
 };

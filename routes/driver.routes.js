@@ -1,4 +1,4 @@
-// routes/driver.routes.js
+// driver.routes.js
 import express from 'express';
 import {
   getDriverProfile,
@@ -7,7 +7,7 @@ import {
   updateDriverLocation,
   toggleDriverOnlineStatus,
   updateDriverAvailability,
-  getCurrentDelivery,
+  getCurrentDelivery, // Use this instead of getDriverActiveDelivery
   getDriverEarnings,
   getDriverStats,
   getDriverDeliveries,
@@ -15,8 +15,10 @@ import {
   updateDriverSettings,
   acceptDelivery,
   startDelivery,
-  completeDelivery
-} from '../controllers/driver.controller.js';
+  completeDelivery,
+  rejectDelivery,
+  getNearbyDeliveryRequests,
+} from '../controllers/driver.controller.js';  
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
 
@@ -44,11 +46,12 @@ router.post('/availability', updateDriverAvailability);
 
 // Driver deliveries
 router.get('/deliveries', getDriverDeliveries);
-router.get('/current-delivery', getCurrentDelivery);
-router.get('/requests', getDeliveryRequests);
+router.get('/current-delivery', getCurrentDelivery);  
+router.get('/nearby-requests', getNearbyDeliveryRequests);
 router.post('/deliveries/accept/:deliveryId', acceptDelivery);
 router.post('/deliveries/start/:deliveryId', startDelivery);
 router.post('/deliveries/complete/:deliveryId', completeDelivery);
+router.post('/deliveries/reject/:deliveryId', rejectDelivery);
 
 // Driver earnings and stats
 router.get('/earnings', getDriverEarnings);
