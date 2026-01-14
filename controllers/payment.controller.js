@@ -1,68 +1,24 @@
-// controllers/payment.controller.js
+// controllers/payment.controller.js - FIXED VERSION
 import Payment from '../models/payments.models.js';
 import Delivery from '../models/delivery.models.js';
 import Driver from '../models/riders.models.js';
 import Company from '../models/company.models.js';
 import User from '../models/user.models.js';
-import paystack from '../utils/paystack.js';
+import { initializePayment, verifyPayment } from '../utils/paystack-hardcoded.js';
 import { sendNotification } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
-
-/**
- * @desc    Test Paystack connection
- * @route   GET /api/payments/test-connection
- * @access  Private (Admin)
- */
-export const testPaystackConnection = async (req, res) => {
-  try {
-    console.log('Testing Paystack connection...');
-    
-    // Test with a simple transaction verification
-    const testReference = 'test_reference_123';
-    const result = await paystack.verifyPayment(testReference);
-    
-    console.log('Paystack connection test result:', result);
-    
-    res.status(200).json({
-      success: true,
-      message: 'Paystack connection test completed',
-      data: {
-        hasKeys: !!(process.env.PAYSTACK_SECRET_KEY && process.env.PAYSTACK_PUBLIC_KEY),
-        secretKeyLength: process.env.PAYSTACK_SECRET_KEY?.length || 0,
-        publicKeyLength: process.env.PAYSTACK_PUBLIC_KEY?.length || 0,
-        testResult: result
-      }
-    });
-  } catch (error) {
-    console.error('Paystack connection test error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Paystack connection test failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
 
 /**
  * @desc    Initialize payment for delivery
  * @route   POST /api/payments/initialize
  * @access  Private (Customer)
  */
-export const initializePayment = async (req, res) => {
+export const initializeDeliveryPayment = async (req, res) => {
   try {
     const customer = req.user;
-    const { deliveryId, callback_url } = req.body;
+    const { deliveryId } = req.body;
 
-    console.log('=== PAYMENT INITIALIZATION STARTED ===');
-    console.log('Customer:', {
-      id: customer._id,
-      email: customer.email,
-      role: customer.role
-    });
-    console.log('Delivery ID:', deliveryId);
-
-    // Validate user role
     if (customer.role !== 'customer') {
       return res.status(403).json({
         success: false,
@@ -70,43 +26,23 @@ export const initializePayment = async (req, res) => {
       });
     }
 
-    // Validate delivery ID
-    if (!deliveryId || !mongoose.Types.ObjectId.isValid(deliveryId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid delivery ID is required',
-      });
-    }
-
-    // Find delivery
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       customerId: customer._id,
-    })
-      .populate('driverId')
-      .populate('companyId');
+    }).populate('driverId').populate('companyId');
 
     if (!delivery) {
       return res.status(404).json({
         success: false,
-        message: 'Delivery not found or you are not authorized to pay for it',
+        message: 'Delivery not found',
       });
     }
 
-    console.log('Delivery found:', {
-      id: delivery._id,
-      status: delivery.status,
-      driverId: delivery.driverId?._id,
-      companyId: delivery.companyId?._id
-    });
-
-    // Check if delivery can be paid for
-    const allowedStatuses = ['assigned', 'picked_up', 'in_transit'];
-    if (!allowedStatuses.includes(delivery.status)) {
+    // Check if delivery has been assigned
+    if (!delivery.driverId || delivery.status !== 'assigned') {
       return res.status(400).json({
         success: false,
-        message: `Payment can only be made when delivery is in progress. Current status: ${delivery.status}`,
-        allowedStatuses,
+        message: 'Payment can only be made after driver is assigned',
       });
     }
 
@@ -119,77 +55,42 @@ export const initializePayment = async (req, res) => {
     if (existingPayment) {
       return res.status(400).json({
         success: false,
-        message: existingPayment.status === 'successful' 
-          ? 'Payment already completed for this delivery' 
-          : 'Payment already initiated for this delivery',
+        message: 'Payment already initialized for this delivery',
         data: {
           paymentId: existingPayment._id,
-          status: existingPayment.status,
-          reference: existingPayment.paystackReference,
           authorizationUrl: existingPayment.paystackAuthorizationUrl,
+          reference: existingPayment.paystackReference,
+          status: existingPayment.status,
         },
       });
     }
 
-    // Get amount
-    const amount = delivery.fare?.totalFare || 0;
+    const amount = delivery.fare.totalFare;
     
-    if (amount <= 0 || amount < 100) { // Minimum 100 Naira
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid delivery amount. Amount must be at least ₦100',
-        amount,
-      });
-    }
-
-    console.log('Amount to charge:', amount);
-
-    // Calculate fees
-    const platformFeePercentage = parseInt(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
+    // Calculate split
+    const platformFeePercentage = 10; // 10% platform fee
     const platformFee = (amount * platformFeePercentage) / 100;
     const companyAmount = amount - platformFee;
 
-    console.log('Fee breakdown:', {
-      amount,
-      platformFeePercentage: `${platformFeePercentage}%`,
-      platformFee,
-      companyAmount
-    });
-
-    // Prepare metadata
-    const metadata = {
-      deliveryId: delivery._id.toString(),
-      customerId: customer._id.toString(),
-      customerName: customer.name,
-      customerEmail: customer.email,
-      driverId: delivery.driverId?._id?.toString(),
-      companyId: delivery.companyId?._id?.toString(),
-      type: 'delivery_payment',
-      deliveryReference: delivery.referenceId,
-      platformFee,
-      companyAmount,
-    };
-
-    console.log('Initializing Paystack payment...');
-
     // Initialize payment with Paystack
-    const paymentResult = await paystack.initializePayment({
+    const paymentResult = await initializePayment({
       email: customer.email,
       amount: amount,
-      callback_url: callback_url || `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/verify?deliveryId=${deliveryId}`,
-      metadata: metadata,
+      metadata: {
+        deliveryId: delivery._id.toString(),
+        customerId: customer._id.toString(),
+        driverId: delivery.driverId._id.toString(),
+        companyId: delivery.companyId?._id.toString(),
+        type: 'delivery_payment',
+        customerName: customer.name,
+      },
     });
 
-    console.log('Paystack initialization response:', paymentResult);
-
     if (!paymentResult.success) {
-      console.error('Paystack initialization failed:', paymentResult.error);
-      
-      return res.status(400).json({
+      return res.status(500).json({
         success: false,
-        message: 'Failed to initialize payment with payment gateway',
-        error: paymentResult.message || 'Payment gateway error',
-        details: process.env.NODE_ENV === 'development' ? paymentResult.error : undefined,
+        message: 'Failed to initialize payment',
+        error: paymentResult.message,
       });
     }
 
@@ -197,7 +98,7 @@ export const initializePayment = async (req, res) => {
     const payment = new Payment({
       deliveryId: delivery._id,
       customerId: customer._id,
-      driverId: delivery.driverId?._id,
+      driverId: delivery.driverId._id,
       companyId: delivery.companyId?._id,
       amount: amount,
       currency: 'NGN',
@@ -208,27 +109,18 @@ export const initializePayment = async (req, res) => {
       paymentMethod: 'card',
       companyAmount: companyAmount,
       platformFee: platformFee,
-      platformFeePercentage: platformFeePercentage,
-      metadata: metadata,
+      metadata: {
+        customerEmail: customer.email,
+        customerName: customer.name,
+      },
     });
 
-    await payment.save();
+     await payment.save();
 
     // Update delivery payment status
-    delivery.payment = {
-      method: 'card',
-      status: 'pending_payment',
-      paystackReference: paymentResult.data.reference,
-      amount: amount,
-      paymentId: payment._id,
-    };
+    delivery.payment.status = 'pending_payment';
+    delivery.payment.paystackReference = paymentResult.data.reference;
     await delivery.save();
-
-    console.log('✅ Payment initialized successfully:', {
-      paymentId: payment._id,
-      reference: payment.paystackReference,
-      amount: amount
-    });
 
     res.status(200).json({
       success: true,
@@ -240,9 +132,6 @@ export const initializePayment = async (req, res) => {
         reference: paymentResult.data.reference,
         amount: amount,
         currency: 'NGN',
-        deliveryId: delivery._id,
-        deliveryStatus: delivery.status,
-        metadata: metadata,
       },
     });
   } catch (error) {
@@ -251,7 +140,6 @@ export const initializePayment = async (req, res) => {
       success: false,
       message: 'Failed to initialize payment',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
     });
   }
 };
@@ -261,7 +149,7 @@ export const initializePayment = async (req, res) => {
  * @route   GET /api/payments/verify/:reference
  * @access  Private
  */
-export const verifyPayment = async (req, res) => {
+export const verifyDeliveryPayment = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -269,19 +157,10 @@ export const verifyPayment = async (req, res) => {
     const { reference } = req.params;
     const user = req.user;
 
-    console.log(`🔍 Verifying payment reference: ${reference}`);
-
-    if (!reference) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: 'Payment reference is required',
-      });
-    }
+    console.log(`🔍 Verifying payment: ${reference}`);
 
     // Verify with Paystack
-    const verificationResult = await paystack.verifyPayment(reference);
+    const verificationResult = await verifyPayment(reference);
 
     if (!verificationResult.success) {
       await session.abortTransaction();
@@ -290,7 +169,6 @@ export const verifyPayment = async (req, res) => {
         success: false,
         message: 'Payment verification failed',
         error: verificationResult.message,
-        details: process.env.NODE_ENV === 'development' ? verificationResult.error : undefined,
       });
     }
 
@@ -308,22 +186,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Check user permissions
-    const isCustomer = user._id.toString() === payment.customerId.toString();
-    const isDriver = user.role === 'driver';
-    const isAdmin = user.role === 'admin';
-    const isCompanyAdmin = user.role === 'company_admin';
-
-    if (!isCustomer && !isDriver && !isAdmin && !isCompanyAdmin) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to verify this payment',
-      });
-    }
-
-    // Check if payment is already successful
+    // Check if already verified
     if (payment.status === 'successful') {
       await session.abortTransaction();
       session.endSession();
@@ -341,19 +204,11 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Check payment status from Paystack
+    // Check if payment is successful
     if (paystackData.status !== 'success') {
       payment.status = 'failed';
       payment.failureReason = paystackData.gateway_response || 'Payment failed';
-      payment.verifiedAt = new Date();
       await payment.save({ session });
-
-      // Update delivery
-      const delivery = await Delivery.findById(payment.deliveryId).session(session);
-      if (delivery) {
-        delivery.payment.status = 'failed';
-        await delivery.save({ session });
-      }
 
       await session.commitTransaction();
       session.endSession();
@@ -364,15 +219,13 @@ export const verifyPayment = async (req, res) => {
         data: {
           status: paystackData.status,
           message: paystackData.gateway_response,
-          paymentId: payment._id,
-          reference: reference,
         },
       });
     }
 
-    // Update successful payment
+    // Update payment record
     payment.status = 'successful';
-    payment.paidAt = new Date(paystackData.paid_at || new Date());
+    payment.paidAt = new Date();
     payment.verifiedAt = new Date();
     payment.metadata = {
       ...payment.metadata,
@@ -388,6 +241,7 @@ export const verifyPayment = async (req, res) => {
 
     // Update delivery
     const delivery = await Delivery.findById(payment.deliveryId).session(session);
+    
     if (delivery) {
       delivery.payment.status = 'paid';
       delivery.payment.paidAt = new Date();
@@ -395,43 +249,46 @@ export const verifyPayment = async (req, res) => {
       await delivery.save({ session });
     }
 
-    // Update driver earnings
+    // Update company earnings (payment goes to company, not individual driver)
+    if (payment.companyId) {
+      const company = await Company.findById(payment.companyId).session(session);
+      if (company) {
+        company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
+        company.pendingPayouts = (company.pendingPayouts || 0) + payment.companyAmount;
+        await company.save({ session });
+      }
+    }
+
+    // Track driver delivery for statistics only (not direct earnings)
     if (payment.driverId) {
       const driver = await Driver.findById(payment.driverId).session(session);
       if (driver) {
-        driver.earnings = (driver.earnings || 0) + payment.companyAmount;
-        driver.totalEarnings = (driver.totalEarnings || 0) + payment.companyAmount;
+        // Don't update driver earnings directly - company pays drivers separately
+        driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
         await driver.save({ session });
+      }
+    }
 
-        // Notify driver
+    // Notify driver
+    if (delivery && delivery.driverId) {
+      const driver = await Driver.findById(delivery.driverId).populate('userId');
+      if (driver && driver.userId) {
         await sendNotification({
-          userId: driver.userId,
+          userId: driver.userId._id,
           title: '💰 Payment Received',
-          message: `Payment of ₦${payment.companyAmount.toLocaleString()} has been confirmed for your delivery`,
+          message: `Payment of ₦${payment.amount.toLocaleString()} has been confirmed for your delivery`,
           data: {
             type: 'payment_confirmed',
             deliveryId: delivery._id,
             paymentId: payment._id,
-            amount: payment.companyAmount,
+            amount: payment.amount,
           },
         });
       }
     }
 
-    // Update company earnings
-    if (payment.companyId) {
-      const company = await Company.findById(payment.companyId).session(session);
-      if (company) {
-        company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
-        company.availableBalance = (company.availableBalance || 0) + payment.companyAmount;
-        await company.save({ session });
-      }
-    }
-
     await session.commitTransaction();
     session.endSession();
-
-    console.log('✅ Payment verified successfully:', reference);
 
     res.status(200).json({
       success: true,
@@ -443,8 +300,6 @@ export const verifyPayment = async (req, res) => {
         paidAt: payment.paidAt,
         deliveryId: payment.deliveryId,
         reference: payment.paystackReference,
-        driverEarnings: payment.companyAmount,
-        platformFee: payment.platformFee,
       },
     });
   } catch (error) {
@@ -464,86 +319,50 @@ export const verifyPayment = async (req, res) => {
  * @route   POST /api/payments/webhook
  * @access  Public (Paystack)
  */
-export const handlePaymentWebhook = async (req, res) => {
+export const handlePaystackWebhook = async (req, res) => {
   try {
-    const signature = req.headers['x-paystack-signature'];
-    
-    if (!signature) {
-      console.warn('Missing Paystack signature in webhook');
-      return res.status(401).json({
+    const hash = crypto
+      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+
+    if (hash !== req.headers['x-paystack-signature']) {
+      return res.status(400).json({
         success: false,
-        message: 'Missing webhook signature',
+        message: 'Invalid signature',
       });
     }
 
-    const payload = req.body;
-    
-    // Verify webhook signature
-    const isValid = paystack.verifyWebhookSignature(payload, signature);
-    
-    if (!isValid) {
-      console.warn('Invalid webhook signature:', signature);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid webhook signature',
-      });
-    }
+    const event = req.body;
 
-    console.log('📨 Paystack webhook received:', {
-      event: payload.event,
-      reference: payload.data?.reference,
-      timestamp: new Date().toISOString(),
-    });
+    console.log('📨 Paystack webhook received:', event.event);
 
-    if (payload.event === 'charge.success') {
-      const reference = payload.data.reference;
-      
-      // Process payment in background
-      setTimeout(async () => {
-        try {
-          const payment = await Payment.findOne({ paystackReference: reference });
-          
-          if (payment && payment.status === 'pending') {
-            // Verify with Paystack again to be sure
-            const verification = await paystack.verifyPayment(reference);
-            
-            if (verification.success && verification.data.status === 'success') {
-              const session = await mongoose.startSession();
-              session.startTransaction();
-              
-              try {
-                payment.status = 'successful';
-                payment.paidAt = new Date(verification.data.paid_at || new Date());
-                payment.verifiedAt = new Date();
-                payment.webhookData = payload.data;
-                await payment.save({ session });
-                
-                // Update delivery
-                const delivery = await Delivery.findById(payment.deliveryId).session(session);
-                if (delivery) {
-                  delivery.payment.status = 'paid';
-                  delivery.payment.paidAt = new Date();
-                  await delivery.save({ session });
-                }
-                
-                await session.commitTransaction();
-                session.endSession();
-                
-                console.log('✅ Payment processed via webhook:', reference);
-              } catch (transactionError) {
-                await session.abortTransaction();
-                session.endSession();
-                console.error('Webhook transaction error:', transactionError);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Webhook processing error:', error);
+    if (event.event === 'charge.success') {
+      const reference = event.data.reference;
+
+      // Find and update payment
+      const payment = await Payment.findOne({ paystackReference: reference });
+
+      if (payment && payment.status === 'pending') {
+        payment.status = 'successful';
+        payment.paidAt = new Date();
+        payment.verifiedAt = new Date();
+        payment.webhookData = event.data;
+        await payment.save();
+
+        // Update delivery
+        const delivery = await Delivery.findById(payment.deliveryId);
+        if (delivery) {
+          delivery.payment.status = 'paid';
+          delivery.payment.paidAt = new Date();
+          await delivery.save();
         }
-      }, 0);
+
+        console.log('✅ Payment updated via webhook:', reference);
+      }
     }
 
-    res.status(200).send('Webhook processed');
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Webhook error:', error);
     res.status(500).json({
@@ -565,12 +384,12 @@ export const getPaymentDetails = async (req, res) => {
 
     const payment = await Payment.findById(paymentId)
       .populate('customerId', 'name email phone')
-      .populate('deliveryId', 'referenceId status pickup dropoff fare')
+      .populate('deliveryId')
       .populate({
         path: 'driverId',
         populate: { path: 'userId', select: 'name phone' },
       })
-      .populate('companyId', 'name email');
+      .populate('companyId', 'name');
 
     if (!payment) {
       return res.status(404).json({
@@ -583,9 +402,8 @@ export const getPaymentDetails = async (req, res) => {
     const isCustomer = user._id.toString() === payment.customerId._id.toString();
     const isDriver = user.role === 'driver';
     const isAdmin = user.role === 'admin';
-    const isCompanyAdmin = user.role === 'company_admin';
 
-    if (!isCustomer && !isDriver && !isAdmin && !isCompanyAdmin) {
+    if (!isCustomer && !isDriver && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Access denied',
@@ -607,7 +425,7 @@ export const getPaymentDetails = async (req, res) => {
 
 /**
  * @desc    Get customer payments
- * @route   GET /api/payments/my
+ * @route   GET /api/payments/my-payments
  * @access  Private (Customer)
  */
 export const getMyPayments = async (req, res) => {
@@ -624,31 +442,16 @@ export const getMyPayments = async (req, res) => {
 
     const [payments, total] = await Promise.all([
       Payment.find(query)
-        .populate('deliveryId', 'pickup dropoff status referenceId')
-        .populate('companyId', 'name')
+        .populate('deliveryId', 'pickup dropoff status')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
       Payment.countDocuments(query),
     ]);
 
-    // Calculate totals
-    const totals = await Payment.aggregate([
-      { $match: { customerId: customer._id } },
-      {
-        $group: {
-          _id: null,
-          totalSpent: { $sum: '$amount' },
-          successfulPayments: { $sum: { $cond: [{ $eq: ['$status', 'successful'] }, 1, 0] } },
-          pendingPayments: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
-        }
-      }
-    ]);
-
     res.status(200).json({
       success: true,
       data: payments,
-      summary: totals[0] || { totalSpent: 0, successfulPayments: 0, pendingPayments: 0 },
       pagination: {
         total,
         page: parseInt(page),
@@ -664,525 +467,3 @@ export const getMyPayments = async (req, res) => {
     });
   }
 };
-
-/**
- * @desc    Get company payments
- * @route   GET /api/payments/company/:companyId
- * @access  Private (Company Admin, Admin)
- */
-export const getCompanyPayments = async (req, res) => {
-  try {
-    const user = req.user;
-    const { companyId } = req.params;
-    const { page = 1, limit = 10, status, startDate, endDate } = req.query;
-
-    // Verify company exists
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found',
-      });
-    }
-
-    // Verify user permissions
-    const isCompanyAdmin = user.role === 'company_admin';
-    const isAdmin = user.role === 'admin';
-
-    if (!isCompanyAdmin && !isAdmin) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view company payments',
-      });
-    }
-
-    // If user is company admin, verify they belong to this company
-    if (isCompanyAdmin) {
-      const userCompany = await Company.findOne({
-        _id: companyId,
-        'admins.userId': user._id
-      });
-      if (!userCompany) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to view this company\'s payments',
-        });
-      }
-    }
-
-    // Build query
-    const query = { companyId: companyId };
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const [payments, total] = await Promise.all([
-      Payment.find(query)
-        .populate('customerId', 'name email phone')
-        .populate('deliveryId', 'status pickup dropoff fare')
-        .populate({
-          path: 'driverId',
-          populate: { path: 'userId', select: 'name phone' },
-        })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Payment.countDocuments(query),
-    ]);
-
-    // Calculate company earnings
-    const earnings = await Payment.aggregate([
-      { $match: { companyId: company._id, status: 'successful' } },
-      {
-        $group: {
-          _id: null,
-          totalEarnings: { $sum: '$companyAmount' },
-          totalPayments: { $sum: 1 },
-          totalAmount: { $sum: '$amount' },
-          totalPlatformFees: { $sum: '$platformFee' },
-        }
-      }
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: payments,
-      company: {
-        id: company._id,
-        name: company.name,
-        totalEarnings: company.totalEarnings || 0,
-        availableBalance: company.availableBalance || 0,
-      },
-      earnings: earnings[0] || {
-        totalEarnings: 0,
-        totalPayments: 0,
-        totalAmount: 0,
-        totalPlatformFees: 0,
-      },
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
-    });
-  } catch (error) {
-    console.error('❌ Get company payments error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get company payments',
-    });
-  }
-};
-/**
- * @desc    Get payment statistics (Admin)
- * @route   GET /api/payments/admin/stats
- * @access  Private (Admin)
- */
-export const getPaymentStats = async (req, res) => {
-  try {
-    const user = req.user;
-
-    if (user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin access required',
-      });
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-
-    const monthAgo = new Date();
-    monthAgo.setMonth(monthAgo.getMonth() - 1);
-
-    const [todayStats, weekStats, monthStats, allTimeStats] = await Promise.all([
-      // Today's stats
-      Payment.aggregate([
-        {
-          $match: {
-            status: 'successful',
-            paidAt: { $gte: today }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-            amount: { $sum: '$amount' },
-            platformFees: { $sum: '$platformFee' },
-          }
-        }
-      ]),
-      
-      // Week's stats
-      Payment.aggregate([
-        {
-          $match: {
-            status: 'successful',
-            paidAt: { $gte: weekAgo }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-            amount: { $sum: '$amount' },
-            platformFees: { $sum: '$platformFee' },
-          }
-        }
-      ]),
-      
-      // Month's stats
-      Payment.aggregate([
-        {
-          $match: {
-            status: 'successful',
-            paidAt: { $gte: monthAgo }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-            amount: { $sum: '$amount' },
-            platformFees: { $sum: '$platformFee' },
-          }
-        }
-      ]),
-      
-      // All time stats
-      Payment.aggregate([
-        {
-          $match: {
-            status: 'successful'
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-            amount: { $sum: '$amount' },
-            platformFees: { $sum: '$platformFee' },
-          }
-        }
-      ])
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        today: todayStats[0] || { count: 0, amount: 0, platformFees: 0 },
-        week: weekStats[0] || { count: 0, amount: 0, platformFees: 0 },
-        month: monthStats[0] || { count: 0, amount: 0, platformFees: 0 },
-        allTime: allTimeStats[0] || { count: 0, amount: 0, platformFees: 0 },
-      }
-    });
-  } catch (error) {
-    console.error('❌ Get payment stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get payment statistics',
-    });
-  }
-};
-
-/**
- * @desc    Get driver payments
- * @route   GET /api/payments/driver/my
- * @access  Private (Driver)
- */
-export const getDriverPayments = async (req, res) => {
-  try {
-    const driverUser = req.user;
-    const { page = 1, limit = 10, status } = req.query;
-
-    // Get driver profile
-    const driver = await Driver.findOne({ userId: driverUser._id });
-    if (!driver) {
-      return res.status(404).json({
-        success: false,
-        message: 'Driver profile not found',
-      });
-    }
-
-    const query = { driverId: driver._id };
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const [payments, total] = await Promise.all([
-      Payment.find(query)
-        .populate('deliveryId', 'pickup dropoff status referenceId')
-        .populate('customerId', 'name phone')
-        .populate('companyId', 'name')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Payment.countDocuments(query),
-    ]);
-
-    // Calculate driver earnings
-    const earnings = await Payment.aggregate([
-      { $match: { driverId: driver._id, status: 'successful' } },
-      {
-        $group: {
-          _id: null,
-          totalEarnings: { $sum: '$companyAmount' },
-          totalDeliveries: { $sum: 1 },
-          totalAmount: { $sum: '$amount' },
-          averageEarnings: { $avg: '$companyAmount' },
-        }
-      }
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: payments,
-      driver: {
-        id: driver._id,
-        name: driverUser.name,
-        earnings: driver.earnings || 0,
-      },
-      earnings: earnings[0] || {
-        totalEarnings: 0,
-        totalDeliveries: 0,
-        totalAmount: 0,
-        averageEarnings: 0,
-      },
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
-    });
-  } catch (error) {
-    console.error('❌ Get driver payments error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get driver payments',
-    });
-  }
-};
-
-/**
- * @desc    Get payment history with filters
- * @route   GET /api/payments/customer/history
- * @access  Private (Customer)
- */
-export const getPaymentHistory = async (req, res) => {
-  try {
-    const customer = req.user;
-    const { startDate, endDate, minAmount, maxAmount, status } = req.query;
-
-    const query = { customerId: customer._id };
-    
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-    
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
-    }
-    
-    if (minAmount || maxAmount) {
-      query.amount = {};
-      if (minAmount) query.amount.$gte = parseFloat(minAmount);
-      if (maxAmount) query.amount.$lte = parseFloat(maxAmount);
-    }
-
-    const payments = await Payment.find(query)
-      .populate('deliveryId', 'pickup dropoff status')
-      .populate('companyId', 'name')
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    // Calculate summary
-    const summary = await Payment.aggregate([
-      { $match: { customerId: customer._id } },
-      {
-        $group: {
-          _id: null,
-          totalSpent: { $sum: '$amount' },
-          averagePayment: { $avg: '$amount' },
-          paymentCount: { $sum: 1 },
-          successfulPayments: {
-            $sum: { $cond: [{ $eq: ['$status', 'successful'] }, 1, 0] }
-          }
-        }
-      }
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: payments,
-      summary: summary[0] || {
-        totalSpent: 0,
-        averagePayment: 0,
-        paymentCount: 0,
-        successfulPayments: 0,
-      },
-    });
-  } catch (error) {
-    console.error('❌ Get payment history error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get payment history',
-    });
-  }
-};/**
- * @desc    Get all payments (admin) - Placeholder
- * @route   GET /api/payments/admin/all
- * @access  Private (Admin)
- */
-export const getCustomerPayments = async (req, res) => {
-  try {
-    const user = req.user;
-
-    if (user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin access required',
-      });
-    }
-
-    // This is a placeholder - implement based on your needs
-    const payments = await Payment.find({})
-      .populate('customerId', 'name email')
-      .populate('companyId', 'name')
-      .limit(50)
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      data: payments,
-    });
-  } catch (error) {
-    console.error('Get customer payments error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get payments',
-    });
-  }
-};
-
-/**
- * @desc    Get disputes - Placeholder
- * @route   GET /api/payments/admin/disputes
- * @access  Private (Admin)
- */
-export const getDisputes = async (req, res) => {
-  try {
-    const user = req.user;
-
-    if (user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin access required',
-      });
-    }
-
-    // Placeholder - implement dispute logic
-    res.status(200).json({
-      success: true,
-      data: [],
-      message: 'Disputes feature not yet implemented',
-    });
-  } catch (error) {
-    console.error('Get disputes error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get disputes',
-    });
-  }
-};
-
-/**
- * @desc    Release escrow funds - Placeholder
- */
-export const releaseEscrowFunds = async (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Escrow release feature not yet implemented',
-  });
-};
-
-/**
- * @desc    Refund escrow funds - Placeholder
- */
-export const refundEscrowFunds = async (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Escrow refund feature not yet implemented',
-  });
-};
-
-/**
- * @desc    Raise dispute - Placeholder
- */
-export const raiseDispute = async (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Dispute feature not yet implemented',
-  });
-};
-
-/**
- * @desc    Resolve dispute - Placeholder
- */
-export const resolveDispute = async (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Dispute resolution feature not yet implemented',
-  });
-};
-
-// Add to payment.controller.js
-export const checkPaystackConfig = async (req, res) => {
-  try {
-    const config = {
-      NODE_ENV: process.env.NODE_ENV,
-      PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY 
-        ? `${process.env.PAYSTACK_SECRET_KEY.substring(0, 10)}...${process.env.PAYSTACK_SECRET_KEY.substring(process.env.PAYSTACK_SECRET_KEY.length - 5)}`
-        : 'NOT SET',
-      PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY 
-        ? `${process.env.PAYSTACK_PUBLIC_KEY.substring(0, 10)}...`
-        : 'NOT SET',
-      PAYSTACK_WEBHOOK_SECRET: process.env.PAYSTACK_WEBHOOK_SECRET 
-        ? 'SET' : 'NOT SET',
-      secretKeyLength: process.env.PAYSTACK_SECRET_KEY?.length || 0,
-      publicKeyLength: process.env.PAYSTACK_PUBLIC_KEY?.length || 0,
-    };
-
-    console.log('Paystack Configuration:', config);
-
-    res.status(200).json({
-      success: true,
-      data: config,
-    });
-  } catch (error) {
-    console.error('Config check error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Configuration check failed',
-      error: error.message,
-    });
-  }
-};
-
- 

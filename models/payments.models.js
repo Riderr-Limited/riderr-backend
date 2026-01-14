@@ -8,19 +8,23 @@ const paymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Delivery',
       required: true,
+      index: true, // Added index here
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+      index: true, // Added index here
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
+      index: true, // Added index here
     },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Company',
+      index: true, // Added index here
     },
 
     // Payment Details
@@ -37,7 +41,7 @@ const paymentSchema = new mongoose.Schema(
     paystackReference: {
       type: String,
       unique: true,
-      sparse: true,
+      sparse: true, // This allows null values without violating uniqueness
     },
     paystackAccessCode: String,
     paystackAuthorizationUrl: String,
@@ -47,6 +51,7 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       enum: ['pending', 'processing', 'successful', 'failed', 'refunded'],
       default: 'pending',
+      index: true, // Added index here
     },
     
     // Payment Method
@@ -56,13 +61,19 @@ const paymentSchema = new mongoose.Schema(
       default: 'card',
     },
     
+paymentId: {
+  type: String,
+  unique: true,
+  sparse: true,
+  default: () => new mongoose.Types.ObjectId().toString(), // Generate unique ID
+},
+    
     // Transaction Details
     paidAt: Date,
     verifiedAt: Date,
     
     // Split Payment Details
     companyAmount: Number, // Amount company receives
-    driverAmount: Number, // Amount driver receives
     platformFee: Number, // Platform commission
     
     // Metadata
@@ -101,14 +112,16 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-// Indexes
-paymentSchema.index({ deliveryId: 1 });
-paymentSchema.index({ customerId: 1 });
-paymentSchema.index({ driverId: 1 });
-paymentSchema.index({ companyId: 1 });
-paymentSchema.index({ paystackReference: 1 });
-paymentSchema.index({ status: 1 });
-paymentSchema.index({ createdAt: -1 });
+// REMOVE THESE INDEXES - they're now defined in the schema
+// paymentSchema.index({ deliveryId: 1 });
+// paymentSchema.index({ customerId: 1 });
+// paymentSchema.index({ driverId: 1 });
+// paymentSchema.index({ companyId: 1 });
+// paymentSchema.index({ status: 1 });
+
+// Only keep these compound or specific indexes
+paymentSchema.index({ paystackReference: 1 }); // Keep this separate
+paymentSchema.index({ createdAt: -1 }); // For sorting by latest
 
 // Virtual for formatted amount
 paymentSchema.virtual('formattedAmount').get(function() {
@@ -127,6 +140,15 @@ paymentSchema.methods.markAsFailed = function(reason) {
   this.failureReason = reason;
   return this.save();
 };
+
+// Add a pre-save hook to prevent the null paymentId issue
+paymentSchema.pre('save', function( ) {
+  // If there's a paymentId field that's null, delete it
+  if (this.paymentId === null || this.paymentId === undefined) {
+    delete this.paymentId;
+  }
+ 
+});
 
 const Payment = mongoose.model('Payment', paymentSchema);
 

@@ -192,7 +192,7 @@ export const createDeliveryRequest = async (req, res) => {
       itemDetails: {
         type: itemType || "parcel",
         description: itemDescription,
-        weight: parseFloat(itemWeight) || 1,
+        // weight: parseFloat(itemWeight) || 1,
       },
 
       fare: {
@@ -649,6 +649,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
  * @route   POST /api/deliveries/:deliveryId/accept
  * @access  Private (Driver)
  */
+// In delivery.controller.js - UPDATED acceptDelivery function
 export const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -721,8 +722,9 @@ export const acceptDelivery = async (req, res) => {
       );
     }
 
-    // Update delivery
+    // Update delivery with driver AND company info
     delivery.driverId = driver._id;
+    delivery.companyId = driver.companyId; // IMPORTANT: Set company ID
     delivery.status = "assigned";
     delivery.assignedAt = new Date();
     delivery.estimatedPickupTime = new Date(
@@ -740,40 +742,51 @@ export const acceptDelivery = async (req, res) => {
 
     await Promise.all([delivery.save({ session }), driver.save({ session })]);
 
-    // Notify customer
+    // Notify customer to make payment
     const customer = await User.findById(delivery.customerId);
     
+    // Get company info for payment
+    const company = await Company.findById(driver.companyId);
+    
+    if (customer) {
+      await sendNotification({
+        userId: customer._id,
+        title: "💳 Complete Payment",
+        message: `Driver ${driverUser.name} has accepted your delivery. Please complete payment.`,
+        data: {
+          type: "payment_required",
+          deliveryId: delivery._id,
+          amount: delivery.fare.totalFare,
+          driverId: driver._id,
+          companyId: driver.companyId,
+          companyName: company?.name || "Delivery Company",
+          requiresPayment: true,
+          paymentInfo: {
+            recipient: company?.name || "Company",
+            amount: delivery.fare.totalFare,
+            currency: "NGN"
+          }
+        },
+      });
+    }
 
-// Notify customer to make payment
-if (customer) {
-  await sendNotification({
-    userId: customer._id,
-    title: "💳 Complete Payment",
-    message: `Please complete payment for your delivery with ${driverUser.name}`,
-    data: {
-      type: "payment_required",
-      deliveryId: delivery._id,
-      amount: delivery.fare.totalFare,
-      driverId: driver._id,
-      requiresPayment: true,
-    },
-  });
-}
     await session.commitTransaction();
     session.endSession();
 
     res.status(200).json({
       success: true,
-      message: "Delivery accepted successfully!",
+      message: "Delivery accepted successfully! Customer will make payment to your company.",
       data: {
         delivery: {
           _id: delivery._id,
           status: delivery.status,
+          companyId: delivery.companyId,
           pickup: delivery.pickup,
           dropoff: delivery.dropoff,
           estimatedPickupTime: delivery.estimatedPickupTime,
           fare: delivery.fare,
           driverDetails: delivery.driverDetails,
+          paymentNote: "Payment will be processed to company account"
         },
         driver: {
           name: driverUser.name,
@@ -783,6 +796,11 @@ if (customer) {
             "Vehicle",
           plateNumber: driver.plateNumber,
         },
+        company: {
+          _id: company?._id,
+          name: company?.name,
+          paymentNote: "Customer payment goes to this company"
+        }
       },
     });
   } catch (error) {

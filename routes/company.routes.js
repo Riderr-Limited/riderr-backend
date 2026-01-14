@@ -13,43 +13,49 @@ import {
   suspendDriver,
   activateDriver,
   getCompanyNotifications,
-  getCompanyTransactions
+  getCompanyTransactions,
 } from '../controllers/driver.controller.js';
+
 import { protect, authorize } from '../middlewares/auth.middleware.js';
+import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
 
 const router = express.Router();
 
-// Protect all routes
+// Protect all routes - only company admins can access
 router.use(protect);
 router.use(authorize('company_admin'));
 
-// Company profile management
+// ============ COMPANY PROFILE ============
 router.route('/profile')
   .get(getCompanyProfile)
   .put(updateCompanyProfile);
 
-// Company drivers management
+// ============ COMPANY DRIVERS ============
 router.get('/drivers', getCompanyDrivers);
 router.get('/driver-requests', getCompanyDriverRequests);
 
-// Company driver actions
+// Driver management actions
 router.post('/drivers/:driverId/approve-document', approveDriverDocument);
 router.post('/drivers/:driverId/suspend', suspendDriver);
 router.post('/drivers/:driverId/activate', activateDriver);
 
-// Company statistics and data
+// ============ COMPANY STATISTICS & DATA ============
 router.get('/statistics', getCompanyStatistics);
 router.get('/deliveries', getCompanyDeliveries);
 router.get('/earnings', getCompanyEarnings);
 router.get('/transactions', getCompanyTransactions);
 
-// Company settings
+// ============ COMPANY SETTINGS ============
 router.put('/settings', updateCompanySettings);
 
-// Company documents
-router.post('/documents', manageCompanyDocuments);
+// ============ COMPANY DOCUMENTS ============
+router.post('/documents',
+  
+  handleUploadError,
+  manageCompanyDocuments
+);
 
-// Company notifications
+// ============ COMPANY NOTIFICATIONS ============
 router.get('/notifications', getCompanyNotifications);
 
 export default router;
