@@ -192,7 +192,7 @@ export const createDeliveryRequest = async (req, res) => {
       itemDetails: {
         type: itemType || "parcel",
         description: itemDescription,
-        // weight: parseFloat(itemWeight) || 1,
+        weight: parseFloat(itemWeight) || 1,
       },
 
       fare: {
