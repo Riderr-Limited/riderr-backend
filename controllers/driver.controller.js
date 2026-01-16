@@ -380,7 +380,7 @@ export const updateDriverLocation = async (req, res) => {
   try {
     const driverUser = req.user;
 
-    const { lat, lng, address, accuracy } = req.body;
+    const { lat, lng, address, accuracy, heading, speed } = req.body;
 
     if (!lat || !lng) {
       return res.status(400).json({
@@ -405,18 +405,29 @@ export const updateDriverLocation = async (req, res) => {
       });
     }
 
-    // Update location
+    // Update both location formats for compatibility
     driver.currentLocation = {
       lat: parseFloat(lat),
       lng: parseFloat(lng),
       address: address || driver.currentLocation?.address,
       accuracy: accuracy ? parseFloat(accuracy) : null,
+      heading: heading ? parseFloat(heading) : null,
+      speed: speed ? parseFloat(speed) : null,
+      updatedAt: new Date(),
+    };
+
+    // Also update the new GeoJSON format
+    driver.location = {
+      type: "Point",
+      coordinates: [parseFloat(lng), parseFloat(lat)], // GeoJSON: [longitude, latitude]
       updatedAt: new Date(),
     };
 
     driver.lastLocationUpdate = new Date();
 
     await driver.save();
+
+    console.log(`📍 Driver ${driverUser._id} location updated: ${lat}, ${lng}`);
 
     // If driver has current delivery, update delivery tracking
     if (driver.currentDeliveryId) {
@@ -434,6 +445,8 @@ export const updateDriverLocation = async (req, res) => {
           lng: parseFloat(lng),
           timestamp: new Date(),
           accuracy: accuracy ? parseFloat(accuracy) : null,
+          heading: heading ? parseFloat(heading) : null,
+          speed: speed ? parseFloat(speed) : null,
         });
 
         // Keep only last 100 locations
@@ -445,12 +458,24 @@ export const updateDriverLocation = async (req, res) => {
       }
     }
 
+    // Broadcast location update to nearby customers (for real-time tracking)
+    // In a real app, you would use WebSockets or similar
+    // For now, we'll just log it
+
     res.status(200).json({
       success: true,
       message: "Location updated successfully",
       data: {
-        location: driver.currentLocation,
-        updatedAt: driver.lastLocationUpdate,
+        location: {
+          lat: driver.currentLocation.lat,
+          lng: driver.currentLocation.lng,
+          coordinates: driver.location.coordinates, // GeoJSON format
+          address: driver.currentLocation.address,
+          updatedAt: driver.lastLocationUpdate,
+        },
+        accuracy: driver.currentLocation.accuracy,
+        heading: driver.currentLocation.heading,
+        speed: driver.currentLocation.speed,
       },
     });
   } catch (error) {
@@ -461,7 +486,6 @@ export const updateDriverLocation = async (req, res) => {
     });
   }
 };
-
 /**
  * @desc    Toggle driver online status
  * @route   POST /api/driver/online-status

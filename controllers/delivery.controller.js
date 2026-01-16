@@ -170,6 +170,9 @@ export const createDeliveryRequest = async (req, res) => {
       customerName: customer.name,
       customerPhone: customer.phone,
 
+      // IMPORTANT: Add companyId as null initially
+      companyId: null, // Will be set when driver accepts
+
       pickup: {
         address: pickupAddress,
         lat: parseFloat(pickupLat),
@@ -281,7 +284,9 @@ export const createDeliveryRequest = async (req, res) => {
       data: {
         delivery: {
           _id: delivery._id,
+          referenceId: delivery.referenceId,
           status: delivery.status,
+          companyId: delivery.companyId, // Include companyId in response
           pickup: delivery.pickup,
           dropoff: delivery.dropoff,
           recipientName: delivery.recipientName,
@@ -1614,12 +1619,14 @@ export const getCustomerActiveDelivery = async (req, res) => {
     })
       .populate({
         path: "driverId",
-        select: "vehicleType vehicleMake vehicleModel plateNumber",
+        select: "vehicleType vehicleMake vehicleModel plateNumber userId",
         populate: {
           path: "userId",
           select: "name avatarUrl phone rating",
         },
       })
+      .populate("companyId", "name logo contactPhone")
+      .populate("customerId", "name phone")
       .sort({ createdAt: -1 });
 
     if (!delivery) {
@@ -1636,7 +1643,8 @@ export const getCustomerActiveDelivery = async (req, res) => {
 
     if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId)
-        .select("currentLocation location");
+        .select("currentLocation location")
+        .populate("userId", "name phone avatarUrl"); // ADD THIS LINE
 
       if (driver) {
         // Get driver location from appropriate field
@@ -1674,14 +1682,22 @@ export const getCustomerActiveDelivery = async (req, res) => {
           );
           etaMinutes = Math.ceil(distance * 3);
         }
-      }
 
-      // Ensure driver details are saved to delivery
-      if (!delivery.driverDetails) {
-        await saveDriverDetailsToDelivery(delivery._id, driver);
-        // Refresh delivery to get updated driver details
-        const refreshedDelivery = await Delivery.findById(delivery._id);
-        delivery.driverDetails = refreshedDelivery.driverDetails;
+        // Ensure driver details are saved to delivery
+        if (!delivery.driverDetails) {
+          await saveDriverDetailsToDelivery(delivery._id, driver);
+          // Refresh delivery to get updated driver details
+          const refreshedDelivery = await Delivery.findById(delivery._id)
+            .populate({
+              path: "driverId",
+              populate: {
+                path: "userId",
+                select: "name phone avatarUrl",
+              },
+            });
+          delivery.driverDetails = refreshedDelivery.driverDetails;
+          delivery.driverId = refreshedDelivery.driverId;
+        }
       }
     }
 
@@ -1728,6 +1744,36 @@ export const getCustomerActiveDelivery = async (req, res) => {
         break;
     }
 
+    // Build driver object with proper data
+    let driverObject = null;
+    
+    if (delivery.driverDetails) {
+      driverObject = {
+        _id: delivery.driverDetails.driverId,
+        name: delivery.driverDetails.name,
+        phone: delivery.driverDetails.phone,
+        avatarUrl: delivery.driverDetails.avatarUrl,
+        rating: delivery.driverId?.userId?.rating || 0,
+        vehicle: delivery.driverDetails.vehicle,
+        currentLocation: driverLocation,
+      };
+    } else if (delivery.driverId?.userId) {
+      driverObject = {
+        _id: delivery.driverId._id,
+        name: delivery.driverId.userId?.name || "Driver",
+        phone: delivery.driverId.userId?.phone || "",
+        avatarUrl: delivery.driverId.userId?.avatarUrl,
+        rating: delivery.driverId.userId?.rating || 0,
+        vehicle: {
+          type: delivery.driverId.vehicleType || "bike",
+          make: delivery.driverId.vehicleMake || "",
+          model: delivery.driverId.vehicleModel || "",
+          plateNumber: delivery.driverId.plateNumber || "",
+        },
+        currentLocation: driverLocation,
+      };
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -1736,6 +1782,25 @@ export const getCustomerActiveDelivery = async (req, res) => {
         status: delivery.status,
         currentStep,
         nextStep,
+        
+        // Customer info
+        customer: delivery.customerId ? {
+          name: delivery.customerId.name,
+          phone: delivery.customerId.phone,
+          _id: delivery.customerId._id
+        } : {
+          name: customer.name,
+          phone: customer.phone,
+          _id: customer._id
+        },
+        
+        // Company info
+        company: delivery.companyId ? {
+          name: delivery.companyId.name,
+          logo: delivery.companyId.logo,
+          contactPhone: delivery.companyId.contactPhone,
+          _id: delivery.companyId._id
+        } : null,
         
         // Pickup info
         pickup: {
@@ -1755,16 +1820,12 @@ export const getCustomerActiveDelivery = async (req, res) => {
           phone: delivery.dropoff.phone,
         },
         
-        // Driver info with details
-        driver: delivery.driverDetails ? {
-          _id: delivery.driverDetails.driverId,
-          name: delivery.driverDetails.name,
-          phone: delivery.driverDetails.phone,
-          avatarUrl: delivery.driverDetails.avatarUrl,
-          rating: delivery.driverId?.userId?.rating || 0,
-          vehicle: delivery.driverDetails.vehicle,
-          currentLocation: driverLocation,
-        } : null,
+        // Recipient info
+        recipientName: delivery.recipientName,
+        recipientPhone: delivery.recipientPhone,
+        
+        // Driver info - FIXED
+        driver: driverObject,
         
         // Delivery details
         itemDetails: delivery.itemDetails,
@@ -1789,8 +1850,14 @@ export const getCustomerActiveDelivery = async (req, res) => {
         canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
         tracking: delivery.tracking || null,
         
+        // Payment info
+        payment: delivery.payment || { method: "cash", status: "pending" },
+        
+        // Timestamps
         createdAt: delivery.createdAt,
         updatedAt: delivery.updatedAt,
+        assignedAt: delivery.assignedAt,
+        pickedUpAt: delivery.pickedUpAt,
       },
     });
   } catch (error) {
@@ -1802,7 +1869,6 @@ export const getCustomerActiveDelivery = async (req, res) => {
     });
   }
 };
-
 /**
  * Helper function to calculate delivery progress percentage
  */
@@ -2095,6 +2161,392 @@ export const getDriverDeliveryStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get delivery statistics",
+    });
+  }
+};
+
+export const getCompanyDeliveries = async (req, res) => {
+  try {
+    console.log('🔍 Fetching company deliveries...');
+    
+    // Get company from user
+    const company = await Company.findById(req.user.companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    const {
+      status,
+      startDate,
+      endDate,
+      driverId,
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    // Get all drivers from this company first
+    const companyDrivers = await Driver.find({ companyId: company._id })
+      .select('_id')
+      .lean(); // Use lean() to get plain objects
+    
+    console.log(`🚗 Found ${companyDrivers.length} company drivers`);
+    
+    if (companyDrivers.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No drivers found for this company",
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: 0,
+        },
+      });
+    }
+
+    const driverIds = companyDrivers.map(driver => driver._id);
+    
+    // Build query to find deliveries for these drivers
+    let query = { driverId: { $in: driverIds } };
+    
+    // Apply filters
+    if (status && status !== "all") {
+      query.status = status;
+    }
+    if (driverId) {
+      query.driverId = driverId;
+    }
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Get deliveries with lean() to avoid virtual/getter issues
+    const [deliveries, total] = await Promise.all([
+      Delivery.find(query)
+        .populate("customerId", "name phone email avatarUrl")
+        .populate({
+          path: "driverId",
+          select: "vehicleType vehicleMake vehicleModel plateNumber userId",
+          // Use lean in population to avoid virtual issues
+          options: { lean: true }
+        })
+        .populate("companyId", "name logo contactPhone address")
+        .select("+driverDetails")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(), // ADD THIS: Use lean() to get plain objects
+      Delivery.countDocuments(query),
+    ]);
+
+    console.log(`📦 Found ${deliveries.length} deliveries for company`);
+
+    // Format deliveries with proper error handling
+    const formattedDeliveries = deliveries.map((delivery) => {
+      try {
+        const deliveryObj = { ...delivery };
+        
+        // Build driver object with error handling
+        let driverObject = null;
+        try {
+          if (deliveryObj.driverDetails) {
+            driverObject = {
+              _id: deliveryObj.driverDetails.driverId,
+              name: deliveryObj.driverDetails.name || "Driver",
+              phone: deliveryObj.driverDetails.phone || "",
+              avatarUrl: deliveryObj.driverDetails.avatarUrl,
+              vehicle: deliveryObj.driverDetails.vehicle || {
+                type: "bike",
+                make: "",
+                model: "",
+                plateNumber: ""
+              },
+            };
+          } else if (deliveryObj.driverId?.userId) {
+            // Handle if userId is populated or just an ID
+            const driverUserId = typeof deliveryObj.driverId.userId === 'object' 
+              ? deliveryObj.driverId.userId 
+              : { name: "Driver", phone: "", avatarUrl: null };
+              
+            driverObject = {
+              _id: deliveryObj.driverId._id,
+              name: driverUserId.name || "Driver",
+              phone: driverUserId.phone || "",
+              avatarUrl: driverUserId.avatarUrl,
+              vehicle: {
+                type: deliveryObj.driverId.vehicleType || "bike",
+                make: deliveryObj.driverId.vehicleMake || "",
+                model: deliveryObj.driverId.vehicleModel || "",
+                plateNumber: deliveryObj.driverId.plateNumber || "",
+              },
+            };
+          }
+        } catch (driverError) {
+          console.error('Error building driver object:', driverError);
+          driverObject = {
+            _id: deliveryObj.driverId?._id || null,
+            name: "Driver",
+            phone: "",
+            avatarUrl: null,
+            vehicle: {
+              type: "bike",
+              make: "",
+              model: "",
+              plateNumber: ""
+            },
+          };
+        }
+        
+        deliveryObj.driver = driverObject;
+        
+        // Build customer object
+        if (deliveryObj.customerId) {
+          deliveryObj.customer = {
+            _id: deliveryObj.customerId._id,
+            name: deliveryObj.customerId.name || "Customer",
+            phone: deliveryObj.customerId.phone || "",
+            email: deliveryObj.customerId.email || "",
+            avatarUrl: deliveryObj.customerId.avatarUrl,
+          };
+        }
+        
+        // Build company object
+        if (deliveryObj.companyId) {
+          deliveryObj.company = {
+            _id: deliveryObj.companyId._id,
+            name: deliveryObj.companyId.name || "Company",
+            logo: deliveryObj.companyId.logo,
+            contactPhone: deliveryObj.companyId.contactPhone || "",
+            address: deliveryObj.companyId.address || "",
+          };
+        } else {
+          // Use the company we're querying for
+          deliveryObj.company = {
+            _id: company._id,
+            name: company.name,
+            logo: company.logo,
+            contactPhone: company.contactPhone || "",
+            address: company.address || "",
+          };
+        }
+        
+        // Add status display
+        const statusDisplay = {
+          "created": "Created",
+          "assigned": "Assigned",
+          "picked_up": "Picked Up",
+          "delivered": "Delivered",
+          "cancelled": "Cancelled",
+          "failed": "Failed"
+        };
+        
+        deliveryObj.statusDisplay = statusDisplay[deliveryObj.status] || deliveryObj.status;
+        
+        return deliveryObj;
+      } catch (error) {
+        console.error('Error formatting delivery:', delivery._id, error);
+        // Return minimal delivery info
+        return {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          status: delivery.status,
+          statusDisplay: delivery.status,
+          error: "Failed to format delivery data"
+        };
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${formattedDeliveries.length} deliveries for ${company.name}`,
+      data: formattedDeliveries,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get company deliveries error:", error);
+    
+    // More detailed error information
+    const errorInfo = {
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      companyId: req.user?.companyId,
+      userRole: req.user?.role
+    };
+    
+    res.status(500).json({
+      success: false,
+      message: "Failed to get company deliveries",
+      error: process.env.NODE_ENV === "development" ? errorInfo : undefined,
+    });
+  }
+};
+/**
+ * @desc    Get nearby available drivers for customer with real-time location
+ * @route   GET /api/deliveries/nearby-available-drivers
+ * @access  Private (Customer)
+ */
+export const getNearbyAvailableDrivers = async (req, res) => {
+  try {
+    const customer = req.user;
+
+    if (customer.role !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only customers can view nearby drivers",
+      });
+    }
+
+    const { lat, lng, radius = 5 } = req.query;
+
+    if (!lat || !lng) {
+      return res.status(400).json({
+        success: false,
+        message: "Latitude and longitude are required",
+      });
+    }
+
+    const customerLat = parseFloat(lat);
+    const customerLng = parseFloat(lng);
+    const searchRadius = parseFloat(radius);
+
+    console.log(`📍 Customer location: ${customerLat}, ${customerLng}, Radius: ${searchRadius}km`);
+
+    // Find all available drivers who are online and not on a delivery
+    const drivers = await Driver.find({
+      isOnline: true,
+      isAvailable: true,
+      isActive: true,
+      approvalStatus: "approved",
+      currentDeliveryId: { $exists: false }, // Not currently on a delivery
+    })
+      .populate("userId", "name phone avatarUrl rating totalRides")
+      .populate("companyId", "name logo rating")
+      .select("+currentLocation +location");
+
+    console.log(`🚗 Total available drivers: ${drivers.length}`);
+
+    // Calculate distance for each driver and filter by radius
+    const nearbyDrivers = drivers
+      .map((driver) => {
+        let driverLat, driverLng, driverLocation = null;
+
+        // Get driver's current location from appropriate field
+        if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+          driverLat = driver.currentLocation.lat;
+          driverLng = driver.currentLocation.lng;
+          driverLocation = {
+            lat: driverLat,
+            lng: driverLng,
+            updatedAt: driver.currentLocation.updatedAt || new Date(),
+          };
+        } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+          // New format: [longitude, latitude]
+          driverLng = driver.location.coordinates[0];
+          driverLat = driver.location.coordinates[1];
+          driverLocation = {
+            lat: driverLat,
+            lng: driverLng,
+            updatedAt: new Date(),
+          };
+        } else {
+          console.log(`❌ Driver ${driver._id} has no location data`);
+          return null;
+        }
+
+        // Calculate distance from customer
+        const distance = calculateDistance(
+          customerLat,
+          customerLng,
+          driverLat,
+          driverLng
+        );
+
+        // Only include drivers within the search radius
+        if (distance <= searchRadius) {
+          // Calculate ETA (3 minutes per km)
+          const etaMinutes = Math.ceil(distance * 3);
+          
+          return {
+            _id: driver._id,
+            userId: driver.userId?._id,
+            driverId: driver._id,
+            name: driver.userId?.name || "Driver",
+            phone: driver.userId?.phone || "",
+            avatarUrl: driver.userId?.avatarUrl,
+            rating: driver.userId?.rating || 0,
+            totalRides: driver.userId?.totalRides || 0,
+            company: driver.companyId ? {
+              _id: driver.companyId._id,
+              name: driver.companyId.name,
+              logo: driver.companyId.logo,
+              rating: driver.companyId.rating || 0,
+            } : null,
+            vehicle: {
+              type: driver.vehicleType || "bike",
+              make: driver.vehicleMake || "",
+              model: driver.vehicleModel || "",
+              plateNumber: driver.plateNumber || "",
+              color: driver.vehicleColor || "",
+              year: driver.vehicleYear || "",
+            },
+            location: driverLocation,
+            distance: parseFloat(distance.toFixed(2)),
+            distanceText: `${distance.toFixed(1)} km away`,
+            etaMinutes,
+            etaText: `${etaMinutes} min`,
+            isOnline: driver.isOnline,
+            isAvailable: driver.isAvailable,
+            canAcceptDeliveries: driver.canAcceptDeliveries,
+            // Additional info for UI
+            status: "available",
+            acceptanceRate: driver.totalRequests 
+              ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+              : 0,
+            totalDeliveries: driver.totalDeliveries || 0,
+            earnings: driver.earnings || 0,
+            onlineSince: driver.lastOnlineStart,
+          };
+        }
+        
+        return null;
+      })
+      .filter((driver) => driver !== null)
+      .sort((a, b) => a.distance - b.distance); // Sort by closest first
+
+    console.log(`✅ Found ${nearbyDrivers.length} nearby available drivers`);
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${nearbyDrivers.length} nearby available drivers`,
+      data: {
+        drivers: nearbyDrivers,
+        customerLocation: { lat: customerLat, lng: customerLng },
+        searchRadius,
+        count: nearbyDrivers.length,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get nearby available drivers error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to find nearby drivers",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

@@ -5,6 +5,8 @@ import {
   getNearbyDrivers,
   getMyDeliveries,
   getCustomerActiveDelivery,
+  getNearbyAvailableDrivers,
+  getCompanyDeliveries,
   
   // Driver endpoints
   getNearbyDeliveryRequests,
@@ -23,6 +25,7 @@ import {
   rateDelivery,
   getDeliveryUpdates,
 } from '../controllers/delivery.controller.js';
+import { updateDriverLocation } from '../controllers/driver.controller.js';
 
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 
@@ -34,11 +37,15 @@ router.get('/nearby-drivers', protect, authorize('customer'), getNearbyDrivers);
 router.get('/my', protect, authorize('customer'), getMyDeliveries);
 router.get('/customer/active', protect, authorize('customer'), getCustomerActiveDelivery);
 
+router.get('/nearby-available-drivers', protect, authorize('customer'), getNearbyAvailableDrivers);
+
 // ============ DRIVER ROUTES ============
 router.get('/driver/nearby', protect, authorize('driver'), getNearbyDeliveryRequests);
 router.get('/driver/active', protect, authorize('driver'), getDriverActiveDelivery);
 router.get('/driver/my-deliveries', protect, authorize('driver'), getDriverDeliveries);
 router.get('/driver/stats', protect, authorize('driver'), getDriverDeliveryStats);
+router.post('/driver/location', protect, authorize(['driver']), updateDriverLocation);
+
 
 router.post('/:deliveryId/accept', protect, authorize('driver'), acceptDelivery);
 router.post('/:deliveryId/reject', protect, authorize('driver'), rejectDelivery);
@@ -51,5 +58,9 @@ router.get('/:deliveryId/track', protect, trackDelivery);
 router.get('/:deliveryId/updates', protect, getDeliveryUpdates);
 router.post('/:deliveryId/cancel', protect, cancelDelivery);
 router.post('/:deliveryId/rate', protect, authorize('customer'), rateDelivery);
+
+// ============ COMPANY ROUTES ============
+router.get('/company/deliveries', protect, authorize('company_admin'), getCompanyDeliveries);
+
 
 export default router;
