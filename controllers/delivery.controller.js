@@ -37,44 +37,76 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // Save driver details to delivery
 const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
   try {
+    console.log(`💾 saveDriverDetailsToDelivery called for delivery: ${deliveryId}`);
+    console.log(`🚗 Driver data received:`, {
+      id: driver?._id,
+      userId: driver?.userId,
+      hasUserObject: typeof driver?.userId === 'object'
+    });
+
     const delivery = await Delivery.findById(deliveryId);
-    if (delivery && driver && driver.userId) {
-      const driverUser = await User.findById(driver.userId);
-
-      // Extract coordinates from new location format
-      let lat, lng;
-      if (driver.location && driver.location.coordinates) {
-        // [longitude, latitude] format
-        lng = driver.location.coordinates[0];
-        lat = driver.location.coordinates[1];
-      } else if (driver.lat && driver.lng) {
-        // Old format
-        lat = driver.lat;
-        lng = driver.lng;
-      }
-
-      delivery.driverDetails = {
-        driverId: driver._id,
-        userId: driver.userId,
-        name: driverUser?.name || "Driver",
-        phone: driverUser?.phone || "",
-        avatarUrl: driverUser?.avatarUrl,
-        vehicle: {
-          type: driver.vehicleType || "bike",
-          make: driver.vehicleMake || "",
-          model: driver.vehicleModel || "",
-          plateNumber: driver.plateNumber || "",
-        },
-        currentLocation: lat && lng ? { lat, lng } : undefined,
-      };
-      await delivery.save();
-      console.log(`✅ Driver details saved for delivery ${deliveryId}`);
-      return true;
+    if (!delivery) {
+      console.log('❌ Delivery not found');
+      return false;
     }
+
+    if (!driver) {
+      console.log('❌ Driver not provided');
+      return false;
+    }
+
+    // Get driver user info - handle both populated and unpopulated cases
+    let driverUser;
+    
+    if (typeof driver.userId === 'object' && driver.userId !== null) {
+      // Already populated
+      driverUser = driver.userId;
+      console.log('✅ Driver user already populated:', driverUser);
+    } else if (driver.userId) {
+      // Need to populate
+      driverUser = await User.findById(driver.userId)
+        .select('name phone avatarUrl rating')
+        .lean();
+      console.log('✅ Fetched driver user:', driverUser);
+    } else {
+      console.log('❌ No driver userId found');
+      return false;
+    }
+
+    if (!driverUser) {
+      console.log('❌ Driver user not found in database');
+      return false;
+    }
+
+    // Create driver details object
+    const driverDetails = {
+      driverId: driver._id,
+      userId: typeof driver.userId === 'object' ? driver.userId._id : driver.userId,
+      name: driverUser.name || "Driver",
+      phone: driverUser.phone || "",
+      avatarUrl: driverUser.avatarUrl,
+      rating: driverUser.rating || 0,
+      vehicle: {
+        type: driver.vehicleType || "bike",
+        make: driver.vehicleMake || "",
+        model: driver.vehicleModel || "",
+        plateNumber: driver.plateNumber || "",
+      },
+    };
+
+    console.log('📋 Driver details to save:', driverDetails);
+
+    // Update delivery
+    delivery.driverDetails = driverDetails;
+    await delivery.save();
+    
+    console.log(`✅ Driver details saved for delivery ${deliveryId}`);
+    return true;
+    
   } catch (error) {
-    console.error("❌ Error saving driver details:", error);
+    console.error("❌ Error in saveDriverDetailsToDelivery:", error);
+    return false;
   }
-  return false;
 };
 
 /**
@@ -1612,7 +1644,7 @@ export const getCustomerActiveDelivery = async (req, res) => {
       });
     }
 
-    // Find active delivery (in progress deliveries)
+    // Find active delivery - Use lean() for better performance
     const delivery = await Delivery.findOne({
       customerId: customer._id,
       status: { $in: ["assigned", "picked_up", "in_transit"] }
@@ -1622,12 +1654,12 @@ export const getCustomerActiveDelivery = async (req, res) => {
         select: "vehicleType vehicleMake vehicleModel plateNumber userId",
         populate: {
           path: "userId",
-          select: "name avatarUrl phone rating",
+          select: "name phone avatarUrl rating",
         },
       })
       .populate("companyId", "name logo contactPhone")
       .populate("customerId", "name phone")
-      .sort({ createdAt: -1 });
+      .lean(); // Use lean() to get plain object
 
     if (!delivery) {
       return res.status(200).json({
@@ -1637,17 +1669,31 @@ export const getCustomerActiveDelivery = async (req, res) => {
       });
     }
 
-    // Get driver's current location if available
+    console.log('📦 Delivery ID:', delivery._id);
+    console.log('🚗 Driver ID:', delivery.driverId?._id);
+    console.log('👤 Driver populated:', !!delivery.driverId?.userId);
+
+    // Get driver's current location
     let driverLocation = null;
     let etaMinutes = null;
 
     if (delivery.driverId) {
-      const driver = await Driver.findById(delivery.driverId)
-        .select("currentLocation location")
-        .populate("userId", "name phone avatarUrl"); // ADD THIS LINE
+      // Get driver with user details
+      const driver = await Driver.findById(delivery.driverId._id)
+        .select("currentLocation location userId vehicleType vehicleMake vehicleModel plateNumber")
+        .populate("userId", "name phone avatarUrl rating")
+        .lean(); // Use lean()
+      
+      console.log('🔍 Driver data:', {
+        id: driver?._id,
+        userId: driver?.userId?._id,
+        name: driver?.userId?.name,
+        phone: driver?.userId?.phone,
+        vehicleType: driver?.vehicleType
+      });
 
-      if (driver) {
-        // Get driver location from appropriate field
+      if (driver && driver.userId) {
+        // Get driver location
         if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
           driverLocation = {
             lat: driver.currentLocation.lat,
@@ -1663,40 +1709,42 @@ export const getCustomerActiveDelivery = async (req, res) => {
         }
 
         // Calculate ETA
-        if (driverLocation && delivery.status === "picked_up") {
-          // If picked up, calculate ETA to dropoff
-          const distance = calculateDistance(
-            driverLocation.lat,
-            driverLocation.lng,
-            delivery.dropoff.lat,
-            delivery.dropoff.lng
-          );
-          etaMinutes = Math.ceil(distance * 3); // 3 minutes per km
-        } else if (driverLocation && delivery.status === "assigned") {
-          // If assigned, calculate ETA to pickup
-          const distance = calculateDistance(
-            driverLocation.lat,
-            driverLocation.lng,
-            delivery.pickup.lat,
-            delivery.pickup.lng
-          );
-          etaMinutes = Math.ceil(distance * 3);
+        if (driverLocation) {
+          if (delivery.status === "picked_up") {
+            const distance = calculateDistance(
+              driverLocation.lat,
+              driverLocation.lng,
+              delivery.dropoff.lat,
+              delivery.dropoff.lng
+            );
+            etaMinutes = Math.ceil(distance * 3);
+          } else if (delivery.status === "assigned") {
+            const distance = calculateDistance(
+              driverLocation.lat,
+              driverLocation.lng,
+              delivery.pickup.lat,
+              delivery.pickup.lng
+            );
+            etaMinutes = Math.ceil(distance * 3);
+          }
         }
 
         // Ensure driver details are saved to delivery
-        if (!delivery.driverDetails) {
-          await saveDriverDetailsToDelivery(delivery._id, driver);
-          // Refresh delivery to get updated driver details
-          const refreshedDelivery = await Delivery.findById(delivery._id)
-            .populate({
-              path: "driverId",
-              populate: {
-                path: "userId",
-                select: "name phone avatarUrl",
-              },
-            });
-          delivery.driverDetails = refreshedDelivery.driverDetails;
-          delivery.driverId = refreshedDelivery.driverId;
+        if (!delivery.driverDetails || !delivery.driverDetails.name) {
+          console.log('💾 Saving/updating driver details...');
+          const saved = await saveDriverDetailsToDelivery(delivery._id.toString(), driver);
+          
+          if (saved) {
+            // Get updated delivery with driver details
+            const updatedDelivery = await Delivery.findById(delivery._id)
+              .select("driverDetails")
+              .lean();
+            
+            if (updatedDelivery?.driverDetails) {
+              delivery.driverDetails = updatedDelivery.driverDetails;
+              console.log('✅ Updated driver details:', delivery.driverDetails);
+            }
+          }
         }
       }
     }
@@ -1704,28 +1752,13 @@ export const getCustomerActiveDelivery = async (req, res) => {
     // Get timeline
     const timeline = [];
     if (delivery.createdAt)
-      timeline.push({
-        event: "created",
-        time: delivery.createdAt,
-        description: "Order created",
-        icon: "📝"
-      });
+      timeline.push({ event: "created", time: delivery.createdAt, description: "Order created", icon: "📝" });
     if (delivery.assignedAt)
-      timeline.push({
-        event: "assigned",
-        time: delivery.assignedAt,
-        description: "Driver assigned",
-        icon: "🚗"
-      });
+      timeline.push({ event: "assigned", time: delivery.assignedAt, description: "Driver assigned", icon: "🚗" });
     if (delivery.pickedUpAt)
-      timeline.push({
-        event: "picked_up",
-        time: delivery.pickedUpAt,
-        description: "Package picked up",
-        icon: "📦"
-      });
+      timeline.push({ event: "picked_up", time: delivery.pickedUpAt, description: "Package picked up", icon: "📦" });
 
-    // Add current step
+    // Current step
     let currentStep = "awaiting_driver";
     let nextStep = "";
 
@@ -1744,37 +1777,77 @@ export const getCustomerActiveDelivery = async (req, res) => {
         break;
     }
 
-    // Build driver object with proper data
+    // Build driver object - CORRECT IMPLEMENTATION
     let driverObject = null;
     
-    if (delivery.driverDetails) {
+    if (delivery.driverId) {
+      console.log('🔍 Building driver object from driverId...');
+      
+      // Get the driver data (already fetched above)
+      const driver = await Driver.findById(delivery.driverId._id)
+        .populate("userId", "name phone avatarUrl rating")
+        .select("vehicleType vehicleMake vehicleModel plateNumber")
+        .lean();
+      
+      if (driver && driver.userId) {
+        driverObject = {
+          _id: driver._id,
+          name: driver.userId.name || "Driver",
+          phone: driver.userId.phone || "",
+          avatarUrl: driver.userId.avatarUrl,
+          rating: driver.userId.rating || 0,
+          vehicle: {
+            type: driver.vehicleType || "bike",
+            make: driver.vehicleMake || "",
+            model: driver.vehicleModel || "",
+            plateNumber: driver.plateNumber || "",
+          },
+          currentLocation: driverLocation,
+        };
+        console.log('✅ Driver object built from driver.userId:', driverObject);
+      }
+    }
+    
+    // If still no driver object, try from driverDetails
+    if (!driverObject && delivery.driverDetails) {
+      console.log('🔍 Building driver object from driverDetails...');
       driverObject = {
         _id: delivery.driverDetails.driverId,
-        name: delivery.driverDetails.name,
-        phone: delivery.driverDetails.phone,
+        name: delivery.driverDetails.name || "Driver",
+        phone: delivery.driverDetails.phone || "",
         avatarUrl: delivery.driverDetails.avatarUrl,
-        rating: delivery.driverId?.userId?.rating || 0,
-        vehicle: delivery.driverDetails.vehicle,
-        currentLocation: driverLocation,
-      };
-    } else if (delivery.driverId?.userId) {
-      driverObject = {
-        _id: delivery.driverId._id,
-        name: delivery.driverId.userId?.name || "Driver",
-        phone: delivery.driverId.userId?.phone || "",
-        avatarUrl: delivery.driverId.userId?.avatarUrl,
-        rating: delivery.driverId.userId?.rating || 0,
-        vehicle: {
-          type: delivery.driverId.vehicleType || "bike",
-          make: delivery.driverId.vehicleMake || "",
-          model: delivery.driverId.vehicleModel || "",
-          plateNumber: delivery.driverId.plateNumber || "",
+        rating: delivery.driverDetails.rating || 0,
+        vehicle: delivery.driverDetails.vehicle || {
+          type: "bike",
+          make: "",
+          model: "",
+          plateNumber: ""
         },
         currentLocation: driverLocation,
       };
     }
 
-    res.status(200).json({
+    // If still no driver object, create minimal one
+    if (!driverObject) {
+      console.log('⚠️ Creating minimal driver object');
+      driverObject = {
+        name: "Driver",
+        phone: "",
+        rating: 0,
+        vehicle: {
+          type: "bike",
+          make: "",
+          model: "",
+          plateNumber: ""
+        },
+        currentLocation: driverLocation,
+      };
+    }
+
+    console.log('🚗 Final driver object to send:', driverObject);
+
+    // Build response
+    const response = {
       success: true,
       data: {
         _id: delivery._id,
@@ -1783,7 +1856,6 @@ export const getCustomerActiveDelivery = async (req, res) => {
         currentStep,
         nextStep,
         
-        // Customer info
         customer: delivery.customerId ? {
           name: delivery.customerId.name,
           phone: delivery.customerId.phone,
@@ -1794,7 +1866,6 @@ export const getCustomerActiveDelivery = async (req, res) => {
           _id: customer._id
         },
         
-        // Company info
         company: delivery.companyId ? {
           name: delivery.companyId.name,
           logo: delivery.companyId.logo,
@@ -1802,64 +1873,38 @@ export const getCustomerActiveDelivery = async (req, res) => {
           _id: delivery.companyId._id
         } : null,
         
-        // Pickup info
-        pickup: {
-          address: delivery.pickup.address,
-          lat: delivery.pickup.lat,
-          lng: delivery.pickup.lng,
-          name: delivery.pickup.name,
-          phone: delivery.pickup.phone,
-        },
-        
-        // Dropoff info
-        dropoff: {
-          address: delivery.dropoff.address,
-          lat: delivery.dropoff.lat,
-          lng: delivery.dropoff.lng,
-          name: delivery.dropoff.name,
-          phone: delivery.dropoff.phone,
-        },
-        
-        // Recipient info
+        pickup: delivery.pickup,
+        dropoff: delivery.dropoff,
         recipientName: delivery.recipientName,
         recipientPhone: delivery.recipientPhone,
         
-        // Driver info - FIXED
+        // Driver info - SHOULD NOW HAVE CORRECT NAME AND PHONE
         driver: driverObject,
         
-        // Delivery details
         itemDetails: delivery.itemDetails,
         fare: delivery.fare,
-        
-        // ETA and tracking
         etaMinutes,
         estimatedDistanceKm: delivery.estimatedDistanceKm,
         estimatedDurationMin: delivery.estimatedDurationMin,
-        
-        // Timeline
         timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
-        
-        // Progress
         progress: {
           step: currentStep,
           percentage: getDeliveryProgressPercentage(delivery.status),
           message: getDeliveryStatusMessage(delivery.status),
         },
-        
-        // Tracking data
         canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
         tracking: delivery.tracking || null,
-        
-        // Payment info
         payment: delivery.payment || { method: "cash", status: "pending" },
-        
-        // Timestamps
         createdAt: delivery.createdAt,
         updatedAt: delivery.updatedAt,
         assignedAt: delivery.assignedAt,
         pickedUpAt: delivery.pickedUpAt,
       },
-    });
+    };
+
+    console.log('✅ Response prepared with driver:', response.data.driver?.name);
+    return res.status(200).json(response);
+
   } catch (error) {
     console.error("❌ Get customer active delivery error:", error);
     res.status(500).json({
