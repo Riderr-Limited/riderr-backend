@@ -7,6 +7,7 @@ import rideRoutes from "./ride.routes.js";
 import driverRoutes from './driver.routes.js';
 import companyRoutes from './company.routes.js'; 
 import paymentRoutes from './payment.routes.js';
+import notificationRoutes from './notification.routes.js';
 
 const router = express.Router();
 
@@ -135,9 +136,10 @@ router.use("/users", userRoutes);
 router.use("/deliveries", deliveryRoutes);
 router.use("/rides", rideRoutes);
 router.use("/driver", driverRoutes);
-router.use("/company", companyRoutes); // Add this
+router.use("/company", companyRoutes); 
 router.use("/payments", paymentRoutes);
- 
+router.use('/notifications', notificationRoutes); 
+
 /**
  * @route   ALL *
  * @desc    404 handler for undefined API routes

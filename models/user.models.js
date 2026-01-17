@@ -158,21 +158,48 @@ const UserSchema = new mongoose.Schema(
       default: 0
     },
 
-    // Device tokens for push notifications
-    deviceTokens: [
-      {
-        token: String,
-        platform: {
-          type: String,
-          enum: ['ios', 'android', 'web']
-        },
-        addedAt: {
-          type: Date,
-          default: Date.now
-        }
-      }
-    ],
-
+ pushToken: {
+    type: String,
+    default: null,
+  },
+  
+  deviceTokens: [{
+    type: String,
+  }],
+  
+  devicePlatform: {
+    type: String,
+    enum: ['ios', 'android', 'web'],
+    default: null,
+  },
+  
+  notificationSettings: {
+    pushEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    emailEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    smsEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    // Notification preferences
+    deliveryUpdates: {
+      type: Boolean,
+      default: true,
+    },
+    paymentAlerts: {
+      type: Boolean,
+      default: true,
+    },
+    promotions: {
+      type: Boolean,
+      default: false,
+    },
+  },    
     // User preferences
     preferences: {
       language: {

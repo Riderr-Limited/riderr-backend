@@ -1,20 +1,32 @@
 import express from 'express';
 import {
   getCompanyProfile,
-  updateCompanyProfile,
+ // updateCompanyProfile,
   getCompanyDrivers,
   getCompanyStatistics,
   getCompanyDeliveries,
   getCompanyEarnings,
-  updateCompanySettings,
+//  updateCompanySettings,
   manageCompanyDocuments,
   getCompanyDriverRequests,
   approveDriverDocument,
   suspendDriver,
   activateDriver,
-  getCompanyNotifications,
+//  getCompanyNotifications,
   getCompanyTransactions,
 } from '../controllers/driver.controller.js';
+import {
+   updateCompanyProfile,
+  updateCompanySettings,
+  uploadCompanyDocument,
+ // getCompanyDrivers,
+  getCompanyStats,
+  requestCompanyVerification,
+  getCompanyNotifications,
+} from "../controllers/company.controller.js";
+import multer from "multer";
+import { body } from "express-validator";
+
 
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
@@ -44,7 +56,11 @@ router.get('/statistics', getCompanyStatistics);
 router.get('/deliveries', getCompanyDeliveries);
 router.get('/earnings', getCompanyEarnings);
 router.get('/transactions', getCompanyTransactions);
+router.route("/stats")
+  .get(getCompanyStats);
 
+router.route("/request-verification")
+  .post(requestCompanyVerification);
 // ============ COMPANY SETTINGS ============
 router.put('/settings', updateCompanySettings);
 
@@ -54,7 +70,7 @@ router.post('/documents',
   handleUploadError,
   manageCompanyDocuments
 );
-
+ 
 // ============ COMPANY NOTIFICATIONS ============
 router.get('/notifications', getCompanyNotifications);
 

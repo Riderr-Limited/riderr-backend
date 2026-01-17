@@ -5,7 +5,7 @@ import Company from "../models/company.models.js";
 import mongoose from "mongoose";
 import { validationResult } from "express-validator";
 import { calculateFare } from "../utils/fareCalculator.js";
-import { sendNotification } from "../utils/notification.js";
+import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 import crypto from "crypto";
 
 /**
@@ -252,6 +252,14 @@ export const createDeliveryRequest = async (req, res) => {
     const delivery = new Delivery(deliveryData);
     await delivery.save();
 
+       await sendNotification({
+      userId: customer._id,
+      ...NotificationTemplates.DELIVERY_CREATED(
+        delivery._id,
+        delivery.referenceId
+      ),
+    });
+
     // Find nearby drivers to notify them
     const nearbyDrivers = await Driver.find({
       isOnline: true,
@@ -262,6 +270,20 @@ export const createDeliveryRequest = async (req, res) => {
         { "currentLocation.lat": { $exists: true } },
       ],
     }).populate("userId", "name phone avatarUrl");
+
+     for (const driver of driversNearPickup) {
+      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
+        delivery._id,
+        distanceToPickup,
+        delivery.fare.totalFare
+      );
+      
+      await sendNotification({
+        userId: driver.userId._id,
+        ...template,
+      });
+    }
+
 
     // Filter drivers by distance from pickup
     const driversNearPickup = nearbyDrivers.filter((driver) => {
@@ -786,26 +808,26 @@ export const acceptDelivery = async (req, res) => {
     const company = await Company.findById(driver.companyId);
     
     if (customer) {
+      // ✅ NOTIFY CUSTOMER: Driver assigned + Payment required
       await sendNotification({
         userId: customer._id,
-        title: "💳 Complete Payment",
-        message: `Driver ${driverUser.name} has accepted your delivery. Please complete payment.`,
-        data: {
-          type: "payment_required",
-          deliveryId: delivery._id,
-          amount: delivery.fare.totalFare,
-          driverId: driver._id,
-          companyId: driver.companyId,
-          companyName: company?.name || "Delivery Company",
-          requiresPayment: true,
-          paymentInfo: {
-            recipient: company?.name || "Company",
-            amount: delivery.fare.totalFare,
-            currency: "NGN"
-          }
-        },
+        ...NotificationTemplates.PAYMENT_REQUIRED(
+          delivery._id,
+          delivery.fare.totalFare,
+          driverUser.name,
+          company?.name || "Company"
+        ),
       });
     }
+
+    // ✅ NOTIFY DRIVER: Delivery accepted successfully
+    await sendNotification({
+      userId: driverUser._id,
+      ...NotificationTemplates.DELIVERY_ACCEPTED_SUCCESS(
+        delivery._id,
+        customer?.name || "Customer"
+      ),
+    });
 
     await session.commitTransaction();
     session.endSession();
@@ -922,18 +944,10 @@ export const startDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "📦 Package Picked Up",
-        message: `Your package has been picked up by ${driverUser.name}`,
-        data: {
-          type: "delivery_started",
-          deliveryId: delivery._id,
-          driver: {
-            name: driverUser.name,
-            phone: driverUser.phone,
-          },
-          pickedUpAt: delivery.pickedUpAt,
-          nextStep: "On the way to dropoff location",
-        },
+        ...NotificationTemplates.PACKAGE_PICKED_UP(
+          delivery._id,
+          driverUser.name
+        ),
       });
     }
 
@@ -1039,19 +1053,16 @@ export const completeDelivery = async (req, res) => {
 
     // Notify customer
     const customer = await User.findById(delivery.customerId);
-    if (customer) {
+       if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "🎊 Delivery Completed!",
-        message: `Your package has been delivered successfully`,
-        data: {
-          type: "delivery_completed",
-          deliveryId: delivery._id,
-          deliveredAt: delivery.deliveredAt,
-          requestRating: true,
-        },
+        ...NotificationTemplates.DELIVERY_COMPLETED(
+          delivery._id,
+          delivery.referenceId
+        ),
       });
     }
+
 
     await session.commitTransaction();
     session.endSession();
@@ -1505,13 +1516,38 @@ export const cancelDelivery = async (req, res) => {
       reason: reason,
     };
 
-    // If driver was assigned, make them available
-    if (delivery.driverId) {
+   if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId);
       if (driver) {
         driver.currentDeliveryId = null;
         driver.isAvailable = true;
         await driver.save();
+
+        // ✅ NOTIFY DRIVER: Delivery cancelled
+        const driverUser = await User.findById(driver.userId);
+        if (driverUser) {
+          await sendNotification({
+            userId: driverUser._id,
+            ...NotificationTemplates.CUSTOMER_CANCELLED(
+              delivery._id,
+              reason
+            ),
+          });
+        }
+      }
+    }
+
+    // ✅ NOTIFY CUSTOMER: Delivery cancelled (if cancelled by driver)
+    if (user.role === 'driver') {
+      const customer = await User.findById(delivery.customerId);
+      if (customer) {
+        await sendNotification({
+          userId: customer._id,
+          ...NotificationTemplates.DELIVERY_CANCELLED(
+            delivery._id,
+            reason
+          ),
+        });
       }
     }
 
@@ -1611,6 +1647,16 @@ export const rateDelivery = async (req, res) => {
           driver.earnings = (driver.earnings || 0) + tip;
         }
 
+         if (driverUser) {
+          await sendNotification({
+            userId: driverUser._id,
+            ...NotificationTemplates.RATING_RECEIVED(
+              delivery._id,
+              rating,
+              review
+            ),
+          });
+        }
         await driver.save();
       }
     }

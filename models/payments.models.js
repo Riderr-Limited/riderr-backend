@@ -14,17 +14,17 @@ const paymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true, // Added index here
+      index: true, 
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
-      index: true, // Added index here
+      index: true, 
     },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Company',
-      index: true, // Added index here
+      index: true, 
     },
 
     // Payment Details
