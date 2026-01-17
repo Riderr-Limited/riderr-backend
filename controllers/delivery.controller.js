@@ -189,7 +189,7 @@ export const createDeliveryRequest = async (req, res) => {
       itemType: itemType || "parcel",
     });
 
-    // Generate unique reference ID (PER REQUEST)
+    // Generate unique reference ID
     const referenceId = `RID-${Date.now()}-${crypto
       .randomBytes(3)
       .toString("hex")
@@ -201,8 +201,6 @@ export const createDeliveryRequest = async (req, res) => {
       customerId: customer._id,
       customerName: customer.name,
       customerPhone: customer.phone,
-
-      // IMPORTANT: Add companyId as null initially
       companyId: null, // Will be set when driver accepts
 
       pickup: {
@@ -252,7 +250,8 @@ export const createDeliveryRequest = async (req, res) => {
     const delivery = new Delivery(deliveryData);
     await delivery.save();
 
-       await sendNotification({
+    // ✅ NOTIFY CUSTOMER: Delivery created
+    await sendNotification({
       userId: customer._id,
       ...NotificationTemplates.DELIVERY_CREATED(
         delivery._id,
@@ -270,20 +269,6 @@ export const createDeliveryRequest = async (req, res) => {
         { "currentLocation.lat": { $exists: true } },
       ],
     }).populate("userId", "name phone avatarUrl");
-
-     for (const driver of driversNearPickup) {
-      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
-        delivery._id,
-        distanceToPickup,
-        delivery.fare.totalFare
-      );
-      
-      await sendNotification({
-        userId: driver.userId._id,
-        ...template,
-      });
-    }
-
 
     // Filter drivers by distance from pickup
     const driversNearPickup = nearbyDrivers.filter((driver) => {
@@ -316,19 +301,42 @@ export const createDeliveryRequest = async (req, res) => {
       return distanceToPickup <= 10; // 10km radius
     });
 
-    // Notify nearby drivers
+    // ✅ NOTIFY NEARBY DRIVERS: New delivery available
     for (const driver of driversNearPickup) {
+      // Calculate distance for this specific driver
+      let driverLat, driverLng;
+      
+      if (
+        driver.location &&
+        driver.location.coordinates &&
+        driver.location.coordinates.length >= 2
+      ) {
+        driverLng = driver.location.coordinates[0];
+        driverLat = driver.location.coordinates[1];
+      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        driverLat = driver.currentLocation.lat;
+        driverLng = driver.currentLocation.lng;
+      } else if (driver.lat && driver.lng) {
+        driverLat = driver.lat;
+        driverLng = driver.lng;
+      }
+
+      const distanceToPickup = calculateDistance(
+        parseFloat(pickupLat),
+        parseFloat(pickupLng),
+        driverLat,
+        driverLng
+      );
+
+      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
+        delivery._id,
+        distanceToPickup,
+        delivery.fare.totalFare
+      );
+      
       await sendNotification({
         userId: driver.userId._id,
-        title: "📦 New Delivery Request",
-        message: `New delivery available near you`,
-        data: {
-          type: "new_delivery",
-          deliveryId: delivery._id,
-          pickup: delivery.pickup,
-          fare: delivery.fare.totalFare,
-          distance: delivery.estimatedDistanceKm,
-        },
+        ...template,
       });
     }
 
@@ -340,7 +348,7 @@ export const createDeliveryRequest = async (req, res) => {
           _id: delivery._id,
           referenceId: delivery.referenceId,
           status: delivery.status,
-          companyId: delivery.companyId, // Include companyId in response
+          companyId: delivery.companyId,
           pickup: delivery.pickup,
           dropoff: delivery.dropoff,
           recipientName: delivery.recipientName,
