@@ -63,6 +63,22 @@ const CompanySchema = new mongoose.Schema(
         default: [0, 0]
       }
     },
+     paystackSubaccountCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    bankAccount: {
+      bankCode: String,
+      accountNumber: String,
+      accountName: String,
+      bankName: String,
+    },
+    paymentSetupComplete: {
+      type: Boolean,
+      default: false,
+    },
     
     // Deprecated fields (keep for backward compatibility)
     lat: Number,

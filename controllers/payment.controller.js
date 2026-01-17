@@ -1,4 +1,4 @@
-// controllers/payment.controller.js - FIXED VERSION
+// controllers/payment.controller.js - ESCROW VERSION
 import Payment from '../models/payments.models.js';
 import Delivery from '../models/delivery.models.js';
 import Driver from '../models/riders.models.js';
@@ -10,7 +10,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 
 /**
- * @desc    Initialize payment for delivery
+ * @desc    Initialize escrow payment for delivery
  * @route   POST /api/payments/initialize
  * @access  Private (Customer)
  */
@@ -46,6 +46,14 @@ export const initializeDeliveryPayment = async (req, res) => {
       });
     }
 
+    // Check company has paystack subaccount
+    if (!delivery.companyId || !delivery.companyId.paystackSubaccountCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company payment account not configured. Please contact support.',
+      });
+    }
+
     // Check if payment already exists
     const existingPayment = await Payment.findOne({
       deliveryId: delivery._id,
@@ -67,22 +75,28 @@ export const initializeDeliveryPayment = async (req, res) => {
 
     const amount = delivery.fare.totalFare;
     
-    // Calculate split
-    const platformFeePercentage = 10; // 10% platform fee
+    // Calculate split - Platform gets 10%, Company gets 90%
+    const platformFeePercentage = 10;
     const platformFee = (amount * platformFeePercentage) / 100;
     const companyAmount = amount - platformFee;
 
-    // Initialize payment with Paystack
+    // Initialize payment with Paystack using SPLIT PAYMENT
     const paymentResult = await initializePayment({
       email: customer.email,
       amount: amount,
+      subaccount: delivery.companyId.paystackSubaccountCode, // Company's subaccount
+      transaction_charge: platformFee, // Your 10% platform fee
+      bearer: 'account', // Company bears the transaction fee
       metadata: {
         deliveryId: delivery._id.toString(),
         customerId: customer._id.toString(),
         driverId: delivery.driverId._id.toString(),
-        companyId: delivery.companyId?._id.toString(),
-        type: 'delivery_payment',
+        companyId: delivery.companyId._id.toString(),
+        companyName: delivery.companyId.name,
+        type: 'delivery_payment_escrow',
         customerName: customer.name,
+        platformFee: platformFee,
+        companyAmount: companyAmount,
       },
     });
 
@@ -99,7 +113,7 @@ export const initializeDeliveryPayment = async (req, res) => {
       deliveryId: delivery._id,
       customerId: customer._id,
       driverId: delivery.driverId._id,
-      companyId: delivery.companyId?._id,
+      companyId: delivery.companyId._id,
       amount: amount,
       currency: 'NGN',
       paystackReference: paymentResult.data.reference,
@@ -109,13 +123,16 @@ export const initializeDeliveryPayment = async (req, res) => {
       paymentMethod: 'card',
       companyAmount: companyAmount,
       platformFee: platformFee,
+      paymentType: 'escrow', // Mark as escrow payment
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
+        companySubaccount: delivery.companyId.paystackSubaccountCode,
+        splitType: 'subaccount',
       },
     });
 
-     await payment.save();
+    await payment.save();
 
     // Update delivery payment status
     delivery.payment.status = 'pending_payment';
@@ -124,18 +141,26 @@ export const initializeDeliveryPayment = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Payment initialized successfully',
+      message: 'Escrow payment initialized successfully',
       data: {
         paymentId: payment._id,
         authorizationUrl: paymentResult.data.authorization_url,
         accessCode: paymentResult.data.access_code,
         reference: paymentResult.data.reference,
         amount: amount,
+        companyAmount: companyAmount,
+        platformFee: platformFee,
         currency: 'NGN',
+        paymentInfo: {
+          totalAmount: `₦${amount.toLocaleString()}`,
+          companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
+          platformFee: `₦${platformFee.toLocaleString()} (10%)`,
+          companyName: delivery.companyId.name,
+        },
       },
     });
   } catch (error) {
-    console.error('❌ Initialize payment error:', error);
+    console.error('❌ Initialize escrow payment error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to initialize payment',
@@ -145,7 +170,7 @@ export const initializeDeliveryPayment = async (req, res) => {
 };
 
 /**
- * @desc    Verify payment
+ * @desc    Verify escrow payment
  * @route   GET /api/payments/verify/:reference
  * @access  Private
  */
@@ -157,7 +182,7 @@ export const verifyDeliveryPayment = async (req, res) => {
     const { reference } = req.params;
     const user = req.user;
 
-    console.log(`🔍 Verifying payment: ${reference}`);
+    console.log(`🔍 Verifying escrow payment: ${reference}`);
 
     // Verify with Paystack
     const verificationResult = await verifyPayment(reference);
@@ -223,7 +248,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       });
     }
 
-    // Update payment record
+    // Update payment record with escrow details
     payment.status = 'successful';
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
@@ -234,6 +259,9 @@ export const verifyDeliveryPayment = async (req, res) => {
       bank: paystackData.authorization?.bank,
       lastFourDigits: paystackData.authorization?.last4,
       authorizationCode: paystackData.authorization?.authorization_code,
+      // Escrow split details from Paystack
+      subaccountAmount: paystackData.subaccount?.amount,
+      platformAmount: paystackData.fees,
     };
     payment.webhookData = paystackData;
 
@@ -246,26 +274,48 @@ export const verifyDeliveryPayment = async (req, res) => {
       delivery.payment.status = 'paid';
       delivery.payment.paidAt = new Date();
       delivery.payment.paystackReference = reference;
+      delivery.status = 'in_transit'; // Auto-start delivery after payment
       await delivery.save({ session });
     }
 
-    // Update company earnings (payment goes to company, not individual driver)
+    // Update company earnings (money is already in their subaccount)
     if (payment.companyId) {
       const company = await Company.findById(payment.companyId).session(session);
       if (company) {
+        // Track total earnings (money goes directly to their account)
         company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
-        company.pendingPayouts = (company.pendingPayouts || 0) + payment.companyAmount;
+        company.totalDeliveries = (company.totalDeliveries || 0) + 1;
+        company.lastPaymentReceived = new Date();
         await company.save({ session });
       }
     }
 
-    // Track driver delivery for statistics only (not direct earnings)
+    // Track driver delivery statistics
     if (payment.driverId) {
       const driver = await Driver.findById(payment.driverId).session(session);
       if (driver) {
-        // Don't update driver earnings directly - company pays drivers separately
         driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
+        driver.lastDeliveryDate = new Date();
         await driver.save({ session });
+      }
+    }
+
+    // Notify company
+    if (payment.companyId) {
+      const company = await Company.findById(payment.companyId).populate('ownerId');
+      if (company && company.ownerId) {
+        await sendNotification({
+          userId: company.ownerId._id,
+          title: '💰 Payment Received',
+          message: `Payment of ₦${payment.companyAmount.toLocaleString()} received in your account for delivery #${delivery._id.toString().slice(-6)}`,
+          data: {
+            type: 'escrow_payment_received',
+            deliveryId: delivery._id,
+            paymentId: payment._id,
+            amount: payment.companyAmount,
+            platformFee: payment.platformFee,
+          },
+        });
       }
     }
 
@@ -275,8 +325,8 @@ export const verifyDeliveryPayment = async (req, res) => {
       if (driver && driver.userId) {
         await sendNotification({
           userId: driver.userId._id,
-          title: '💰 Payment Received',
-          message: `Payment of ₦${payment.amount.toLocaleString()} has been confirmed for your delivery`,
+          title: '✅ Payment Confirmed - Start Delivery',
+          message: `Payment confirmed! You can now start the delivery. Company will pay you separately.`,
           data: {
             type: 'payment_confirmed',
             deliveryId: delivery._id,
@@ -287,25 +337,41 @@ export const verifyDeliveryPayment = async (req, res) => {
       }
     }
 
+    // Notify customer
+    await sendNotification({
+      userId: payment.customerId,
+      title: '✅ Payment Successful',
+      message: `Your payment of ₦${payment.amount.toLocaleString()} was successful. Your delivery is now in progress.`,
+      data: {
+        type: 'payment_successful',
+        deliveryId: delivery._id,
+        paymentId: payment._id,
+        amount: payment.amount,
+      },
+    });
+
     await session.commitTransaction();
     session.endSession();
 
     res.status(200).json({
       success: true,
-      message: 'Payment verified successfully',
+      message: 'Escrow payment verified successfully',
       data: {
         paymentId: payment._id,
         status: payment.status,
         amount: payment.amount,
+        companyAmount: payment.companyAmount,
+        platformFee: payment.platformFee,
         paidAt: payment.paidAt,
         deliveryId: payment.deliveryId,
         reference: payment.paystackReference,
+        message: 'Payment sent directly to company account with 10% platform fee deducted',
       },
     });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error('❌ Verify payment error:', error);
+    console.error('❌ Verify escrow payment error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to verify payment',
@@ -315,14 +381,14 @@ export const verifyDeliveryPayment = async (req, res) => {
 };
 
 /**
- * @desc    Handle Paystack webhook
+ * @desc    Handle Paystack webhook for escrow payments
  * @route   POST /api/payments/webhook
  * @access  Public (Paystack)
  */
 export const handlePaystackWebhook = async (req, res) => {
   try {
     const hash = crypto
-      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
+      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY || 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac')
       .update(JSON.stringify(req.body))
       .digest('hex');
 
@@ -348,6 +414,16 @@ export const handlePaystackWebhook = async (req, res) => {
         payment.paidAt = new Date();
         payment.verifiedAt = new Date();
         payment.webhookData = event.data;
+        
+        // Store split payment info from webhook
+        if (event.data.subaccount) {
+          payment.metadata = {
+            ...payment.metadata,
+            subaccountAmount: event.data.subaccount.amount,
+            platformAmount: event.data.fees,
+          };
+        }
+        
         await payment.save();
 
         // Update delivery
@@ -355,10 +431,22 @@ export const handlePaystackWebhook = async (req, res) => {
         if (delivery) {
           delivery.payment.status = 'paid';
           delivery.payment.paidAt = new Date();
+          delivery.status = 'in_transit';
           await delivery.save();
         }
 
-        console.log('✅ Payment updated via webhook:', reference);
+        // Update company
+        if (payment.companyId) {
+          const company = await Company.findById(payment.companyId);
+          if (company) {
+            company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
+            company.totalDeliveries = (company.totalDeliveries || 0) + 1;
+            company.lastPaymentReceived = new Date();
+            await company.save();
+          }
+        }
+
+        console.log('✅ Escrow payment updated via webhook:', reference);
       }
     }
 
@@ -389,7 +477,7 @@ export const getPaymentDetails = async (req, res) => {
         path: 'driverId',
         populate: { path: 'userId', select: 'name phone' },
       })
-      .populate('companyId', 'name');
+      .populate('companyId', 'name email paystackSubaccountCode');
 
     if (!payment) {
       return res.status(404).json({
@@ -401,9 +489,11 @@ export const getPaymentDetails = async (req, res) => {
     // Check access permissions
     const isCustomer = user._id.toString() === payment.customerId._id.toString();
     const isDriver = user.role === 'driver';
+    const isCompanyOwner = user.role === 'company' && payment.companyId && 
+                           payment.companyId.ownerId?.toString() === user._id.toString();
     const isAdmin = user.role === 'admin';
 
-    if (!isCustomer && !isDriver && !isAdmin) {
+    if (!isCustomer && !isDriver && !isCompanyOwner && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Access denied',
@@ -412,7 +502,18 @@ export const getPaymentDetails = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: payment,
+      data: {
+        ...payment.toObject(),
+        splitInfo: {
+          totalAmount: payment.amount,
+          companyReceives: payment.companyAmount,
+          platformFee: payment.platformFee,
+          percentage: {
+            company: '90%',
+            platform: '10%',
+          },
+        },
+      },
     });
   } catch (error) {
     console.error('❌ Get payment details error:', error);
@@ -443,6 +544,7 @@ export const getMyPayments = async (req, res) => {
     const [payments, total] = await Promise.all([
       Payment.find(query)
         .populate('deliveryId', 'pickup dropoff status')
+        .populate('companyId', 'name')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),

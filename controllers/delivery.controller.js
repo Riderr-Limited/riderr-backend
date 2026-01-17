@@ -1586,6 +1586,11 @@ export const cancelDelivery = async (req, res) => {
  * @route   POST /api/deliveries/:deliveryId/rate
  * @access  Private (Customer)
  */
+/**
+ * @desc    Rate delivery
+ * @route   POST /api/deliveries/:deliveryId/rate
+ * @access  Private (Customer)
+ */
 export const rateDelivery = async (req, res) => {
   try {
     const customer = req.user;
@@ -1636,7 +1641,7 @@ export const rateDelivery = async (req, res) => {
 
     await delivery.save();
 
-    // Update driver rating
+    // Update driver rating and notify
     if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId);
       if (driver) {
@@ -1655,7 +1660,11 @@ export const rateDelivery = async (req, res) => {
           driver.earnings = (driver.earnings || 0) + tip;
         }
 
-         if (driverUser) {
+        await driver.save();
+
+        // ✅ NOTIFY DRIVER: Rating received
+        const driverUser = await User.findById(driver.userId);
+        if (driverUser) {
           await sendNotification({
             userId: driverUser._id,
             ...NotificationTemplates.RATING_RECEIVED(
@@ -1665,7 +1674,6 @@ export const rateDelivery = async (req, res) => {
             ),
           });
         }
-        await driver.save();
       }
     }
 
