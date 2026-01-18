@@ -4,8 +4,8 @@ import Driver from "../models/riders.models.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
+import nodemailer from "nodemailer";
 import { validationResult } from "express-validator";
-import verificationService from "../services/verificationService.js";
 
 /**
  * -------------------------------
@@ -15,9 +15,8 @@ import verificationService from "../services/verificationService.js";
 
 // Generate random verification code
 const generateVerificationCode = (length = 6) => {
-  return verificationService.generateVerificationCode(length);
+  return Math.floor(100000 + Math.random() * 900000).toString();
 };
-
 /**
  * @desc    Check verification status
  * @route   GET /api/auth/check-verification
@@ -79,6 +78,146 @@ const generateRefreshToken = (payload) => {
       "fallback-secret-key-change-in-production",
     { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" }
   );
+};
+
+// Email transporter
+const createEmailTransporter = () => {
+  try {
+    return nodemailer.createTransporter({
+      host: process.env.EMAIL_HOST || "smtp.gmail.com",
+      port: parseInt(process.env.EMAIL_PORT) || 587,
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER || "test@example.com",
+        pass: process.env.EMAIL_PASSWORD || "testpassword",
+      },
+      tls: { rejectUnauthorized: false },
+    });
+  } catch (error) {
+    console.log("📧 Email transporter not configured, running in dev mode");
+    return null;
+  }
+};
+
+// Send verification email
+const sendVerificationEmail = async (email, code, name) => {
+  try {
+    const transporter = createEmailTransporter();
+
+    if (!transporter) {
+      console.log(`📧 DEV MODE: Email verification code for ${email}: ${code}`);
+      return { success: true, devMode: true };
+    }
+
+    const mailOptions = {
+      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
+      to: email,
+      subject: "Your Riderr Verification Code",
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #337bff, #5a95ff); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; color: white; }
+            .content { padding: 30px; background: #f8f9fa; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0; }
+            .code { background: #337bff; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; text-align: center; }
+            .footer { margin-top: 30px; color: #999; font-size: 12px; text-align: center; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">Riderr</h1>
+              <p style="margin: 10px 0 0 0;">Email Verification</p>
+            </div>
+            <div class="content">
+              <h2>Hello ${name},</h2>
+              <p>Your email verification code is:</p>
+              <div class="code">${code}</div>
+              <p>This code expires in 10 minutes.</p>
+              <p>If you didn't request this, please ignore this email.</p>
+            </div>
+            <div class="footer">
+              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent to ${email}`);
+    return { success: true };
+  } catch (error) {
+    console.error("❌ Email error:", error.message);
+    console.log(`📧 FALLBACK: Email verification code for ${email}: ${code}`);
+    return { success: true, devMode: true };
+  }
+};
+
+// Send OTP via email (for password reset)
+const sendOTPEmail = async (email, otp, name) => {
+  try {
+    const transporter = createEmailTransporter();
+
+    if (!transporter) {
+      console.log(`📧 DEV MODE: OTP for ${email}: ${otp}`);
+      return { success: true, devMode: true };
+    }
+
+    const mailOptions = {
+      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
+      to: email,
+      subject: "Password Reset OTP - Riderr",
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #337bff, #5a95ff); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; color: white; }
+            .content { padding: 30px; background: #f8f9fa; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0; }
+            .code { background: #337bff; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; text-align: center; }
+            .footer { margin-top: 30px; color: #999; font-size: 12px; text-align: center; }
+            .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">Riderr</h1>
+              <p style="margin: 10px 0 0 0;">Password Reset</p>
+            </div>
+            <div class="content">
+              <h2>Hello ${name},</h2>
+              <p>Your password reset OTP is:</p>
+              <div class="code">${otp}</div>
+              <div class="warning">
+                <strong>⚠️ Security Alert:</strong> This OTP expires in 10 minutes. If you didn't request this, please ignore this email and contact support immediately.
+              </div>
+              <p>For security reasons, do not share this OTP with anyone.</p>
+            </div>
+            <div class="footer">
+              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Password reset OTP sent to ${email}`);
+    return { success: true };
+  } catch (error) {
+    console.error("❌ OTP email error:", error.message);
+    console.log(`📧 FALLBACK: Password reset OTP for ${email}: ${otp}`);
+    return { success: true, devMode: true };
+  }
 };
 
 /**
@@ -268,20 +407,9 @@ export const signUp = async (req, res) => {
 
     session.endSession();
 
-    // ✅ SEND VERIFICATION AFTER COMMIT (VERY IMPORTANT)
+    // ✅ SEND EMAIL AFTER COMMIT (VERY IMPORTANT)
     if (requiresVerification) {
-      const verificationResult = await verificationService.sendDualVerification(
-        newUser.email, 
-        newUser.phone, 
-        emailCode, 
-        newUser.name
-      );
-      
-      console.log('📧📱 Verification sent:', verificationResult);
-      
-      if (!verificationResult.overallSuccess) {
-        console.warn('⚠️ Verification delivery failed, but user was created');
-      }
+      await sendVerificationEmail(newUser.email, emailCode, newUser.name);
     }
 
     // ✅ Generate access token AFTER commit
@@ -293,7 +421,7 @@ export const signUp = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Account created. Verification code sent via email and SMS.",
+      message: "Account created. Email verification code sent.",
       data: {
         accessToken,
         refreshToken: newUser.refreshToken,
@@ -444,6 +572,9 @@ export const signUpCompanyDriver = async (req, res) => {
       { session }
     );
 
+    // Send verification email
+    await sendVerificationEmail(email, emailCode, name);
+
     // Generate tokens for the driver
     const accessToken = generateAccessToken({
       userId: newUser[0]._id,
@@ -461,19 +592,9 @@ export const signUpCompanyDriver = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // Send dual verification (email + SMS)
-    const verificationResult = await verificationService.sendDualVerification(
-      email, 
-      newUser[0].phone, 
-      emailCode, 
-      name
-    );
-    
-    console.log('📧📱 Company driver verification sent:', verificationResult);
-
     res.status(201).json({
       success: true,
-      message: "Driver account created successfully. Verification code sent via email and SMS.",
+      message: "Driver account created successfully. Verification code sent.",
       data: {
         accessToken,
         refreshToken,
@@ -590,6 +711,17 @@ export const signIn = async (req, res) => {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.lastLoginAt = new Date();
+
+    // For company admins, check company status
+    // if (user.role === "company_admin" && user.companyId) {
+    //   if (user.companyId.status !== "approved") {
+    //     return res.status(403).json({
+    //       success: false,
+    //       message: "Company not approved yet",
+    //       companyStatus: user.companyId.status
+    //     });
+    //   }
+    // }
 
     // Generate tokens
     const accessToken = generateAccessToken({
@@ -797,34 +929,14 @@ export const forgotPassword = async (req, res) => {
     user.resetPasswordExpires = otpExpiry;
     await user.save();
 
-    // Send dual password reset (email + SMS)
-    const resetResult = await verificationService.sendDualPasswordReset(
-      email, 
-      user.phone, 
-      otp, 
-      user.name
-    );
-    
-    console.log('📧📱 Password reset sent:', resetResult);
-    
-    const deliveryMethods = [];
-    if (resetResult.email.success) deliveryMethods.push('email');
-    if (resetResult.sms.success) deliveryMethods.push('SMS');
-    
-    const deliveryMessage = deliveryMethods.length > 0 
-      ? `Password reset code sent via ${deliveryMethods.join(' and ')}`
-      : 'Password reset code generated (check server logs for dev mode)';
+    // Send OTP email
+    await sendOTPEmail(email, otp, user.name);
 
     res.status(200).json({
       success: true,
-      message: deliveryMessage,
-      deliveryStatus: {
-        email: resetResult.email.success,
-        sms: resetResult.sms.success,
-        overall: resetResult.overallSuccess
-      },
+      message: "Password reset code sent to your email",
       ...(process.env.NODE_ENV === "development" && {
-        debug: { otp, verificationResult: resetResult },
+        debug: { otp },
       }),
     });
   } catch (error) {
@@ -998,32 +1110,12 @@ export const resendVerification = async (req, res) => {
     user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
 
-    // Send new verification code via both email and SMS
-    const verificationResult = await verificationService.sendDualVerification(
-      email, 
-      user.phone, 
-      newCode, 
-      user.name
-    );
-    
-    console.log('📧📱 Resend verification sent:', verificationResult);
-    
-    const deliveryMethods = [];
-    if (verificationResult.email.success) deliveryMethods.push('email');
-    if (verificationResult.sms.success) deliveryMethods.push('SMS');
-    
-    const deliveryMessage = deliveryMethods.length > 0 
-      ? `Verification code resent via ${deliveryMethods.join(' and ')}`
-      : 'Verification code generated (check server logs for dev mode)';
+    // Send verification email
+    await sendVerificationEmail(email, newCode, user.name);
 
     res.status(200).json({
       success: true,
-      message: deliveryMessage,
-      deliveryStatus: {
-        email: verificationResult.email.success,
-        sms: verificationResult.sms.success,
-        overall: verificationResult.overallSuccess
-      }
+      message: "Verification code resent to your email",
     });
   } catch (error) {
     console.error("❌ Resend verification error:", error);
@@ -1276,27 +1368,4 @@ export const testEndpoint = async (req, res) => {
     message: "Auth endpoint is working!",
     timestamp: new Date().toISOString(),
   });
-};
-
-/**
- * @desc    Get verification service status
- * @route   GET /api/auth/verification-status
- * @access  Public
- */
-export const getVerificationServiceStatus = async (req, res) => {
-  try {
-    const status = verificationService.getServiceStatus();
-    
-    res.status(200).json({
-      success: true,
-      message: "Verification service status",
-      data: status
-    });
-  } catch (error) {
-    console.error("❌ Get verification status error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get verification status",
-    });
-  }
 };

@@ -14,7 +14,8 @@ import {
   getMe,
   updateProfile,
   testEndpoint,
-  checkVerificationStatus
+  checkVerificationStatus,
+  getVerificationServiceStatus
 } from "../controllers/auth.controller.js";
 import { protect, authorize } from "../middlewares/auth.middleware.js";
 import {
@@ -38,6 +39,7 @@ router.get("/test", testEndpoint);
 
 // Verification status
 router.get("/check-verification", checkVerificationStatus);
+router.get("/verification-status", getVerificationServiceStatus);
 
 // Registration & Login
 router.post("/signup", validateSignup, signUp);
