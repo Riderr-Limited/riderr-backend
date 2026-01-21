@@ -7,6 +7,7 @@ import { validationResult } from "express-validator";
 import { calculateFare } from "../utils/fareCalculator.js";
 import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 import crypto from "crypto";
+import { smartReverseGeocode } from "../utils/geocoding.js";
 
 /**
  * UTILITY FUNCTIONS
@@ -121,255 +122,255 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
  *
  */
 
-export const createDeliveryRequest = async (req, res) => {
-  try {
-    const customer = req.user;
-
-    if (customer.role !== "customer") {
-      return res.status(403).json({
-        success: false,
-        message: "Only customers can create deliveries",
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: errors.array(),
-      });
-    }
-
-    const {
-      pickupAddress,
-      pickupLat,
-      pickupLng,
-      pickupName,
-      pickupPhone,
-      dropoffAddress,
-      dropoffLat,
-      dropoffLng,
-      recipientName,
-      recipientPhone,
-      itemType,
-      itemDescription,
-      itemWeight,
-      paymentMethod,
-    } = req.body;
-
-    // Validate coordinates
-    if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
-      return res.status(400).json({
-        success: false,
-        message: "Pickup and dropoff coordinates are required",
-      });
-    }
-
-    // Validate recipient details
-    if (!recipientName || !recipientPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "Recipient name and phone are required",
-      });
-    }
-
-    // Calculate distance
-    const distance = calculateDistance(
-      parseFloat(pickupLat),
-      parseFloat(pickupLng),
-      parseFloat(dropoffLat),
-      parseFloat(dropoffLng)
-    );
-
-    // Calculate fare
-    const fareDetails = calculateFare({
-      distance,
-      itemWeight: parseFloat(itemWeight) || 1,
-      itemType: itemType || "parcel",
-    });
-
-    // Generate unique reference ID
-    const referenceId = `RID-${Date.now()}-${crypto
-      .randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
-
-    // Create delivery object
-    const deliveryData = {
-      referenceId,
-      customerId: customer._id,
-      customerName: customer.name,
-      customerPhone: customer.phone,
-      companyId: null, // Will be set when driver accepts
-
-      pickup: {
-        address: pickupAddress,
-        lat: parseFloat(pickupLat),
-        lng: parseFloat(pickupLng),
-        name: pickupName || "Pickup Location",
-        phone: pickupPhone || customer.phone,
-      },
-
-      dropoff: {
-        address: dropoffAddress,
-        lat: parseFloat(dropoffLat),
-        lng: parseFloat(dropoffLng),
-        name: recipientName,
-        phone: recipientPhone,
-      },
-
-      recipientName: recipientName,
-      recipientPhone: recipientPhone,
-
-      itemDetails: {
-        type: itemType || "parcel",
-        description: itemDescription,
-        weight: parseFloat(itemWeight) || 1,
-      },
-
-      fare: {
-        baseFare: fareDetails.baseFare,
-        distanceFare: fareDetails.distanceFare,
-        totalFare: fareDetails.totalFare,
-        currency: "NGN",
-      },
-
-      estimatedDistanceKm: distance,
-      estimatedDurationMin: Math.ceil(distance * 3),
-
-      payment: {
-        method: paymentMethod || "cash",
-        status: paymentMethod === "cash" ? "pending" : "pending_payment",
-      },
-
-      status: "created",
-    };
-
-    // Create delivery
-    const delivery = new Delivery(deliveryData);
-    await delivery.save();
-
-    // ✅ NOTIFY CUSTOMER: Delivery created
-    await sendNotification({
-      userId: customer._id,
-      ...NotificationTemplates.DELIVERY_CREATED(
-        delivery._id,
-        delivery.referenceId
-      ),
-    });
-
-    // Find nearby drivers to notify them
-    const nearbyDrivers = await Driver.find({
-      isOnline: true,
-      isActive: true,
-      approvalStatus: "approved",
-      $or: [
-        { "location.coordinates": { $exists: true, $ne: [0, 0] } },
-        { "currentLocation.lat": { $exists: true } },
-      ],
-    }).populate("userId", "name phone avatarUrl");
-
-    // Filter drivers by distance from pickup
-    const driversNearPickup = nearbyDrivers.filter((driver) => {
-      let driverLat, driverLng;
-
-      // Get driver location from appropriate field
-      if (
-        driver.location &&
-        driver.location.coordinates &&
-        driver.location.coordinates.length >= 2
-      ) {
-        driverLng = driver.location.coordinates[0];
-        driverLat = driver.location.coordinates[1];
-      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-        driverLat = driver.currentLocation.lat;
-        driverLng = driver.currentLocation.lng;
-      } else if (driver.lat && driver.lng) {
-        driverLat = driver.lat;
-        driverLng = driver.lng;
-      } else {
-        return false;
-      }
-
-      const distanceToPickup = calculateDistance(
-        parseFloat(pickupLat),
-        parseFloat(pickupLng),
-        driverLat,
-        driverLng
-      );
-      return distanceToPickup <= 10; // 10km radius
-    });
-
-    // ✅ NOTIFY NEARBY DRIVERS: New delivery available
-    for (const driver of driversNearPickup) {
-      // Calculate distance for this specific driver
-      let driverLat, driverLng;
-      
-      if (
-        driver.location &&
-        driver.location.coordinates &&
-        driver.location.coordinates.length >= 2
-      ) {
-        driverLng = driver.location.coordinates[0];
-        driverLat = driver.location.coordinates[1];
-      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-        driverLat = driver.currentLocation.lat;
-        driverLng = driver.currentLocation.lng;
-      } else if (driver.lat && driver.lng) {
-        driverLat = driver.lat;
-        driverLng = driver.lng;
-      }
-
-      const distanceToPickup = calculateDistance(
-        parseFloat(pickupLat),
-        parseFloat(pickupLng),
-        driverLat,
-        driverLng
-      );
-
-      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
-        delivery._id,
-        distanceToPickup,
-        delivery.fare.totalFare
-      );
-      
-      await sendNotification({
-        userId: driver.userId._id,
-        ...template,
-      });
-    }
-
-    res.status(201).json({
-      success: true,
-      message: "Delivery request created successfully",
-      data: {
-        delivery: {
-          _id: delivery._id,
-          referenceId: delivery.referenceId,
-          status: delivery.status,
-          companyId: delivery.companyId,
-          pickup: delivery.pickup,
-          dropoff: delivery.dropoff,
-          recipientName: delivery.recipientName,
-          fare: delivery.fare,
-          estimatedDistanceKm: delivery.estimatedDistanceKm,
-          estimatedDurationMin: delivery.estimatedDurationMin,
-          createdAt: delivery.createdAt,
-          nearbyDriversCount: driversNearPickup.length,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("❌ Create delivery error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to create delivery request",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
+//export const createDeliveryRequest = async (req, res) => {
+//  try {
+//    const customer = req.user;
+//
+//    if (customer.role !== "customer") {
+//      return res.status(403).json({
+//        success: false,
+//        message: "Only customers can create deliveries",
+//      });
+//    }
+//
+//    const errors = validationResult(req);
+//    if (!errors.isEmpty()) {
+//      return res.status(400).json({
+//        success: false,
+//        message: "Validation failed",
+//        errors: errors.array(),
+//      });
+//    }
+//
+//    const {
+//      pickupAddress,
+//      pickupLat,
+//      pickupLng,
+//      pickupName,
+//      pickupPhone,
+//      dropoffAddress,
+//      dropoffLat,
+//      dropoffLng,
+//      recipientName,
+//      recipientPhone,
+//      itemType,
+//      itemDescription,
+//      itemWeight,
+//      paymentMethod,
+//    } = req.body;
+//
+//    // Validate coordinates
+//    if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+//      return res.status(400).json({
+//        success: false,
+//        message: "Pickup and dropoff coordinates are required",
+//      });
+//    }
+//
+//    // Validate recipient details
+//    if (!recipientName || !recipientPhone) {
+//      return res.status(400).json({
+//        success: false,
+//        message: "Recipient name and phone are required",
+//      });
+//    }
+//
+//    // Calculate distance
+//    const distance = calculateDistance(
+//      parseFloat(pickupLat),
+//      parseFloat(pickupLng),
+//      parseFloat(dropoffLat),
+//      parseFloat(dropoffLng)
+//    );
+//
+//    // Calculate fare
+//    const fareDetails = calculateFare({
+//      distance,
+//      itemWeight: parseFloat(itemWeight) || 1,
+//      itemType: itemType || "parcel",
+//    });
+//
+//    // Generate unique reference ID
+//    const referenceId = `RID-${Date.now()}-${crypto
+//      .randomBytes(3)
+//      .toString("hex")
+//      .toUpperCase()}`;
+//
+//    // Create delivery object
+//    const deliveryData = {
+//      referenceId,
+//      customerId: customer._id,
+//      customerName: customer.name,
+//      customerPhone: customer.phone,
+//      companyId: null, // Will be set when driver accepts
+//
+//      pickup: {
+//        address: pickupAddress,
+//        lat: parseFloat(pickupLat),
+//        lng: parseFloat(pickupLng),
+//        name: pickupName || "Pickup Location",
+//        phone: pickupPhone || customer.phone,
+//      },
+//
+//      dropoff: {
+//        address: dropoffAddress,
+//        lat: parseFloat(dropoffLat),
+//        lng: parseFloat(dropoffLng),
+//        name: recipientName,
+//        phone: recipientPhone,
+//      },
+//
+//      recipientName: recipientName,
+//      recipientPhone: recipientPhone,
+//
+//      itemDetails: {
+//        type: itemType || "parcel",
+//        description: itemDescription,
+//        weight: parseFloat(itemWeight) || 1,
+//      },
+//
+//      fare: {
+//        baseFare: fareDetails.baseFare,
+//        distanceFare: fareDetails.distanceFare,
+//        totalFare: fareDetails.totalFare,
+//        currency: "NGN",
+//      },
+//
+//      estimatedDistanceKm: distance,
+//      estimatedDurationMin: Math.ceil(distance * 3),
+//
+//      payment: {
+//        method: paymentMethod || "cash",
+//        status: paymentMethod === "cash" ? "pending" : "pending_payment",
+//      },
+//
+//      status: "created",
+//    };
+//
+//    // Create delivery
+//    const delivery = new Delivery(deliveryData);
+//    await delivery.save();
+//
+//    // ✅ NOTIFY CUSTOMER: Delivery created
+//    await sendNotification({
+//      userId: customer._id,
+//      ...NotificationTemplates.DELIVERY_CREATED(
+//        delivery._id,
+//        delivery.referenceId
+//      ),
+//    });
+//
+//    // Find nearby drivers to notify them
+//    const nearbyDrivers = await Driver.find({
+//      isOnline: true,
+//      isActive: true,
+//      approvalStatus: "approved",
+//      $or: [
+//        { "location.coordinates": { $exists: true, $ne: [0, 0] } },
+//        { "currentLocation.lat": { $exists: true } },
+//      ],
+//    }).populate("userId", "name phone avatarUrl");
+//
+//    // Filter drivers by distance from pickup
+//    const driversNearPickup = nearbyDrivers.filter((driver) => {
+//      let driverLat, driverLng;
+//
+//      // Get driver location from appropriate field
+//      if (
+//        driver.location &&
+//        driver.location.coordinates &&
+//        driver.location.coordinates.length >= 2
+//      ) {
+//        driverLng = driver.location.coordinates[0];
+//        driverLat = driver.location.coordinates[1];
+//      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+//        driverLat = driver.currentLocation.lat;
+//        driverLng = driver.currentLocation.lng;
+//      } else if (driver.lat && driver.lng) {
+//        driverLat = driver.lat;
+//        driverLng = driver.lng;
+//      } else {
+//        return false;
+//      }
+//
+//      const distanceToPickup = calculateDistance(
+//        parseFloat(pickupLat),
+//        parseFloat(pickupLng),
+//        driverLat,
+//        driverLng
+//      );
+//      return distanceToPickup <= 10; // 10km radius
+//    });
+//
+//    // ✅ NOTIFY NEARBY DRIVERS: New delivery available
+//    for (const driver of driversNearPickup) {
+//      // Calculate distance for this specific driver
+//      let driverLat, driverLng;
+//      
+//      if (
+//        driver.location &&
+//        driver.location.coordinates &&
+//        driver.location.coordinates.length >= 2
+//      ) {
+//        driverLng = driver.location.coordinates[0];
+//        driverLat = driver.location.coordinates[1];
+//      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+//        driverLat = driver.currentLocation.lat;
+//        driverLng = driver.currentLocation.lng;
+//      } else if (driver.lat && driver.lng) {
+//        driverLat = driver.lat;
+//        driverLng = driver.lng;
+//      }
+//
+//      const distanceToPickup = calculateDistance(
+//        parseFloat(pickupLat),
+//        parseFloat(pickupLng),
+//        driverLat,
+//        driverLng
+//      );
+//
+//      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
+//        delivery._id,
+//        distanceToPickup,
+//        delivery.fare.totalFare
+//      );
+//      
+//      await sendNotification({
+//        userId: driver.userId._id,
+//        ...template,
+//      });
+//    }
+//
+//    res.status(201).json({
+//      success: true,
+//      message: "Delivery request created successfully",
+//      data: {
+//        delivery: {
+//          _id: delivery._id,
+//          referenceId: delivery.referenceId,
+//          status: delivery.status,
+//          companyId: delivery.companyId,
+//          pickup: delivery.pickup,
+//          dropoff: delivery.dropoff,
+//          recipientName: delivery.recipientName,
+//          fare: delivery.fare,
+//          estimatedDistanceKm: delivery.estimatedDistanceKm,
+//          estimatedDurationMin: delivery.estimatedDurationMin,
+//          createdAt: delivery.createdAt,
+//          nearbyDriversCount: driversNearPickup.length,
+//        },
+//      },
+//    });
+//  } catch (error) {
+//    console.error("❌ Create delivery error:", error);
+//    res.status(500).json({
+//      success: false,
+//      message: "Failed to create delivery request",
+//      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+//    });
+//  }
+//};
+//
 /**
  * @desc    Get nearby available drivers for customer
  * @route   GET /api/deliveries/nearby-drivers
@@ -1659,7 +1660,7 @@ export const rateDelivery = async (req, res) => {
         if (tip && tip > 0) {
           driver.earnings = (driver.earnings || 0) + tip;
         }
-
+ 
         await driver.save();
 
         // ✅ NOTIFY DRIVER: Rating received
@@ -2653,6 +2654,619 @@ export const getNearbyAvailableDrivers = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to find nearby drivers",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+ 
+
+/**
+ * @desc    Calculate delivery fare with address resolution
+ * @route   POST /api/deliveries/calculate-fare
+ * @access  Private (Customer)
+ */
+export const calculateDeliveryFare = async (req, res) => {
+  try {
+    const customer = req.user;
+
+    if (customer.role !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only customers can calculate delivery fares",
+      });
+    }
+
+    const {
+      pickupLat,
+      pickupLng,
+      dropoffLat,
+      dropoffLng,
+      itemType,
+      itemWeight,
+    } = req.body;
+
+    // Validate required coordinates
+    if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+      return res.status(400).json({
+        success: false,
+        message: "Pickup and dropoff coordinates are required",
+      });
+    }
+
+    // Validate coordinates are valid numbers
+    const pickup = {
+      lat: parseFloat(pickupLat),
+      lng: parseFloat(pickupLng),
+    };
+    const dropoff = {
+      lat: parseFloat(dropoffLat),
+      lng: parseFloat(dropoffLng),
+    };
+
+    if (
+      isNaN(pickup.lat) ||
+      isNaN(pickup.lng) ||
+      isNaN(dropoff.lat) ||
+      isNaN(dropoff.lng)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid coordinates provided",
+      });
+    }
+
+    // Validate coordinate ranges
+    if (
+      pickup.lat < -90 ||
+      pickup.lat > 90 ||
+      pickup.lng < -180 ||
+      pickup.lng > 180 ||
+      dropoff.lat < -90 ||
+      dropoff.lat > 90 ||
+      dropoff.lng < -180 ||
+      dropoff.lng > 180
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Coordinates out of valid range",
+      });
+    }
+
+    console.log(`📍 Resolving addresses for coordinates...`);
+
+    // 🌍 REVERSE GEOCODE: Convert coordinates to addresses
+    const [pickupAddress, dropoffAddress] = await Promise.all([
+      smartReverseGeocode(pickup.lat, pickup.lng),
+      smartReverseGeocode(dropoff.lat, dropoff.lng),
+    ]);
+
+    console.log(`📍 Pickup: ${pickupAddress.formattedAddress}`);
+    console.log(`📍 Dropoff: ${dropoffAddress.formattedAddress}`);
+
+    // Calculate distance between pickup and dropoff
+    const distance = calculateDistance(
+      pickup.lat,
+      pickup.lng,
+      dropoff.lat,
+      dropoff.lng
+    );
+
+    console.log(`📏 Distance calculated: ${distance.toFixed(2)} km`);
+
+    // Validate distance
+    if (distance < 0.1) {
+      return res.status(400).json({
+        success: false,
+        message: "Pickup and dropoff locations are too close (minimum 100m)",
+      });
+    }
+
+    if (distance > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery distance exceeds maximum limit (100km)",
+      });
+    }
+
+    // Calculate fare
+    const fareDetails = calculateFare({
+      distance,
+      itemWeight: parseFloat(itemWeight) || 1,
+      itemType: itemType || "parcel",
+    });
+
+    // Calculate estimated duration
+    const estimatedDurationMin = Math.ceil(distance * 3);
+
+    // Find nearby available drivers
+    let nearbyDriversCount = 0;
+    let nearbyDriversInfo = [];
+    try {
+      const nearbyDrivers = await Driver.find({
+        isOnline: true,
+        isActive: true,
+        isAvailable: true,
+        approvalStatus: "approved",
+        currentDeliveryId: { $exists: false },
+        $or: [
+          { "location.coordinates": { $exists: true, $ne: [0, 0] } },
+          { "currentLocation.lat": { $exists: true } },
+        ],
+      })
+        .select("currentLocation location vehicleType")
+        .populate("userId", "name rating")
+        .lean();
+
+      nearbyDriversInfo = nearbyDrivers
+        .map((driver) => {
+          let driverLat, driverLng;
+
+          if (
+            driver.location?.coordinates &&
+            driver.location.coordinates.length >= 2
+          ) {
+            driverLng = driver.location.coordinates[0];
+            driverLat = driver.location.coordinates[1];
+          } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+            driverLat = driver.currentLocation.lat;
+            driverLng = driver.currentLocation.lng;
+          } else {
+            return null;
+          }
+
+          const distanceToPickup = calculateDistance(
+            pickup.lat,
+            pickup.lng,
+            driverLat,
+            driverLng
+          );
+
+          if (distanceToPickup <= 10) {
+            return {
+              _id: driver._id,
+              distance: parseFloat(distanceToPickup.toFixed(2)),
+              vehicleType: driver.vehicleType,
+              rating: driver.userId?.rating || 0,
+            };
+          }
+          return null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 5);
+
+      nearbyDriversCount = nearbyDriversInfo.length;
+    } catch (error) {
+      console.error("Error finding nearby drivers:", error);
+    }
+
+    // Generate quote ID
+    const quoteId = `QUOTE-${Date.now()}-${crypto
+      .randomBytes(2)
+      .toString("hex")
+      .toUpperCase()}`;
+
+    // Prepare response
+    const response = {
+      success: true,
+      message: "Fare calculated successfully",
+      data: {
+        quoteId,
+        fare: {
+          baseFare: fareDetails.baseFare,
+          distanceFare: fareDetails.distanceFare,
+          itemWeightCharge: fareDetails.itemWeightCharge || 0,
+          itemTypeCharge: fareDetails.itemTypeCharge || 0,
+          subtotal: fareDetails.subtotal || fareDetails.totalFare,
+          tax: fareDetails.tax || 0,
+          totalFare: fareDetails.totalFare,
+          currency: "NGN",
+          formatted: `₦${fareDetails.totalFare.toLocaleString()}`,
+        },
+        distance: {
+          km: parseFloat(distance.toFixed(2)),
+          formatted: `${distance.toFixed(1)} km`,
+        },
+        estimatedDuration: {
+          minutes: estimatedDurationMin,
+          formatted: `${estimatedDurationMin} min`,
+        },
+        // 🌍 ADDRESSES FROM GEOCODING
+        pickup: {
+          lat: pickup.lat,
+          lng: pickup.lng,
+          address: pickupAddress.formattedAddress,
+          addressComponents: pickupAddress.addressComponents,
+          city: pickupAddress.addressComponents?.city || "",
+          state: pickupAddress.addressComponents?.state || "",
+        },
+        dropoff: {
+          lat: dropoff.lat,
+          lng: dropoff.lng,
+          address: dropoffAddress.formattedAddress,
+          addressComponents: dropoffAddress.addressComponents,
+          city: dropoffAddress.addressComponents?.city || "",
+          state: dropoffAddress.addressComponents?.state || "",
+        },
+        itemDetails: {
+          type: itemType || "parcel",
+          weight: parseFloat(itemWeight) || 1,
+        },
+        availability: {
+          nearbyDriversCount,
+          estimatedPickupTime: nearbyDriversCount > 0 ? "5-15 min" : "15-30 min",
+          hasDrivers: nearbyDriversCount > 0,
+          driversInfo: nearbyDriversInfo.map(d => ({
+            distance: `${d.distance.toFixed(1)} km away`,
+            vehicleType: d.vehicleType,
+            rating: d.rating,
+          })),
+        },
+        fareBreakdown: [
+          {
+            label: "Base Fare",
+            amount: fareDetails.baseFare,
+            formatted: `₦${fareDetails.baseFare.toLocaleString()}`,
+          },
+          {
+            label: "Distance Charge",
+            amount: fareDetails.distanceFare,
+            formatted: `₦${fareDetails.distanceFare.toLocaleString()}`,
+            details: `${distance.toFixed(1)} km`,
+          },
+        ],
+        recommendations: {
+          canProceed: nearbyDriversCount > 0 && distance >= 0.1 && distance <= 100,
+          message: nearbyDriversCount > 0 
+            ? "Great! Drivers are available in your area."
+            : "Limited drivers available. Your request may take longer to be accepted.",
+        },
+        nextSteps: [
+          "Review the pickup and dropoff addresses",
+          "Confirm fare and delivery details",
+          "Provide recipient information",
+          "Create delivery request",
+        ],
+      },
+    };
+
+    console.log(`💰 Fare calculated for customer ${customer._id}:`, {
+      quoteId,
+      distance: distance.toFixed(2),
+      fare: fareDetails.totalFare,
+      nearbyDrivers: nearbyDriversCount,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("❌ Calculate fare error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to calculate delivery fare",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Create delivery request with automatic address resolution
+ * @route   POST /api/deliveries/request
+ * @access  Private (Customer)
+ */
+export const createDeliveryRequest = async (req, res) => {
+  try {
+    const customer = req.user;
+
+    if (customer.role !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only customers can create deliveries",
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors.array(),
+      });
+    }
+
+    const {
+      pickupAddress,  // Optional now - will be auto-generated if not provided
+      pickupLat,
+      pickupLng,
+      pickupName,
+      pickupPhone,
+      dropoffAddress, // Optional now - will be auto-generated if not provided
+      dropoffLat,
+      dropoffLng,
+      recipientName,
+      recipientPhone,
+      itemType,
+      itemDescription,
+      itemWeight,
+      paymentMethod,
+      quoteId,
+      expectedFare,
+    } = req.body;
+
+    // Validate coordinates
+    if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+      return res.status(400).json({
+        success: false,
+        message: "Pickup and dropoff coordinates are required",
+      });
+    }
+
+    // Validate recipient details
+    if (!recipientName || !recipientPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Recipient name and phone are required",
+      });
+    }
+
+    const pickup = {
+      lat: parseFloat(pickupLat),
+      lng: parseFloat(pickupLng),
+    };
+    const dropoff = {
+      lat: parseFloat(dropoffLat),
+      lng: parseFloat(dropoffLng),
+    };
+
+    // 🌍 REVERSE GEOCODE: Get addresses if not provided
+    let resolvedPickupAddress = pickupAddress;
+    let resolvedDropoffAddress = dropoffAddress;
+
+    if (!pickupAddress || !dropoffAddress) {
+      console.log(`📍 Auto-resolving addresses...`);
+      
+      const [pickupGeo, dropoffGeo] = await Promise.all([
+        !pickupAddress ? smartReverseGeocode(pickup.lat, pickup.lng) : null,
+        !dropoffAddress ? smartReverseGeocode(dropoff.lat, dropoff.lng) : null,
+      ]);
+
+      if (pickupGeo) {
+        resolvedPickupAddress = pickupGeo.formattedAddress;
+        console.log(`📍 Auto-resolved pickup: ${resolvedPickupAddress}`);
+      }
+      
+      if (dropoffGeo) {
+        resolvedDropoffAddress = dropoffGeo.formattedAddress;
+        console.log(`📍 Auto-resolved dropoff: ${resolvedDropoffAddress}`);
+      }
+    }
+
+    // Calculate distance
+    const distance = calculateDistance(
+      pickup.lat,
+      pickup.lng,
+      dropoff.lat,
+      dropoff.lng
+    );
+
+    // Validate distance
+    if (distance < 0.1) {
+      return res.status(400).json({
+        success: false,
+        message: "Pickup and dropoff locations are too close (minimum 100m)",
+      });
+    }
+
+    if (distance > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery distance exceeds maximum limit (100km)",
+      });
+    }
+
+    // RE-CALCULATE fare
+    const fareDetails = calculateFare({
+      distance,
+      itemWeight: parseFloat(itemWeight) || 1,
+      itemType: itemType || "parcel",
+    });
+
+    // Verify fare hasn't changed significantly
+    if (expectedFare && Math.abs(fareDetails.totalFare - expectedFare) > 50) {
+      console.warn(`⚠️ Fare mismatch - Expected: ${expectedFare}, Actual: ${fareDetails.totalFare}`);
+      return res.status(400).json({
+        success: false,
+        message: "Fare has changed. Please recalculate and try again.",
+        data: {
+          previousFare: expectedFare,
+          currentFare: fareDetails.totalFare,
+          difference: fareDetails.totalFare - expectedFare,
+        },
+      });
+    }
+
+    // Generate unique reference ID
+    const referenceId = `RID-${Date.now()}-${crypto
+      .randomBytes(3)
+      .toString("hex")
+      .toUpperCase()}`;
+
+    // Create delivery object with resolved addresses
+    const deliveryData = {
+      referenceId,
+      customerId: customer._id,
+      customerName: customer.name,
+      customerPhone: customer.phone,
+      companyId: null,
+
+      pickup: {
+        address: resolvedPickupAddress || `${pickup.lat}, ${pickup.lng}`,
+        lat: pickup.lat,
+        lng: pickup.lng,
+        name: pickupName || "Pickup Location",
+        phone: pickupPhone || customer.phone,
+      },
+
+      dropoff: {
+        address: resolvedDropoffAddress || `${dropoff.lat}, ${dropoff.lng}`,
+        lat: dropoff.lat,
+        lng: dropoff.lng,
+        name: recipientName,
+        phone: recipientPhone,
+      },
+
+      recipientName: recipientName,
+      recipientPhone: recipientPhone,
+
+      itemDetails: {
+        type: itemType || "parcel",
+        description: itemDescription,
+        weight: parseFloat(itemWeight) || 1,
+      },
+
+      fare: {
+        baseFare: fareDetails.baseFare,
+        distanceFare: fareDetails.distanceFare,
+        totalFare: fareDetails.totalFare,
+        currency: "NGN",
+        quoteId: quoteId || null,
+      },
+
+      estimatedDistanceKm: distance,
+      estimatedDurationMin: Math.ceil(distance * 3),
+
+      payment: {
+        method: paymentMethod || "cash",
+        status: paymentMethod === "cash" ? "pending" : "pending_payment",
+      },
+
+      status: "created",
+    };
+
+    // Create delivery
+    const delivery = new Delivery(deliveryData);
+    await delivery.save();
+
+    console.log(`✅ Delivery created: ${delivery._id} (${delivery.referenceId})`);
+    console.log(`📍 Pickup: ${resolvedPickupAddress}`);
+    console.log(`📍 Dropoff: ${resolvedDropoffAddress}`);
+
+    // Notify customer
+    await sendNotification({
+      userId: customer._id,
+      ...NotificationTemplates.DELIVERY_CREATED(
+        delivery._id,
+        delivery.referenceId
+      ),
+    });
+
+    // Find and notify nearby drivers
+    const nearbyDrivers = await Driver.find({
+      isOnline: true,
+      isActive: true,
+      approvalStatus: "approved",
+      currentDeliveryId: { $exists: false },
+      $or: [
+        { "location.coordinates": { $exists: true, $ne: [0, 0] } },
+        { "currentLocation.lat": { $exists: true } },
+      ],
+    }).populate("userId", "name phone avatarUrl");
+
+    const driversNearPickup = nearbyDrivers.filter((driver) => {
+      let driverLat, driverLng;
+
+      if (
+        driver.location &&
+        driver.location.coordinates &&
+        driver.location.coordinates.length >= 2
+      ) {
+        driverLng = driver.location.coordinates[0];
+        driverLat = driver.location.coordinates[1];
+      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        driverLat = driver.currentLocation.lat;
+        driverLng = driver.currentLocation.lng;
+      } else if (driver.lat && driver.lng) {
+        driverLat = driver.lat;
+        driverLng = driver.lng;
+      } else {
+        return false;
+      }
+
+      const distanceToPickup = calculateDistance(
+        pickup.lat,
+        pickup.lng,
+        driverLat,
+        driverLng
+      );
+      return distanceToPickup <= 10;
+    });
+
+    console.log(`🚗 Notifying ${driversNearPickup.length} nearby drivers`);
+
+    // Notify drivers
+    for (const driver of driversNearPickup) {
+      let driverLat, driverLng;
+      
+      if (
+        driver.location &&
+        driver.location.coordinates &&
+        driver.location.coordinates.length >= 2
+      ) {
+        driverLng = driver.location.coordinates[0];
+        driverLat = driver.location.coordinates[1];
+      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        driverLat = driver.currentLocation.lat;
+        driverLng = driver.currentLocation.lng;
+      } else if (driver.lat && driver.lng) {
+        driverLat = driver.lat;
+        driverLng = driver.lng;
+      }
+
+      const distanceToPickup = calculateDistance(
+        pickup.lat,
+        pickup.lng,
+        driverLat,
+        driverLng
+      );
+
+      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
+        delivery._id,
+        distanceToPickup,
+        delivery.fare.totalFare
+      );
+      
+      await sendNotification({
+        userId: driver.userId._id,
+        ...template,
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Delivery request created successfully",
+      data: {
+        delivery: {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          status: delivery.status,
+          pickup: delivery.pickup,
+          dropoff: delivery.dropoff,
+          recipientName: delivery.recipientName,
+          fare: delivery.fare,
+          estimatedDistanceKm: delivery.estimatedDistanceKm,
+          estimatedDurationMin: delivery.estimatedDurationMin,
+          createdAt: delivery.createdAt,
+          nearbyDriversCount: driversNearPickup.length,
+        },
+        message: driversNearPickup.length > 0
+          ? `${driversNearPickup.length} nearby driver${driversNearPickup.length !== 1 ? 's' : ''} notified!`
+          : "Request created. Searching for available drivers...",
+      },
+    });
+  } catch (error) {
+    console.error("❌ Create delivery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create delivery request",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

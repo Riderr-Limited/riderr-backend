@@ -8,12 +8,33 @@ import { markNotificationAsRead, markAllNotificationsAsRead, getUnreadCount } fr
  * @route   GET /api/notifications
  * @access  Private
  */
+// controllers/notification.controller.js
+
 export const getNotifications = async (req, res) => {
   try {
     const user = req.user;
     const { page = 1, limit = 20, unreadOnly = false } = req.query;
 
-    const query = { userId: user._id };
+    // Build query - include personal AND company notifications if user is company admin
+    const query = {
+      $or: [
+        // Personal notifications
+        { userId: user._id },
+        // Company notifications (if user is a company admin)
+        ...(user.role === 'company' || user.companyId ? [
+          { 
+            type: 'company',
+            $or: [
+              { userId: user._id }, // Direct company notifications to user
+              { 'data.companyId': user.companyId }, // Company-wide notifications
+              { 'data.companyId': user._id }, // If companyId is the user's ID
+            ]
+          }
+        ] : [])
+      ]
+    };
+
+    // Add unread filter if needed
     if (unreadOnly === 'true') {
       query.isRead = false;
     }
@@ -27,7 +48,7 @@ export const getNotifications = async (req, res) => {
         .limit(parseInt(limit))
         .lean(),
       Notification.countDocuments(query),
-      getUnreadCount(user._id),
+      getUnreadCount(user._id), // You might need to update this too
     ]);
 
     res.status(200).json({

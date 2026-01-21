@@ -7,7 +7,7 @@ import {
   getCustomerActiveDelivery,
   getNearbyAvailableDrivers,
   getCompanyDeliveries,
-  
+  calculateDeliveryFare,
   // Driver endpoints
   getNearbyDeliveryRequests,
   acceptDelivery,
@@ -36,7 +36,7 @@ router.post('/request', protect, authorize('customer'), createDeliveryRequest);
 router.get('/nearby-drivers', protect, authorize('customer'), getNearbyDrivers);
 router.get('/my', protect, authorize('customer'), getMyDeliveries);
 router.get('/customer/active', protect, authorize('customer'), getCustomerActiveDelivery);
-
+router.post('/calculate-fare', protect, authorize('customer'), calculateDeliveryFare);
 router.get('/nearby-available-drivers', protect, authorize('customer'), getNearbyAvailableDrivers);
 
 // ============ DRIVER ROUTES ============

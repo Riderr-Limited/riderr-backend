@@ -2,6 +2,7 @@ import Company from "../models/company.models.js";
 import User from "../models/user.models.js";
 import mongoose from "mongoose";
 import { validationResult } from "express-validator";
+import Notification from "../models/notificaton.models.js";  
 
 /**
  * @desc    Get company profile
@@ -664,6 +665,11 @@ export const requestCompanyVerification = async (req, res) => {
  * @route   GET /api/company/notifications
  * @access  Private (Company Admin)
  */
+/**
+ * @desc    Get company notifications
+ * @route   GET /api/company/notifications
+ * @access  Private (Company Admin)
+ */
 export const getCompanyNotifications = async (req, res) => {
   try {
     const user = req.user;
@@ -683,72 +689,71 @@ export const getCompanyNotifications = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const { page = 1, limit = 20, unreadOnly = false, type } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get notifications from the company model or return placeholder data
-    const company = await Company.findById(user.companyId);
-    
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: "Company not found",
-      });
-    }
+    // Build query for company notifications
+    const query = {
+      $or: [
+        // Direct company notifications to this user
+        { userId: user._id, type: 'company' },
+        // Company-wide notifications
+        { 'data.companyId': user.companyId, type: 'company' },
+        // If companyId is stored differently
+        { type: 'company', 'metadata.companyId': user.companyId }
+      ]
+    };
 
-    // Since Notification model doesn't exist, return placeholder data
-    // In a real app, you would query from a Notification collection
-    const notifications = [
-      {
-        id: "1",
-        title: "Welcome to Riderr",
-        message: "Your company profile has been successfully created.",
-        type: "info",
-        read: false,
-        createdAt: new Date(),
-        data: {}
-      },
-      {
-        id: "2",
-        title: "New Driver Registration",
-        message: "A new driver has registered with your company.",
-        type: "driver_registration",
-        read: false,
-        createdAt: new Date(Date.now() - 3600000),
-        data: { driverId: "sample-driver-id" }
-      },
-      {
-        id: "3",
-        title: "Delivery Completed",
-        message: "Delivery #DEL-001 has been completed successfully.",
-        type: "delivery_completed",
-        read: true,
-        createdAt: new Date(Date.now() - 7200000),
-        data: { deliveryId: "sample-delivery-id" }
-      }
-    ];
-
-    // Filter by unread if requested
-    let filteredNotifications = notifications;
+    // Add read filter if requested
     if (unreadOnly === "true") {
-      filteredNotifications = notifications.filter(notification => !notification.read);
+      query.read = false;
     }
 
-    // Paginate
-    const paginatedNotifications = filteredNotifications.slice(skip, skip + parseInt(limit));
-    const total = filteredNotifications.length;
+    // Filter by notification type if specified
+    if (type) {
+      query.subType = type;
+    }
+
+    console.log('Company notification query:', JSON.stringify(query, null, 2)); // Debug log
+
+    // Get notifications from database
+    const [notifications, total, unreadCount] = await Promise.all([
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Notification.countDocuments(query),
+      Notification.countDocuments({ ...query, read: false })
+    ]);
+
+    // Format response
+    const formattedNotifications = notifications.map(notification => ({
+      id: notification._id,
+      title: notification.title,
+      message: notification.message,
+      type: notification.type,
+      subType: notification.subType,
+      read: notification.read,
+      priority: notification.priority,
+      actionUrl: notification.actionUrl,
+      actionLabel: notification.actionLabel,
+      createdAt: notification.createdAt,
+      timeAgo: notification.timeAgo, // Virtual field from your model
+      data: notification.data || {}
+    }));
 
     res.status(200).json({
       success: true,
       data: {
-        notifications: paginatedNotifications,
+        notifications: formattedNotifications,
         pagination: {
           total,
           page: parseInt(page),
           limit: parseInt(limit),
           pages: Math.ceil(total / parseInt(limit)),
         },
-        unreadCount: notifications.filter(n => !n.read).length,
+        unreadCount,
       },
     });
   } catch (error) {
@@ -756,6 +761,7 @@ export const getCompanyNotifications = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get notifications",
+      error: error.message  
     });
   }
 };
@@ -769,4 +775,6 @@ export default {
   getCompanyStats,
   requestCompanyVerification,
   getCompanyNotifications,
-};
+};// controllers/notification.controller.js
+
+ 
