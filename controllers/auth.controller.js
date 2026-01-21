@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+import twilio from "twilio";
 import { validationResult } from "express-validator";
 
 /**
@@ -16,6 +17,28 @@ import { validationResult } from "express-validator";
 // Generate random verification code
 const generateVerificationCode = (length = 6) => {
   return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Send SMS OTP using Twilio
+const sendSMSOTP = async (phone, otp, message) => {
+  try {
+    const client = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+
+    await client.messages.create({
+      body: `${message}: ${otp}`,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: phone,
+    });
+
+    console.log(`✅ SMS OTP sent to ${phone}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`❌ SMS send failed for ${phone}:`, error.message);
+    return { success: false, error: error.message };
+  }
 };
 /**
  * @desc    Check verification status
@@ -34,7 +57,7 @@ export const checkVerificationStatus = async (req, res) => {
     }
 
     const user = await User.findOne({ email: email.toLowerCase() }).select(
-      "emailVerifiedAt isVerified"
+      "emailVerifiedAt isVerified",
     );
 
     if (!user) {
@@ -66,7 +89,7 @@ const generateAccessToken = (payload) => {
   return jwt.sign(
     payload,
     process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "30d" }
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "30d" },
   );
 };
 
@@ -76,13 +99,28 @@ const generateRefreshToken = (payload) => {
     process.env.JWT_REFRESH_SECRET ||
       process.env.JWT_SECRET ||
       "fallback-secret-key-change-in-production",
-    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" }
+    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" },
   );
 };
 
 // Email transporter
 const createEmailTransporter = () => {
   try {
+    // Use Ethereal for development (reliable email testing)
+    if (process.env.NODE_ENV === "development") {
+      const testAccount = nodemailer.createTestAccount();
+      return nodemailer.createTransport({
+        host: "smtp.ethereal.email",
+        port: 587,
+        secure: false,
+        auth: {
+          user: testAccount.user,
+          pass: testAccount.pass,
+        },
+      });
+    }
+
+    // Use configured SMTP for production
     return nodemailer.createTransport({
       host: process.env.EMAIL_HOST || "smtp.gmail.com",
       port: parseInt(process.env.EMAIL_PORT) || 587,
@@ -100,8 +138,24 @@ const createEmailTransporter = () => {
 };
 
 // Send verification email
-const sendVerificationEmail = async (email, code, name) => {
+const sendVerificationEmail = async (email, code, name, phone = null) => {
   try {
+    // In production, use SMS if phone is provided
+    if (process.env.NODE_ENV === 'production' && phone) {
+      const smsResult = await sendSMSOTP(
+        phone,
+        code,
+        `Your Riderr verification code`
+      );
+      if (smsResult.success) {
+        console.log(`✅ Verification SMS sent to ${phone}`);
+        return { success: true, method: 'sms' };
+      } else {
+        console.error(`❌ SMS failed, falling back to email`);
+      }
+    }
+
+    // Fallback to email
     const transporter = createEmailTransporter();
 
     if (!transporter) {
@@ -148,9 +202,17 @@ const sendVerificationEmail = async (email, code, name) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
     console.log(`✅ Email sent to ${email}`);
-    return { success: true };
+
+    // Return Ethereal URL for development
+    const etherealUrl =
+      process.env.NODE_ENV === "development" &&
+      transporter.options.host === "smtp.ethereal.email"
+        ? `https://ethereal.email/message/${info.messageId}`
+        : null;
+
+    return { success: true, messageId: info.messageId, etherealUrl };
   } catch (error) {
     console.error("❌ Email error:", error.message);
     console.log(`📧 FALLBACK: Email verification code for ${email}: ${code}`);
@@ -159,8 +221,24 @@ const sendVerificationEmail = async (email, code, name) => {
 };
 
 // Send OTP via email (for password reset)
-const sendOTPEmail = async (email, otp, name) => {
+const sendOTPEmail = async (email, otp, name, phone = null) => {
   try {
+    // In production, use SMS if phone is provided
+    if (process.env.NODE_ENV === 'production' && phone) {
+      const smsResult = await sendSMSOTP(
+        phone,
+        otp,
+        `Your Riderr password reset OTP`
+      );
+      if (smsResult.success) {
+        console.log(`✅ Password reset SMS sent to ${phone}`);
+        return { success: true, method: 'sms' };
+      } else {
+        console.error(`❌ SMS failed, falling back to email`);
+      }
+    }
+
+    // Fallback to email
     const transporter = createEmailTransporter();
 
     if (!transporter) {
@@ -210,9 +288,17 @@ const sendOTPEmail = async (email, otp, name) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
     console.log(`✅ Password reset OTP sent to ${email}`);
-    return { success: true };
+
+    // Return Ethereal URL for development
+    const etherealUrl =
+      process.env.NODE_ENV === "development" &&
+      transporter.options.host === "smtp.ethereal.email"
+        ? `https://ethereal.email/message/${info.messageId}`
+        : null;
+
+    return { success: true, messageId: info.messageId, etherealUrl };
   } catch (error) {
     console.error("❌ OTP email error:", error.message);
     console.log(`📧 FALLBACK: Password reset OTP for ${email}: ${otp}`);
@@ -312,7 +398,7 @@ export const signUp = async (req, res) => {
               bankDetails: { bankName, accountName, accountNumber },
             },
           ],
-          { session }
+          { session },
         );
 
         [newUser] = await User.create(
@@ -330,7 +416,7 @@ export const signUp = async (req, res) => {
               isVerified: false,
             },
           ],
-          { session }
+          { session },
         );
       } else if (role === "driver") {
         const { companyId } = req.body;
@@ -354,7 +440,7 @@ export const signUp = async (req, res) => {
               isVerified: false,
             },
           ],
-          { session }
+          { session },
         );
 
         const { licenseNumber, vehicleType, plateNumber, licenseExpiry } =
@@ -376,7 +462,7 @@ export const signUp = async (req, res) => {
               approvalStatus: "pending",
             },
           ],
-          { session }
+          { session },
         );
       } else {
         [newUser] = await User.create(
@@ -393,7 +479,7 @@ export const signUp = async (req, res) => {
               isVerified: false,
             },
           ],
-          { session }
+          { session },
         );
       }
 
@@ -408,8 +494,14 @@ export const signUp = async (req, res) => {
     session.endSession();
 
     // ✅ SEND EMAIL AFTER COMMIT (VERY IMPORTANT)
+    let emailResult = null;
     if (requiresVerification) {
-      await sendVerificationEmail(newUser.email, emailCode, newUser.name);
+      emailResult = await sendVerificationEmail(
+        newUser.email,
+        emailCode,
+        newUser.name,
+        newUser.phone, // Add phone for SMS in production
+      );
     }
 
     // ✅ Generate access token AFTER commit
@@ -433,6 +525,9 @@ export const signUp = async (req, res) => {
           role: newUser.role,
           companyId: newUser.companyId,
         },
+        ...(emailResult?.etherealUrl && {
+          debug: { etherealUrl: emailResult.etherealUrl },
+        }),
       },
     });
   } catch (error) {
@@ -532,7 +627,7 @@ export const signUpCompanyDriver = async (req, res) => {
           isVerified: false,
         },
       ],
-      { session }
+      { session },
     );
 
     console.log("🚗 Company driver created:", newUser[0]._id);
@@ -569,7 +664,7 @@ export const signUpCompanyDriver = async (req, res) => {
           canAcceptDeliveries: true,
         },
       ],
-      { session }
+      { session },
     );
 
     // Send verification email
@@ -659,7 +754,7 @@ export const signIn = async (req, res) => {
 
     const user = await User.findOne(query)
       .select(
-        "+password +failedLoginAttempts +isLocked +refreshToken +emailVerificationToken"
+        "+password +failedLoginAttempts +isLocked +refreshToken +emailVerificationToken",
       )
       .populate("companyId");
 
@@ -814,7 +909,7 @@ export const verifyEmail = async (req, res) => {
 
     // Find user
     const user = await User.findOne({ email: email.toLowerCase() }).select(
-      "+emailVerificationToken"
+      "+emailVerificationToken",
     );
 
     if (!user) {
@@ -930,13 +1025,18 @@ export const forgotPassword = async (req, res) => {
     await user.save();
 
     // Send OTP email
-    await sendOTPEmail(email, otp, user.name);
+    const emailResult = await sendOTPEmail(email, otp, user.name, user.phone);
 
     res.status(200).json({
       success: true,
       message: "Password reset code sent to your email",
       ...(process.env.NODE_ENV === "development" && {
-        debug: { otp },
+        debug: {
+          otp,
+          ...(emailResult?.etherealUrl && {
+            etherealUrl: emailResult.etherealUrl,
+          }),
+        },
       }),
     });
   } catch (error) {
@@ -1111,7 +1211,7 @@ export const resendVerification = async (req, res) => {
     await user.save();
 
     // Send verification email
-    await sendVerificationEmail(email, newCode, user.name);
+    await sendVerificationEmail(email, newCode, user.name, user.phone);
 
     res.status(200).json({
       success: true,
@@ -1149,7 +1249,7 @@ export const refreshToken = async (req, res) => {
         oldRefreshToken,
         process.env.JWT_REFRESH_SECRET ||
           process.env.JWT_SECRET ||
-          "fallback-secret-key-change-in-production"
+          "fallback-secret-key-change-in-production",
       );
     } catch (err) {
       return res.status(401).json({
@@ -1237,7 +1337,7 @@ export const getMe = async (req, res) => {
     const user = await User.findById(req.user._id)
       .populate("companyId")
       .select(
-        "-password -refreshToken -emailVerificationToken -resetPasswordToken"
+        "-password -refreshToken -emailVerificationToken -resetPasswordToken",
       );
 
     if (!user) {
@@ -1340,7 +1440,7 @@ export const updateProfile = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updates },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     ).select("-password -refreshToken");
 
     res.status(200).json({
