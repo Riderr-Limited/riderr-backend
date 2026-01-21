@@ -24,7 +24,7 @@ const sendSMSOTP = async (phone, otp, message) => {
   try {
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
-      process.env.TWILIO_AUTH_TOKEN
+      process.env.TWILIO_AUTH_TOKEN,
     );
 
     await client.messages.create({
@@ -104,11 +104,11 @@ const generateRefreshToken = (payload) => {
 };
 
 // Email transporter
-const createEmailTransporter = () => {
+const createEmailTransporter = async () => {
   try {
     // Use Ethereal for development (reliable email testing)
     if (process.env.NODE_ENV === "development") {
-      const testAccount = nodemailer.createTestAccount();
+      const testAccount = await nodemailer.createTestAccount();
       return nodemailer.createTransport({
         host: "smtp.ethereal.email",
         port: 587,
@@ -141,22 +141,22 @@ const createEmailTransporter = () => {
 const sendVerificationEmail = async (email, code, name, phone = null) => {
   try {
     // In production, use SMS if phone is provided
-    if (process.env.NODE_ENV === 'production' && phone) {
+    if (process.env.NODE_ENV === "production" && phone) {
       const smsResult = await sendSMSOTP(
         phone,
         code,
-        `Your Riderr verification code`
+        `Your Riderr verification code`,
       );
       if (smsResult.success) {
         console.log(`✅ Verification SMS sent to ${phone}`);
-        return { success: true, method: 'sms' };
+        return { success: true, method: "sms" };
       } else {
         console.error(`❌ SMS failed, falling back to email`);
       }
     }
 
     // Fallback to email
-    const transporter = createEmailTransporter();
+    const transporter = await createEmailTransporter();
 
     if (!transporter) {
       console.log(`📧 DEV MODE: Email verification code for ${email}: ${code}`);
@@ -216,6 +216,16 @@ const sendVerificationEmail = async (email, code, name, phone = null) => {
   } catch (error) {
     console.error("❌ Email error:", error.message);
     console.log(`📧 FALLBACK: Email verification code for ${email}: ${code}`);
+
+    // In development, return failure so developers know emails aren't working
+    // In production, return success for security (don't reveal email issues)
+    if (process.env.NODE_ENV === "development") {
+      return {
+        success: false,
+        error: "Email sending failed in development mode",
+      };
+    }
+
     return { success: true, devMode: true };
   }
 };
@@ -224,22 +234,22 @@ const sendVerificationEmail = async (email, code, name, phone = null) => {
 const sendOTPEmail = async (email, otp, name, phone = null) => {
   try {
     // In production, use SMS if phone is provided
-    if (process.env.NODE_ENV === 'production' && phone) {
+    if (process.env.NODE_ENV === "production" && phone) {
       const smsResult = await sendSMSOTP(
         phone,
         otp,
-        `Your Riderr password reset OTP`
+        `Your Riderr password reset OTP`,
       );
       if (smsResult.success) {
         console.log(`✅ Password reset SMS sent to ${phone}`);
-        return { success: true, method: 'sms' };
+        return { success: true, method: "sms" };
       } else {
         console.error(`❌ SMS failed, falling back to email`);
       }
     }
 
     // Fallback to email
-    const transporter = createEmailTransporter();
+    const transporter = await createEmailTransporter();
 
     if (!transporter) {
       console.log(`📧 DEV MODE: OTP for ${email}: ${otp}`);
@@ -302,6 +312,16 @@ const sendOTPEmail = async (email, otp, name, phone = null) => {
   } catch (error) {
     console.error("❌ OTP email error:", error.message);
     console.log(`📧 FALLBACK: Password reset OTP for ${email}: ${otp}`);
+
+    // In development, return failure so developers know emails aren't working
+    // In production, return success for security (don't reveal email issues)
+    if (process.env.NODE_ENV === "development") {
+      return {
+        success: false,
+        error: "Email sending failed in development mode",
+      };
+    }
+
     return { success: true, devMode: true };
   }
 };
@@ -502,6 +522,14 @@ export const signUp = async (req, res) => {
         newUser.name,
         newUser.phone, // Add phone for SMS in production
       );
+
+      // In development, fail if email sending fails
+      if (process.env.NODE_ENV === "development" && !emailResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Account created but failed to send verification email",
+        });
+      }
     }
 
     // ✅ Generate access token AFTER commit
@@ -1026,6 +1054,13 @@ export const forgotPassword = async (req, res) => {
 
     // Send OTP email
     const emailResult = await sendOTPEmail(email, otp, user.name, user.phone);
+
+    if (!emailResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send password reset email",
+      });
+    }
 
     res.status(200).json({
       success: true,
