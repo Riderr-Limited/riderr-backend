@@ -548,6 +548,7 @@ export const signUp = async (req, res) => {
   }
 };
 
+// auth.controller.js - Update the signUpCompanyDriver function
 /**
  * @desc    Sign up company driver (for company admins)
  * @route   POST /api/auth/signup-company-driver
@@ -611,7 +612,7 @@ export const signUpCompanyDriver = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create driver user
-    const newUser = await User.create(
+    const [newUser] = await User.create(
       [
         {
           name: name.trim(),
@@ -619,7 +620,7 @@ export const signUpCompanyDriver = async (req, res) => {
           password: hashedPassword,
           phone,
           role: "driver",
-          companyId: req.user.companyId, // Use the company admin's company
+          companyId: req.user.companyId,
           emailVerificationToken: emailCode,
           emailVerificationExpires: emailExpiry,
           failedLoginAttempts: 0,
@@ -630,7 +631,7 @@ export const signUpCompanyDriver = async (req, res) => {
       { session },
     );
 
-    console.log("🚗 Company driver created:", newUser[0]._id);
+    console.log("🚗 Company driver created:", newUser._id);
 
     // Driver details
     const {
@@ -648,7 +649,7 @@ export const signUpCompanyDriver = async (req, res) => {
     await Driver.create(
       [
         {
-          userId: newUser[0]._id,
+          userId: newUser._id,
           companyId: req.user.companyId,
           licenseNumber,
           vehicleType,
@@ -661,47 +662,63 @@ export const signUpCompanyDriver = async (req, res) => {
           approvalStatus: "pending",
           isOnline: false,
           isAvailable: false,
-          canAcceptDeliveries: true,
+          canAcceptDeliveries: false, // Driver cannot accept deliveries until verified
+          stats: {
+            totalDeliveries: 0,
+            totalEarnings: 0,
+            acceptanceRate: 100,
+          },
+          rating: {
+            average: 0,
+            totalRatings: 0,
+          },
         },
       ],
       { session },
     );
 
     // Send verification email
-    await sendVerificationEmail(email, emailCode, name);
+    const emailResult = await sendVerificationEmail(
+      email, 
+      emailCode, 
+      name, 
+      phone
+    );
 
-    // Generate tokens for the driver
-    const accessToken = generateAccessToken({
-      userId: newUser[0]._id,
-      role: newUser[0].role,
-      isVerified: false,
-    });
+    // Don't generate tokens yet - driver needs to verify email first
+    // const accessToken = generateAccessToken({
+    //   userId: newUser._id,
+    //   role: newUser.role,
+    //   isVerified: false,
+    // });
 
-    const refreshToken = generateRefreshToken({
-      userId: newUser[0]._id,
-    });
+    // const refreshToken = generateRefreshToken({
+    //   userId: newUser._id,
+    // });
 
-    newUser[0].refreshToken = refreshToken;
-    await newUser[0].save({ session });
+    // newUser.refreshToken = refreshToken;
+    // await newUser.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
     res.status(201).json({
       success: true,
-      message: "Driver account created successfully. Verification code sent.",
+      message: "Driver account created successfully. Verification code sent to driver's email.",
       data: {
-        accessToken,
-        refreshToken,
-        user: {
-          _id: newUser[0]._id,
-          name: newUser[0].name,
-          email: newUser[0].email,
-          phone: newUser[0].phone,
-          role: newUser[0].role,
-          isVerified: false,
-          companyId: newUser[0].companyId,
-        },
+        driverId: newUser._id,
+        email: newUser.email,
+        phone: newUser.phone,
+        name: newUser.name,
+        requiresVerification: true,
+        ...(process.env.NODE_ENV === "development" && {
+          debug: {
+            verificationCode: emailCode,
+            ...(emailResult?.etherealUrl && {
+              etherealUrl: emailResult.etherealUrl,
+            }),
+          },
+        }),
       },
     });
   } catch (error) {
