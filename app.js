@@ -21,7 +21,10 @@ const corsOptions = {
       'http://localhost:3000',
       'http://localhost:3001',
       'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001'
+      'http://127.0.0.1:3001',
+      'https://riderr.ng',
+      'https://www.riderr.ng',
+      'https://riderrr.vercel.app'
     ];
     
     if (allowedOrigins.includes(origin)) {
