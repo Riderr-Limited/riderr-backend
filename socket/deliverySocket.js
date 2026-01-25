@@ -357,6 +357,139 @@ export const setupDeliverySocket = (io) => {
     });
 
     // ==========================================
+    // CHAT EVENTS
+    // ==========================================
+
+    /**
+     * Join delivery chat room
+     */
+    socket.on("chat:join_delivery", async (data) => {
+      try {
+        const { deliveryId, userId } = data;
+
+        // Verify user can access this delivery chat
+        const delivery = await Delivery.findById(deliveryId)
+          .select("customerId driverId status")
+          .populate("driverId", "userId");
+
+        if (!delivery) {
+          socket.emit("chat:error", { message: "Delivery not found" });
+          return;
+        }
+
+        const isCustomer = delivery.customerId.toString() === userId;
+        const isDriver = delivery.driverId?.userId?.toString() === userId;
+
+        if (!isCustomer && !isDriver) {
+          socket.emit("chat:error", { message: "Access denied" });
+          return;
+        }
+
+        // Join the delivery-specific room
+        socket.join(`delivery_chat_${deliveryId}`);
+        console.log(`User ${userId} joined delivery chat ${deliveryId}`);
+
+        socket.emit("chat:joined", {
+          deliveryId,
+          success: true,
+        });
+      } catch (error) {
+        console.error("Join delivery chat error:", error);
+        socket.emit("chat:error", { message: "Failed to join chat" });
+      }
+    });
+
+    /**
+     * Leave delivery chat room
+     */
+    socket.on("chat:leave_delivery", (data) => {
+      const { deliveryId } = data;
+      socket.leave(`delivery_chat_${deliveryId}`);
+      console.log(`User left delivery chat ${deliveryId}`);
+    });
+
+    /**
+     * Send chat message
+     */
+    socket.on("chat:send_message", async (data) => {
+      try {
+        const {
+          deliveryId,
+          message,
+          messageType = "text",
+          location,
+          imageUrl,
+          userId,
+        } = data;
+
+        // Verify delivery and get receiver
+        const delivery = await Delivery.findById(deliveryId)
+          .select("customerId driverId")
+          .populate("driverId", "userId");
+
+        if (!delivery) {
+          socket.emit("chat:error", { message: "Delivery not found" });
+          return;
+        }
+
+        const isCustomer = delivery.customerId.toString() === userId;
+        const isDriver = delivery.driverId?.userId?.toString() === userId;
+
+        if (!isCustomer && !isDriver) {
+          socket.emit("chat:error", { message: "Access denied" });
+          return;
+        }
+
+        // Determine receiver
+        const receiverId = isCustomer
+          ? delivery.driverId.userId
+          : delivery.customerId;
+
+        // Save message to database
+        const chatMessage = new ChatMessage({
+          deliveryId,
+          senderId: userId,
+          receiverId,
+          message,
+          messageType,
+          location,
+          imageUrl,
+        });
+
+        await chatMessage.save();
+        await chatMessage.populate("senderId", "name avatarUrl role");
+
+        // Emit to all users in the delivery chat room
+        io.to(`delivery_chat_${deliveryId}`).emit("chat:new_message", {
+          message: chatMessage,
+          deliveryId,
+        });
+      } catch (error) {
+        console.error("Send chat message error:", error);
+        socket.emit("chat:error", { message: "Failed to send message" });
+      }
+    });
+
+    /**
+     * Typing indicators
+     */
+    socket.on("chat:typing_start", (data) => {
+      const { deliveryId, userId } = data;
+      socket.to(`delivery_chat_${deliveryId}`).emit("chat:typing_start", {
+        userId,
+        deliveryId,
+      });
+    });
+
+    socket.on("chat:typing_stop", (data) => {
+      const { deliveryId, userId } = data;
+      socket.to(`delivery_chat_${deliveryId}`).emit("chat:typing_stop", {
+        userId,
+        deliveryId,
+      });
+    });
+
+    // ==========================================
     // DISCONNECT
     // ==========================================
     socket.on("disconnect", () => {
@@ -382,141 +515,6 @@ export const setupDeliverySocket = (io) => {
     });
   });
 };
-
-// ==========================================
-// CHAT EVENTS
-// ==========================================
-
-/**
- * Join delivery chat room
- */
-io.on("connection", (socket) => {
-  socket.on("chat:join_delivery", async (data) => {
-    try {
-      const { deliveryId, userId } = data;
-
-      // Verify user can access this delivery chat
-      const delivery = await Delivery.findById(deliveryId)
-        .select("customerId driverId status")
-        .populate("driverId", "userId");
-
-      if (!delivery) {
-        socket.emit("chat:error", { message: "Delivery not found" });
-        return;
-      }
-
-      const isCustomer = delivery.customerId.toString() === userId;
-      const isDriver = delivery.driverId?.userId?.toString() === userId;
-
-      if (!isCustomer && !isDriver) {
-        socket.emit("chat:error", { message: "Access denied" });
-        return;
-      }
-
-      // Join the delivery-specific room
-      socket.join(`delivery_chat_${deliveryId}`);
-      console.log(`User ${userId} joined delivery chat ${deliveryId}`);
-
-      socket.emit("chat:joined", {
-        deliveryId,
-        success: true,
-      });
-    } catch (error) {
-      console.error("Join delivery chat error:", error);
-      socket.emit("chat:error", { message: "Failed to join chat" });
-    }
-  });
-
-  /**
-   * Leave delivery chat room
-   */
-  socket.on("chat:leave_delivery", (data) => {
-    const { deliveryId } = data;
-    socket.leave(`delivery_chat_${deliveryId}`);
-    console.log(`User left delivery chat ${deliveryId}`);
-  });
-
-  /**
-   * Send chat message
-   */
-  socket.on("chat:send_message", async (data) => {
-    try {
-      const {
-        deliveryId,
-        message,
-        messageType = "text",
-        location,
-        imageUrl,
-        userId,
-      } = data;
-
-      // Verify delivery and get receiver
-      const delivery = await Delivery.findById(deliveryId)
-        .select("customerId driverId")
-        .populate("driverId", "userId");
-
-      if (!delivery) {
-        socket.emit("chat:error", { message: "Delivery not found" });
-        return;
-      }
-
-      const isCustomer = delivery.customerId.toString() === userId;
-      const isDriver = delivery.driverId?.userId?.toString() === userId;
-
-      if (!isCustomer && !isDriver) {
-        socket.emit("chat:error", { message: "Access denied" });
-        return;
-      }
-
-      // Determine receiver
-      const receiverId = isCustomer
-        ? delivery.driverId.userId
-        : delivery.customerId;
-
-      // Save message to database
-      const chatMessage = new ChatMessage({
-        deliveryId,
-        senderId: userId,
-        receiverId,
-        message,
-        messageType,
-        location,
-        imageUrl,
-      });
-
-      await chatMessage.save();
-      await chatMessage.populate("senderId", "name avatarUrl role");
-
-      // Emit to all users in the delivery chat room
-      io.to(`delivery_chat_${deliveryId}`).emit("chat:new_message", {
-        message: chatMessage,
-        deliveryId,
-      });
-    } catch (error) {
-      console.error("Send chat message error:", error);
-      socket.emit("chat:error", { message: "Failed to send message" });
-    }
-  });
-
-  /**
-   * Typing indicators
-   */
-  socket.on("chat:typing_start", (data) => {
-    const { deliveryId, userId } = data;
-    socket.to(`delivery_chat_${deliveryId}`).emit("chat:typing_start", {
-      userId,
-      deliveryId,
-    });
-  });
-
-  socket.on("chat:typing_stop", (data) => {
-    const { deliveryId, userId } = data;
-    socket.to(`delivery_chat_${deliveryId}`).emit("chat:typing_stop", {
-      userId,
-      deliveryId,
-    });
-  });
-});
 
 // ==========================================
 // HELPER FUNCTIONS
