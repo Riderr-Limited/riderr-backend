@@ -1,23 +1,23 @@
-// controllers/payment.controller.js - ESCROW VERSION
+// controllers/payment.controller.js - MOBILE-FIRST ESCROW VERSION
 import Payment from '../models/payments.models.js';
 import Delivery from '../models/delivery.models.js';
 import Driver from '../models/riders.models.js';
 import Company from '../models/company.models.js';
 import User from '../models/user.models.js';
-import { initializePayment, verifyPayment } from '../utils/paystack-hardcoded.js';
+import { initializePayment, verifyPayment, createSubaccount } from '../utils/paystack-hardcoded.js';
 import { sendNotification } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
 
 /**
- * @desc    Initialize escrow payment for delivery
+ * @desc    Initialize escrow payment for delivery (Mobile & Web)
  * @route   POST /api/payments/initialize
  * @access  Private (Customer)
  */
 export const initializeDeliveryPayment = async (req, res) => {
   try {
     const customer = req.user;
-    const { deliveryId } = req.body;
+    const { deliveryId, mobilePlatform } = req.body;
 
     if (customer.role !== 'customer') {
       return res.status(403).json({
@@ -69,6 +69,7 @@ export const initializeDeliveryPayment = async (req, res) => {
           authorizationUrl: existingPayment.paystackAuthorizationUrl,
           reference: existingPayment.paystackReference,
           status: existingPayment.status,
+          isMobile: !!mobilePlatform,
         },
       });
     }
@@ -80,13 +81,26 @@ export const initializeDeliveryPayment = async (req, res) => {
     const platformFee = (amount * platformFeePercentage) / 100;
     const companyAmount = amount - platformFee;
 
+    // Mobile-specific callback URL
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobileRequest = mobilePlatform || userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone');
+    
+    let callbackUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/verify`;
+    
+    // For mobile apps, use deep link or custom scheme
+    if (isMobileRequest) {
+      // Use a web URL that will redirect to app deep link
+      callbackUrl = `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/payments/mobile-callback`;
+    }
+
     // Initialize payment with Paystack using SPLIT PAYMENT
     const paymentResult = await initializePayment({
       email: customer.email,
       amount: amount,
-      subaccount: delivery.companyId.paystackSubaccountCode, // Company's subaccount
-      transaction_charge: platformFee, // Your 10% platform fee
-      bearer: 'account', // Company bears the transaction fee
+      subaccount: delivery.companyId.paystackSubaccountCode,
+      transaction_charge: platformFee,
+      bearer: 'account',
+      callback_url: callbackUrl,
       metadata: {
         deliveryId: delivery._id.toString(),
         customerId: customer._id.toString(),
@@ -97,6 +111,8 @@ export const initializeDeliveryPayment = async (req, res) => {
         customerName: customer.name,
         platformFee: platformFee,
         companyAmount: companyAmount,
+        isMobile: isMobileRequest,
+        mobilePlatform: mobilePlatform || (isMobileRequest ? 'mobile' : 'web'),
       },
     });
 
@@ -123,12 +139,15 @@ export const initializeDeliveryPayment = async (req, res) => {
       paymentMethod: 'card',
       companyAmount: companyAmount,
       platformFee: platformFee,
-      paymentType: 'escrow', // Mark as escrow payment
+      paymentType: 'escrow',
+      isMobile: isMobileRequest,
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
         companySubaccount: delivery.companyId.paystackSubaccountCode,
         splitType: 'subaccount',
+        platform: isMobileRequest ? (mobilePlatform || 'mobile') : 'web',
+        callbackUrl: callbackUrl,
       },
     });
 
@@ -139,6 +158,31 @@ export const initializeDeliveryPayment = async (req, res) => {
     delivery.payment.paystackReference = paymentResult.data.reference;
     await delivery.save();
 
+    // Mobile-specific response
+    if (isMobileRequest) {
+      return res.status(200).json({
+        success: true,
+        message: 'Escrow payment initialized successfully',
+        data: {
+          paymentId: payment._id,
+          authorizationUrl: paymentResult.data.authorization_url,
+          reference: paymentResult.data.reference,
+          amount: amount,
+          companyAmount: companyAmount,
+          platformFee: platformFee,
+          currency: 'NGN',
+          isMobile: true,
+          paymentInfo: {
+            totalAmount: `₦${amount.toLocaleString()}`,
+            companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
+            platformFee: `₦${platformFee.toLocaleString()} (10%)`,
+            companyName: delivery.companyId.name,
+          },
+        },
+      });
+    }
+
+    // Web response
     res.status(200).json({
       success: true,
       message: 'Escrow payment initialized successfully',
@@ -278,11 +322,10 @@ export const verifyDeliveryPayment = async (req, res) => {
       await delivery.save({ session });
     }
 
-    // Update company earnings (money is already in their subaccount)
+    // Update company earnings
     if (payment.companyId) {
       const company = await Company.findById(payment.companyId).session(session);
       if (company) {
-        // Track total earnings (money goes directly to their account)
         company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
         company.totalDeliveries = (company.totalDeliveries || 0) + 1;
         company.lastPaymentReceived = new Date();
@@ -353,6 +396,28 @@ export const verifyDeliveryPayment = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
+    // Mobile-specific response
+    if (payment.isMobile) {
+      return res.status(200).json({
+        success: true,
+        message: 'Payment successful! Your delivery has started.',
+        data: {
+          paymentId: payment._id,
+          status: payment.status,
+          amount: payment.amount,
+          companyAmount: payment.companyAmount,
+          platformFee: payment.platformFee,
+          paidAt: payment.paidAt,
+          deliveryId: payment.deliveryId,
+          reference: payment.paystackReference,
+          deliveryStatus: 'in_transit',
+          isMobile: true,
+          redirectUrl: 'app://delivery/in-progress', // Deep link back to app
+        },
+      });
+    }
+
+    // Web response
     res.status(200).json({
       success: true,
       message: 'Escrow payment verified successfully',
@@ -376,6 +441,297 @@ export const verifyDeliveryPayment = async (req, res) => {
       success: false,
       message: 'Failed to verify payment',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Mobile payment callback handler
+ * @route   GET /api/payments/mobile-callback
+ * @access  Public
+ */
+export const mobilePaymentCallback = async (req, res) => {
+  try {
+    const { reference, trxref } = req.query;
+    const paymentReference = reference || trxref;
+
+    if (!paymentReference) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Error</title>
+          <meta http-equiv="refresh" content="3;url=app://payment/error" />
+        </head>
+        <body>
+          <h1>Payment Error</h1>
+          <p>No payment reference found. Redirecting to app...</p>
+          <script>
+            setTimeout(() => {
+              window.location.href = 'app://payment/error';
+            }, 3000);
+          </script>
+        </body>
+        </html>
+      `);
+    }
+
+    // Verify the payment
+    const payment = await Payment.findOne({ paystackReference: paymentReference });
+    
+    if (!payment) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Not Found</title>
+          <meta http-equiv="refresh" content="3;url=app://payment/not-found" />
+        </head>
+        <body>
+          <h1>Payment Not Found</h1>
+          <p>Redirecting to app...</p>
+          <script>
+            setTimeout(() => {
+              window.location.href = 'app://payment/not-found';
+            }, 3000);
+          </script>
+        </body>
+        </html>
+      `);
+    }
+
+    // Show appropriate page based on payment status
+    if (payment.status === 'successful') {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Successful</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 50px;
+              background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+              color: white;
+              min-height: 100vh;
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              align-items: center;
+            }
+            .success-icon {
+              font-size: 80px;
+              margin-bottom: 20px;
+            }
+            h1 {
+              font-size: 32px;
+              margin-bottom: 20px;
+            }
+            p {
+              font-size: 18px;
+              margin-bottom: 30px;
+              max-width: 400px;
+            }
+            .amount {
+              font-size: 28px;
+              font-weight: bold;
+              margin: 20px 0;
+              background: rgba(255,255,255,0.2);
+              padding: 10px 30px;
+              border-radius: 10px;
+            }
+            .button {
+              background: white;
+              color: #059669;
+              padding: 15px 40px;
+              border-radius: 25px;
+              text-decoration: none;
+              font-weight: bold;
+              font-size: 18px;
+              margin-top: 20px;
+              display: inline-block;
+              cursor: pointer;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="success-icon">✅</div>
+          <h1>Payment Successful!</h1>
+          <p>Your payment has been processed successfully.</p>
+          <div class="amount">₦${payment.amount.toLocaleString()}</div>
+          <p>Payment reference: ${payment.paystackReference}</p>
+          <div class="button" onclick="redirectToApp()">Return to App</div>
+          
+          <script>
+            function redirectToApp() {
+              // Try deep link first
+              window.location.href = 'riderrapp://payment/success/${payment.paystackReference}';
+              
+              // Fallback to universal link
+              setTimeout(() => {
+                window.location.href = 'https://riderrapp.com/payment-success?reference=${payment.paystackReference}';
+              }, 500);
+            }
+            
+            // Auto-redirect after 5 seconds
+            setTimeout(redirectToApp, 5000);
+            
+            // Listen for app visibility change
+            document.addEventListener('visibilitychange', function() {
+              if (document.hidden) {
+                // App opened, don't redirect
+                clearTimeout();
+              }
+            });
+          </script>
+        </body>
+        </html>
+      `);
+    } else if (payment.status === 'pending') {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Processing Payment</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 50px;
+            }
+            .spinner {
+              border: 8px solid #f3f3f3;
+              border-top: 8px solid #10B981;
+              border-radius: 50%;
+              width: 60px;
+              height: 60px;
+              animation: spin 1s linear infinite;
+              margin: 0 auto 20px;
+            }
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          </style>
+          <script>
+            // Poll for payment status
+            async function checkPayment() {
+              try {
+                const response = await fetch('/api/payments/verify/${paymentReference}');
+                const data = await response.json();
+                
+                if (data.success && data.data.status === 'successful') {
+                  window.location.href = 'riderrapp://payment/success/${paymentReference}';
+                } else if (data.success === false) {
+                  window.location.href = 'riderrapp://payment/failed/${paymentReference}';
+                } else {
+                  setTimeout(checkPayment, 2000);
+                }
+              } catch (error) {
+                setTimeout(checkPayment, 2000);
+              }
+            }
+            
+            setTimeout(checkPayment, 2000);
+          </script>
+        </head>
+        <body>
+          <div class="spinner"></div>
+          <h2>Processing Payment...</h2>
+          <p>Please wait while we confirm your payment.</p>
+        </body>
+        </html>
+      `);
+    } else {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Failed</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 50px;
+              background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+              color: white;
+            }
+            .error-icon {
+              font-size: 80px;
+              margin-bottom: 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="error-icon">❌</div>
+          <h1>Payment Failed</h1>
+          <p>${payment.failureReason || 'Payment could not be processed'}</p>
+          <button onclick="window.location.href = 'riderrapp://payment/retry/${paymentReference}'">
+            Try Again
+          </button>
+          <button onclick="window.location.href = 'riderrapp://payment/cancel'">
+            Cancel
+          </button>
+        </body>
+        </html>
+      `);
+    }
+  } catch (error) {
+    console.error('Mobile callback error:', error);
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <body>
+        <h1>Server Error</h1>
+        <p>Something went wrong. Please return to the app.</p>
+        <script>
+          setTimeout(() => {
+            window.location.href = 'riderrapp://payment/error';
+          }, 3000);
+        </script>
+      </body>
+      </html>
+    `);
+  }
+};
+
+/**
+ * @desc    Check payment status (for mobile polling)
+ * @route   GET /api/payments/status/:reference
+ * @access  Private
+ */
+export const checkPaymentStatus = async (req, res) => {
+  try {
+    const { reference } = req.params;
+    
+    const payment = await Payment.findOne({ paystackReference: reference })
+      .select('status amount paidAt failureReason deliveryId');
+    
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found',
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        status: payment.status,
+        amount: payment.amount,
+        paidAt: payment.paidAt,
+        failureReason: payment.failureReason,
+        deliveryId: payment.deliveryId,
+        reference: reference,
+      },
+    });
+  } catch (error) {
+    console.error('Check payment status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check payment status',
     });
   }
 };

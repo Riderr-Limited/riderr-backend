@@ -58,13 +58,16 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
 
     // Get driver user info - handle both populated and unpopulated cases
     let driverUser;
+    let driverUserId;
     
     if (typeof driver.userId === 'object' && driver.userId !== null) {
       // Already populated
       driverUser = driver.userId;
+      driverUserId = driver.userId._id;
       console.log('✅ Driver user already populated:', driverUser);
     } else if (driver.userId) {
       // Need to populate
+      driverUserId = driver.userId;
       driverUser = await User.findById(driver.userId)
         .select('name phone avatarUrl rating')
         .lean();
@@ -79,10 +82,10 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
       return false;
     }
 
-    // Create driver details object
+    // Create driver details object with CORRECT userId reference
     const driverDetails = {
       driverId: driver._id,
-      userId: typeof driver.userId === 'object' ? driver.userId._id : driver.userId,
+      userId: driverUserId, // ✅ FIX: Store the ID, not the object
       name: driverUser.name || "Driver",
       phone: driverUser.phone || "",
       avatarUrl: driverUser.avatarUrl,
@@ -109,7 +112,7 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
     return false;
   }
 };
-
+ 
 /**
  * CUSTOMER CONTROLLERS
  */
@@ -1696,287 +1699,7 @@ export const rateDelivery = async (req, res) => {
  * @route   GET /api/deliveries/customer/active
  * @access  Private (Customer)
  */
-export const getCustomerActiveDelivery = async (req, res) => {
-  try {
-    const customer = req.user;
-
-    if (customer.role !== "customer") {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied",
-      });
-    }
-
-    // Find active delivery - Use lean() for better performance
-    const delivery = await Delivery.findOne({
-      customerId: customer._id,
-      status: { $in: ["assigned", "picked_up", "in_transit"] }
-    })
-      .populate({
-        path: "driverId",
-        select: "vehicleType vehicleMake vehicleModel plateNumber userId",
-        populate: {
-          path: "userId",
-          select: "name phone avatarUrl rating",
-        },
-      })
-      .populate("companyId", "name logo contactPhone")
-      .populate("customerId", "name phone")
-      .lean(); // Use lean() to get plain object
-
-    if (!delivery) {
-      return res.status(200).json({
-        success: true,
-        message: "No active delivery",
-        data: null,
-      });
-    }
-
-    console.log('📦 Delivery ID:', delivery._id);
-    console.log('🚗 Driver ID:', delivery.driverId?._id);
-    console.log('👤 Driver populated:', !!delivery.driverId?.userId);
-
-    // Get driver's current location
-    let driverLocation = null;
-    let etaMinutes = null;
-
-    if (delivery.driverId) {
-      // Get driver with user details
-      const driver = await Driver.findById(delivery.driverId._id)
-        .select("currentLocation location userId vehicleType vehicleMake vehicleModel plateNumber")
-        .populate("userId", "name phone avatarUrl rating")
-        .lean(); // Use lean()
-      
-      console.log('🔍 Driver data:', {
-        id: driver?._id,
-        userId: driver?.userId?._id,
-        name: driver?.userId?.name,
-        phone: driver?.userId?.phone,
-        vehicleType: driver?.vehicleType
-      });
-
-      if (driver && driver.userId) {
-        // Get driver location
-        if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-          driverLocation = {
-            lat: driver.currentLocation.lat,
-            lng: driver.currentLocation.lng,
-            updatedAt: driver.currentLocation.updatedAt,
-          };
-        } else if (driver.location?.coordinates) {
-          driverLocation = {
-            lat: driver.location.coordinates[1],
-            lng: driver.location.coordinates[0],
-            updatedAt: new Date(),
-          };
-        }
-
-        // Calculate ETA
-        if (driverLocation) {
-          if (delivery.status === "picked_up") {
-            const distance = calculateDistance(
-              driverLocation.lat,
-              driverLocation.lng,
-              delivery.dropoff.lat,
-              delivery.dropoff.lng
-            );
-            etaMinutes = Math.ceil(distance * 3);
-          } else if (delivery.status === "assigned") {
-            const distance = calculateDistance(
-              driverLocation.lat,
-              driverLocation.lng,
-              delivery.pickup.lat,
-              delivery.pickup.lng
-            );
-            etaMinutes = Math.ceil(distance * 3);
-          }
-        }
-
-        // Ensure driver details are saved to delivery
-        if (!delivery.driverDetails || !delivery.driverDetails.name) {
-          console.log('💾 Saving/updating driver details...');
-          const saved = await saveDriverDetailsToDelivery(delivery._id.toString(), driver);
-          
-          if (saved) {
-            // Get updated delivery with driver details
-            const updatedDelivery = await Delivery.findById(delivery._id)
-              .select("driverDetails")
-              .lean();
-            
-            if (updatedDelivery?.driverDetails) {
-              delivery.driverDetails = updatedDelivery.driverDetails;
-              console.log('✅ Updated driver details:', delivery.driverDetails);
-            }
-          }
-        }
-      }
-    }
-
-    // Get timeline
-    const timeline = [];
-    if (delivery.createdAt)
-      timeline.push({ event: "created", time: delivery.createdAt, description: "Order created", icon: "📝" });
-    if (delivery.assignedAt)
-      timeline.push({ event: "assigned", time: delivery.assignedAt, description: "Driver assigned", icon: "🚗" });
-    if (delivery.pickedUpAt)
-      timeline.push({ event: "picked_up", time: delivery.pickedUpAt, description: "Package picked up", icon: "📦" });
-
-    // Current step
-    let currentStep = "awaiting_driver";
-    let nextStep = "";
-
-    switch (delivery.status) {
-      case "assigned":
-        currentStep = "driver_assigned";
-        nextStep = "Driver heading to pickup location";
-        break;
-      case "picked_up":
-        currentStep = "package_picked_up";
-        nextStep = "Driver heading to dropoff location";
-        break;
-      case "in_transit":
-        currentStep = "in_transit";
-        nextStep = "Driver on the way";
-        break;
-    }
-
-    // Build driver object - CORRECT IMPLEMENTATION
-    let driverObject = null;
-    
-    if (delivery.driverId) {
-      console.log('🔍 Building driver object from driverId...');
-      
-      // Get the driver data (already fetched above)
-      const driver = await Driver.findById(delivery.driverId._id)
-        .populate("userId", "name phone avatarUrl rating")
-        .select("vehicleType vehicleMake vehicleModel plateNumber")
-        .lean();
-      
-      if (driver && driver.userId) {
-        driverObject = {
-          _id: driver._id,
-          name: driver.userId.name || "Driver",
-          phone: driver.userId.phone || "",
-          avatarUrl: driver.userId.avatarUrl,
-          rating: driver.userId.rating || 0,
-          vehicle: {
-            type: driver.vehicleType || "bike",
-            make: driver.vehicleMake || "",
-            model: driver.vehicleModel || "",
-            plateNumber: driver.plateNumber || "",
-          },
-          currentLocation: driverLocation,
-        };
-        console.log('✅ Driver object built from driver.userId:', driverObject);
-      }
-    }
-    
-    // If still no driver object, try from driverDetails
-    if (!driverObject && delivery.driverDetails) {
-      console.log('🔍 Building driver object from driverDetails...');
-      driverObject = {
-        _id: delivery.driverDetails.driverId,
-        name: delivery.driverDetails.name || "Driver",
-        phone: delivery.driverDetails.phone || "",
-        avatarUrl: delivery.driverDetails.avatarUrl,
-        rating: delivery.driverDetails.rating || 0,
-        vehicle: delivery.driverDetails.vehicle || {
-          type: "bike",
-          make: "",
-          model: "",
-          plateNumber: ""
-        },
-        currentLocation: driverLocation,
-      };
-    }
-
-    // If still no driver object, create minimal one
-    if (!driverObject) {
-      console.log('⚠️ Creating minimal driver object');
-      driverObject = {
-        name: "Driver",
-        phone: "",
-        rating: 0,
-        vehicle: {
-          type: "bike",
-          make: "",
-          model: "",
-          plateNumber: ""
-        },
-        currentLocation: driverLocation,
-      };
-    }
-
-    console.log('🚗 Final driver object to send:', driverObject);
-
-    // Build response
-    const response = {
-      success: true,
-      data: {
-        _id: delivery._id,
-        referenceId: delivery.referenceId,
-        status: delivery.status,
-        currentStep,
-        nextStep,
-        
-        customer: delivery.customerId ? {
-          name: delivery.customerId.name,
-          phone: delivery.customerId.phone,
-          _id: delivery.customerId._id
-        } : {
-          name: customer.name,
-          phone: customer.phone,
-          _id: customer._id
-        },
-        
-        company: delivery.companyId ? {
-          name: delivery.companyId.name,
-          logo: delivery.companyId.logo,
-          contactPhone: delivery.companyId.contactPhone,
-          _id: delivery.companyId._id
-        } : null,
-        
-        pickup: delivery.pickup,
-        dropoff: delivery.dropoff,
-        recipientName: delivery.recipientName,
-        recipientPhone: delivery.recipientPhone,
-        
-        // Driver info - SHOULD NOW HAVE CORRECT NAME AND PHONE
-        driver: driverObject,
-        
-        itemDetails: delivery.itemDetails,
-        fare: delivery.fare,
-        etaMinutes,
-        estimatedDistanceKm: delivery.estimatedDistanceKm,
-        estimatedDurationMin: delivery.estimatedDurationMin,
-        timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
-        progress: {
-          step: currentStep,
-          percentage: getDeliveryProgressPercentage(delivery.status),
-          message: getDeliveryStatusMessage(delivery.status),
-        },
-        canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
-        tracking: delivery.tracking || null,
-        payment: delivery.payment || { method: "cash", status: "pending" },
-        createdAt: delivery.createdAt,
-        updatedAt: delivery.updatedAt,
-        assignedAt: delivery.assignedAt,
-        pickedUpAt: delivery.pickedUpAt,
-      },
-    };
-
-    console.log('✅ Response prepared with driver:', response.data.driver?.name);
-    return res.status(200).json(response);
-
-  } catch (error) {
-    console.error("❌ Get customer active delivery error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get active delivery",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
+ 
 /**
  * Helper function to calculate delivery progress percentage
  */
@@ -2508,156 +2231,7 @@ export const getCompanyDeliveries = async (req, res) => {
  * @route   GET /api/deliveries/nearby-available-drivers
  * @access  Private (Customer)
  */
-export const getNearbyAvailableDrivers = async (req, res) => {
-  try {
-    const customer = req.user;
-
-    if (customer.role !== "customer") {
-      return res.status(403).json({
-        success: false,
-        message: "Only customers can view nearby drivers",
-      });
-    }
-
-    const { lat, lng, radius = 5 } = req.query;
-
-    if (!lat || !lng) {
-      return res.status(400).json({
-        success: false,
-        message: "Latitude and longitude are required",
-      });
-    }
-
-    const customerLat = parseFloat(lat);
-    const customerLng = parseFloat(lng);
-    const searchRadius = parseFloat(radius);
-
-    console.log(`📍 Customer location: ${customerLat}, ${customerLng}, Radius: ${searchRadius}km`);
-
-    // Find all available drivers who are online and not on a delivery
-    const drivers = await Driver.find({
-      isOnline: true,
-      isAvailable: true,
-      isActive: true,
-      approvalStatus: "approved",
-      currentDeliveryId: { $exists: false }, // Not currently on a delivery
-    })
-      .populate("userId", "name phone avatarUrl rating totalRides")
-      .populate("companyId", "name logo rating")
-      .select("+currentLocation +location");
-
-    console.log(`🚗 Total available drivers: ${drivers.length}`);
-
-    // Calculate distance for each driver and filter by radius
-    const nearbyDrivers = drivers
-      .map((driver) => {
-        let driverLat, driverLng, driverLocation = null;
-
-        // Get driver's current location from appropriate field
-        if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-          driverLat = driver.currentLocation.lat;
-          driverLng = driver.currentLocation.lng;
-          driverLocation = {
-            lat: driverLat,
-            lng: driverLng,
-            updatedAt: driver.currentLocation.updatedAt || new Date(),
-          };
-        } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
-          // New format: [longitude, latitude]
-          driverLng = driver.location.coordinates[0];
-          driverLat = driver.location.coordinates[1];
-          driverLocation = {
-            lat: driverLat,
-            lng: driverLng,
-            updatedAt: new Date(),
-          };
-        } else {
-          console.log(`❌ Driver ${driver._id} has no location data`);
-          return null;
-        }
-
-        // Calculate distance from customer
-        const distance = calculateDistance(
-          customerLat,
-          customerLng,
-          driverLat,
-          driverLng
-        );
-
-        // Only include drivers within the search radius
-        if (distance <= searchRadius) {
-          // Calculate ETA (3 minutes per km)
-          const etaMinutes = Math.ceil(distance * 3);
-          
-          return {
-            _id: driver._id,
-            userId: driver.userId?._id,
-            driverId: driver._id,
-            name: driver.userId?.name || "Driver",
-            phone: driver.userId?.phone || "",
-            avatarUrl: driver.userId?.avatarUrl,
-            rating: driver.userId?.rating || 0,
-            totalRides: driver.userId?.totalRides || 0,
-            company: driver.companyId ? {
-              _id: driver.companyId._id,
-              name: driver.companyId.name,
-              logo: driver.companyId.logo,
-              rating: driver.companyId.rating || 0,
-            } : null,
-            vehicle: {
-              type: driver.vehicleType || "bike",
-              make: driver.vehicleMake || "",
-              model: driver.vehicleModel || "",
-              plateNumber: driver.plateNumber || "",
-              color: driver.vehicleColor || "",
-              year: driver.vehicleYear || "",
-            },
-            location: driverLocation,
-            distance: parseFloat(distance.toFixed(2)),
-            distanceText: `${distance.toFixed(1)} km away`,
-            etaMinutes,
-            etaText: `${etaMinutes} min`,
-            isOnline: driver.isOnline,
-            isAvailable: driver.isAvailable,
-            canAcceptDeliveries: driver.canAcceptDeliveries,
-            // Additional info for UI
-            status: "available",
-            acceptanceRate: driver.totalRequests 
-              ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
-              : 0,
-            totalDeliveries: driver.totalDeliveries || 0,
-            earnings: driver.earnings || 0,
-            onlineSince: driver.lastOnlineStart,
-          };
-        }
-        
-        return null;
-      })
-      .filter((driver) => driver !== null)
-      .sort((a, b) => a.distance - b.distance); // Sort by closest first
-
-    console.log(`✅ Found ${nearbyDrivers.length} nearby available drivers`);
-
-    res.status(200).json({
-      success: true,
-      message: `Found ${nearbyDrivers.length} nearby available drivers`,
-      data: {
-        drivers: nearbyDrivers,
-        customerLocation: { lat: customerLat, lng: customerLng },
-        searchRadius,
-        count: nearbyDrivers.length,
-        timestamp: new Date().toISOString(),
-      },
-    });
-  } catch (error) {
-    console.error("❌ Get nearby available drivers error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to find nearby drivers",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
+ 
  
 
 /**
@@ -3271,3 +2845,400 @@ export const createDeliveryRequest = async (req, res) => {
     });
   }
 };
+
+
+/**
+ * @desc    Get customer's active delivery (FIXED)
+ * @route   GET /api/deliveries/customer/active
+ * @access  Private (Customer)
+ */
+  export const getCustomerActiveDelivery = async (req, res) => {
+    try {
+      const customer = req.user;
+  
+      if (customer.role !== "customer") {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
+        });
+      }
+  
+      // Find active delivery
+      const delivery = await Delivery.findOne({
+        customerId: customer._id,
+        status: { $in: ["created", "assigned", "picked_up", "in_transit"] }
+      })
+        .populate("customerId", "name phone")
+        .populate("companyId", "name logo contactPhone")
+        .lean();
+  
+      if (!delivery) {
+        return res.status(200).json({
+          success: true,
+          message: "No active delivery",
+          data: null,
+        });
+      }
+  
+      console.log('📦 Delivery ID:', delivery._id);
+      console.log('📊 Status:', delivery.status);
+      console.log('🚗 Driver ID:', delivery.driverId);
+  
+      // Get driver's current location and details
+      let driverLocation = null;
+      let etaMinutes = null;
+      let driverObject = null;
+  
+      if (delivery.driverId) {
+        // ✅ FIX: Properly fetch and populate driver data
+        const driver = await Driver.findById(delivery.driverId)
+          .select("currentLocation location userId vehicleType vehicleMake vehicleModel plateNumber")
+          .populate("userId", "name phone avatarUrl rating")
+          .lean();
+        
+        console.log('🔍 Driver found:', {
+          id: driver?._id,
+          userId: driver?.userId?._id,
+          userName: driver?.userId?.name,
+          vehicleType: driver?.vehicleType
+        });
+  
+        if (driver) {
+          // Get driver location
+          if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+            driverLocation = {
+              lat: driver.currentLocation.lat,
+              lng: driver.currentLocation.lng,
+              updatedAt: driver.currentLocation.updatedAt,
+            };
+          } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+            driverLocation = {
+              lat: driver.location.coordinates[1],
+              lng: driver.location.coordinates[0],
+              updatedAt: new Date(),
+            };
+          }
+  
+          // Calculate ETA
+          if (driverLocation) {
+            if (delivery.status === "picked_up" || delivery.status === "in_transit") {
+              const distance = calculateDistance(
+                driverLocation.lat,
+                driverLocation.lng,
+                delivery.dropoff.lat,
+                delivery.dropoff.lng
+              );
+              etaMinutes = Math.ceil(distance * 3);
+            } else if (delivery.status === "assigned") {
+              const distance = calculateDistance(
+                driverLocation.lat,
+                driverLocation.lng,
+                delivery.pickup.lat,
+                delivery.pickup.lng
+              );
+              etaMinutes = Math.ceil(distance * 3);
+            }
+          }
+  
+          // ✅ FIX: Build driver object with proper data
+          if (driver.userId) {
+            driverObject = {
+              _id: driver._id,
+              name: driver.userId.name || "Driver",
+              phone: driver.userId.phone || "",
+              avatarUrl: driver.userId.avatarUrl,
+              rating: driver.userId.rating || 0,
+              vehicle: {
+                type: driver.vehicleType || "bike",
+                make: driver.vehicleMake || "",
+                model: driver.vehicleModel || "",
+                plateNumber: driver.plateNumber || "",
+              },
+              currentLocation: driverLocation,
+            };
+  
+            // Ensure driver details are saved to delivery
+            if (!delivery.driverDetails || !delivery.driverDetails.name) {
+              console.log('💾 Saving driver details to delivery...');
+              await saveDriverDetailsToDelivery(delivery._id.toString(), driver);
+            }
+          }
+        } else {
+          console.log('❌ Driver not found in database');
+        }
+      }
+      
+      // Fallback to driverDetails if driver object not built
+      if (!driverObject && delivery.driverDetails) {
+        console.log('🔍 Using saved driverDetails...');
+        driverObject = {
+          _id: delivery.driverDetails.driverId,
+          name: delivery.driverDetails.name || "Driver",
+          phone: delivery.driverDetails.phone || "",
+          avatarUrl: delivery.driverDetails.avatarUrl,
+          rating: delivery.driverDetails.rating || 0,
+          vehicle: delivery.driverDetails.vehicle || {
+            type: "bike",
+            make: "",
+            model: "",
+            plateNumber: ""
+          },
+          currentLocation: driverLocation,
+        };
+      }
+  
+      // Get timeline
+      const timeline = [];
+      if (delivery.createdAt)
+        timeline.push({ event: "created", time: delivery.createdAt, description: "Order created", icon: "📝" });
+      if (delivery.assignedAt)
+        timeline.push({ event: "assigned", time: delivery.assignedAt, description: "Driver assigned", icon: "🚗" });
+      if (delivery.pickedUpAt)
+        timeline.push({ event: "picked_up", time: delivery.pickedUpAt, description: "Package picked up", icon: "📦" });
+  
+      // Current step
+      let currentStep = "awaiting_driver";
+      let nextStep = "";
+  
+      switch (delivery.status) {
+        case "created":
+          currentStep = "searching_driver";
+          nextStep = "Searching for available drivers...";
+          break;
+        case "assigned":
+          currentStep = "driver_assigned";
+          nextStep = "Driver heading to pickup location";
+          break;
+        case "picked_up":
+          currentStep = "package_picked_up";
+          nextStep = "Driver heading to dropoff location";
+          break;
+        case "in_transit":
+          currentStep = "in_transit";
+          nextStep = "Driver on the way";
+          break;
+      }
+  
+      // Build response
+      const response = {
+        success: true,
+        data: {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          status: delivery.status,
+          currentStep,
+          nextStep,
+          
+          customer: delivery.customerId ? {
+            name: delivery.customerId.name,
+            phone: delivery.customerId.phone,
+            _id: delivery.customerId._id
+          } : {
+            name: customer.name,
+            phone: customer.phone,
+            _id: customer._id
+          },
+          
+          company: delivery.companyId ? {
+            name: delivery.companyId.name,
+            logo: delivery.companyId.logo,
+            contactPhone: delivery.companyId.contactPhone,
+            _id: delivery.companyId._id
+          } : null,
+          
+          pickup: delivery.pickup,
+          dropoff: delivery.dropoff,
+          recipientName: delivery.recipientName,
+          recipientPhone: delivery.recipientPhone,
+          
+          // Driver info
+          driver: driverObject,
+          
+          itemDetails: delivery.itemDetails,
+          fare: delivery.fare,
+          etaMinutes,
+          estimatedDistanceKm: delivery.estimatedDistanceKm,
+          estimatedDurationMin: delivery.estimatedDurationMin,
+          timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
+          progress: {
+            step: currentStep,
+            percentage: getDeliveryProgressPercentage(delivery.status),
+            message: getDeliveryStatusMessage(delivery.status),
+          },
+          canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
+          tracking: delivery.tracking || null,
+          payment: delivery.payment || { method: "cash", status: "pending" },
+          createdAt: delivery.createdAt,
+          updatedAt: delivery.updatedAt,
+          assignedAt: delivery.assignedAt,
+          pickedUpAt: delivery.pickedUpAt,
+        },
+      };
+  
+      console.log('✅ Sending response with driver:', driverObject ? 'YES' : 'NO');
+      return res.status(200).json(response);
+  
+    } catch (error) {
+      console.error("❌ Get customer active delivery error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to get active delivery",
+        error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  };
+  
+   
+ 
+/**
+ * @desc    Get nearby available drivers for customer with real-time location (FIXED)
+ * @route   GET /api/deliveries/nearby-available-drivers
+ * @access  Private (Customer)
+ */
+ 
+ export const getNearbyAvailableDrivers = async (req, res) => {
+   try {
+     const customer = req.user;
+ 
+     if (customer.role !== "customer") {
+       return res.status(403).json({
+         success: false,
+         message: "Only customers can view nearby drivers",
+       });
+     }
+ 
+     const { lat, lng, radius = 10 } = req.query; // ✅ Increased default radius to 10km
+ 
+     if (!lat || !lng) {
+       return res.status(400).json({
+         success: false,
+         message: "Latitude and longitude are required",
+       });
+     }
+ 
+     const customerLat = parseFloat(lat);
+     const customerLng = parseFloat(lng);
+     const searchRadius = parseFloat(radius);
+ 
+     console.log(`📍 Searching for drivers near: ${customerLat}, ${customerLng}, Radius: ${searchRadius}km`);
+ 
+     // ✅ FIX: Find available drivers with proper query
+     const drivers = await Driver.find({
+       isOnline: true,
+       isAvailable: true,
+       isActive: true,
+       approvalStatus: "approved",
+       $or: [
+         { currentDeliveryId: { $exists: false } },
+         { currentDeliveryId: null }
+       ]
+     })
+       .populate("userId", "name phone avatarUrl rating")
+       .populate("companyId", "name logo rating")
+       .lean();
+ 
+     console.log(`🚗 Total available drivers found: ${drivers.length}`);
+ 
+     // Calculate distance for each driver
+     const nearbyDrivers = [];
+     
+     for (const driver of drivers) {
+       let driverLat, driverLng, driverLocation = null;
+ 
+       // ✅ FIX: Try multiple location sources
+       if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+         driverLat = driver.currentLocation.lat;
+         driverLng = driver.currentLocation.lng;
+         driverLocation = {
+           lat: driverLat,
+           lng: driverLng,
+           updatedAt: driver.currentLocation.updatedAt || new Date(),
+         };
+         console.log(`✅ Driver ${driver._id} - currentLocation: ${driverLat}, ${driverLng}`);
+       } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+         driverLng = driver.location.coordinates[0];
+         driverLat = driver.location.coordinates[1];
+         driverLocation = {
+           lat: driverLat,
+           lng: driverLng,
+           updatedAt: new Date(),
+         };
+         console.log(`✅ Driver ${driver._id} - GeoJSON location: ${driverLat}, ${driverLng}`);
+       } else {
+         console.log(`❌ Driver ${driver._id} - No location data available`);
+         continue; // Skip this driver
+       }
+ 
+       // Calculate distance
+       const distance = calculateDistance(
+         customerLat,
+         customerLng,
+         driverLat,
+         driverLng
+       );
+ 
+       console.log(`📏 Driver ${driver._id} distance: ${distance.toFixed(2)} km`);
+ 
+       // ✅ FIX: Include ALL drivers within radius (no minimum distance filter)
+       if (distance <= searchRadius) {
+         const etaMinutes = Math.max(2, Math.ceil(distance * 3));
+         
+         nearbyDrivers.push({
+           _id: driver._id,
+           userId: driver.userId?._id,
+           driverId: driver._id,
+           name: driver.userId?.name || "Driver",
+           phone: driver.userId?.phone || "",
+           avatarUrl: driver.userId?.avatarUrl,
+           rating: driver.userId?.rating || 0,
+           company: driver.companyId ? {
+             _id: driver.companyId._id,
+             name: driver.companyId.name,
+             logo: driver.companyId.logo,
+             rating: driver.companyId.rating || 0,
+           } : null,
+           vehicle: {
+             type: driver.vehicleType || "bike",
+             make: driver.vehicleMake || "",
+             model: driver.vehicleModel || "",
+             plateNumber: driver.plateNumber || "",
+           },
+           location: driverLocation,
+           distance: parseFloat(distance.toFixed(2)),
+           distanceText: distance < 0.1 ? "Nearby" : `${distance.toFixed(1)} km away`,
+           etaMinutes,
+           etaText: `${etaMinutes} min`,
+           isOnline: driver.isOnline,
+           isAvailable: driver.isAvailable,
+           status: "available",
+         });
+       }
+     }
+ 
+     // Sort by distance (closest first)
+     nearbyDrivers.sort((a, b) => a.distance - b.distance);
+ 
+     console.log(`✅ Found ${nearbyDrivers.length} nearby drivers within ${searchRadius}km`);
+ 
+     res.status(200).json({
+       success: true,
+       message: nearbyDrivers.length > 0 
+         ? `Found ${nearbyDrivers.length} nearby available drivers`
+         : "No drivers available in your area at the moment",
+       data: {
+         drivers: nearbyDrivers,
+         customerLocation: { lat: customerLat, lng: customerLng },
+         searchRadius,
+         count: nearbyDrivers.length,
+         timestamp: new Date().toISOString(),
+       },
+     });
+   } catch (error) {
+     console.error("❌ Get nearby available drivers error:", error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to find nearby drivers",
+       error: process.env.NODE_ENV === "development" ? error.message : undefined,
+     });
+   }
+ };

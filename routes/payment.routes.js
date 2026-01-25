@@ -1,3 +1,4 @@
+// routes/payment.routes.js
 import express from 'express';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import {
@@ -6,6 +7,8 @@ import {
   handlePaystackWebhook,
   getPaymentDetails,
   getMyPayments,
+  mobilePaymentCallback,
+  checkPaymentStatus,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -16,7 +19,11 @@ router.get('/verify/:reference', authenticate, verifyDeliveryPayment);
 router.get('/my-payments', authenticate, getMyPayments);
 router.get('/:paymentId', authenticate, getPaymentDetails);
 
-// ============ WEBHOOK ROUTES (No authentication) ============
+// ============ MOBILE-SPECIFIC ROUTES ============
+router.get('/mobile-callback', mobilePaymentCallback);  
+router.get('/status/:reference', authenticate, checkPaymentStatus);
+
+// ============ WEBHOOK ROUTES ============
 router.post('/webhook', handlePaystackWebhook);
 
 export default router;
