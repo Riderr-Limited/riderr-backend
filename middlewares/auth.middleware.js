@@ -1,6 +1,6 @@
 // middleware/auth.middleware.js
-import jwt from 'jsonwebtoken';
-import User from '../models/user.models.js';
+import jwt from "jsonwebtoken";
+import User from "../models/user.models.js";
 
 /**
  * Authenticate user via JWT token
@@ -9,50 +9,53 @@ export const authenticate = async (req, res, next) => {
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
         success: false,
-        message: 'No token provided. Authorization denied.'
+        message: "No token provided. Authorization denied.",
       });
     }
 
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid token format'
+        message: "Invalid token format",
       });
     }
 
     // Verify token
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-change-in-production');
+      decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
+      );
     } catch (err) {
-      if (err.name === 'TokenExpiredError') {
+      if (err.name === "TokenExpiredError") {
         return res.status(401).json({
           success: false,
-          message: 'Token expired. Please login again.',
-          code: 'TOKEN_EXPIRED'
+          message: "Token expired. Please login again.",
+          code: "TOKEN_EXPIRED",
         });
       }
       return res.status(401).json({
         success: false,
-        message: 'Invalid token'
+        message: "Invalid token",
       });
     }
 
     // Get user from token
     const user = await User.findById(decoded.userId)
-      .select('-password -refreshToken')
-      .populate('companyId', 'name status');
+      .select("-password -refreshToken")
+      .populate("companyId", "name status");
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'User not found. Token invalid.'
+        message: "User not found. Token invalid.",
       });
     }
 
@@ -60,7 +63,7 @@ export const authenticate = async (req, res, next) => {
     if (!user.isActive || user.isDeleted) {
       return res.status(403).json({
         success: false,
-        message: 'Account is deactivated'
+        message: "Account is deactivated",
       });
     }
 
@@ -68,20 +71,19 @@ export const authenticate = async (req, res, next) => {
     if (user.isLocked) {
       return res.status(423).json({
         success: false,
-        message: 'Account is locked'
+        message: "Account is locked",
       });
     }
 
     // Attach user to request
     req.user = user;
     next();
-
   } catch (error) {
-    console.error('❌ Authentication error:', error);
+    console.error("❌ Authentication error:", error);
     res.status(500).json({
       success: false,
-      message: 'Authentication failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Authentication failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -95,16 +97,16 @@ export const authorize = (...roles) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
-        message: 'Authentication required'
+        message: "Authentication required",
       });
     }
 
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Insufficient permissions.',
+        message: "Access denied. Insufficient permissions.",
         requiredRoles: roles,
-        userRole: req.user.role
+        userRole: req.user.role,
       });
     }
 
@@ -118,20 +120,24 @@ export const authorize = (...roles) => {
 export const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return next();
     }
 
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(" ")[1];
 
     if (!token) {
       return next();
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret-key-change-in-production');
-    const user = await User.findById(decoded.userId)
-      .select('-password -refreshToken');
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
+    );
+    const user = await User.findById(decoded.userId).select(
+      "-password -refreshToken",
+    );
 
     if (user && user.isActive && !user.isDeleted) {
       req.user = user;
@@ -151,15 +157,15 @@ export const requireVerification = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: "Authentication required",
     });
   }
 
   if (!req.user.isVerified) {
     return res.status(403).json({
       success: false,
-      message: 'Account verification required',
-      code: 'VERIFICATION_REQUIRED'
+      message: "Account verification required",
+      code: "VERIFICATION_REQUIRED",
     });
   }
 
@@ -172,16 +178,16 @@ export const requireVerification = (req, res, next) => {
 export const checkCompanyOwnership = (req, res, next) => {
   const { companyId } = req.params;
 
-  if (req.user.role === 'admin') {
+  if (req.user.role === "admin") {
     // Admin can access any company
     return next();
   }
 
-  if (req.user.role === 'company_admin') {
+  if (req.user.role === "company_admin") {
     if (!req.user.companyId || req.user.companyId.toString() !== companyId) {
       return res.status(403).json({
         success: false,
-        message: 'Cannot access another company\'s resources'
+        message: "Cannot access another company's resources",
       });
     }
     return next();
@@ -189,7 +195,7 @@ export const checkCompanyOwnership = (req, res, next) => {
 
   return res.status(403).json({
     success: false,
-    message: 'Access denied'
+    message: "Access denied",
   });
 };
 
@@ -200,21 +206,21 @@ export const companyAdminOnly = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: "Authentication required",
     });
   }
 
-  if (req.user.role !== 'company_admin') {
+  if (req.user.role !== "company_admin") {
     return res.status(403).json({
       success: false,
-      message: 'Only company admins can access this route'
+      message: "Only company admins can access this route",
     });
   }
 
   if (!req.user.companyId) {
     return res.status(403).json({
       success: false,
-      message: 'Company admin must be associated with a company'
+      message: "Company admin must be associated with a company",
     });
   }
 
@@ -228,14 +234,14 @@ export const adminOnly = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: "Authentication required",
     });
   }
 
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== "admin") {
     return res.status(403).json({
       success: false,
-      message: 'Only admins can access this route'
+      message: "Only admins can access this route",
     });
   }
 
@@ -249,14 +255,14 @@ export const driverOnly = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: "Authentication required",
     });
   }
 
-  if (req.user.role !== 'driver') {
+  if (req.user.role !== "driver") {
     return res.status(403).json({
       success: false,
-      message: 'Only drivers can access this route'
+      message: "Only drivers can access this route",
     });
   }
 
@@ -270,14 +276,14 @@ export const customerOnly = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: "Authentication required",
     });
   }
 
-  if (req.user.role !== 'customer') {
+  if (req.user.role !== "customer") {
     return res.status(403).json({
       success: false,
-      message: 'Only customers can access this route'
+      message: "Only customers can access this route",
     });
   }
 
@@ -301,37 +307,85 @@ export const checkResourceOwnership = (resourceOwnerId) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
-        message: 'Authentication required'
+        message: "Authentication required",
       });
     }
 
     // Admins can access any resource
-    if (req.user.role === 'admin') {
+    if (req.user.role === "admin") {
       return next();
     }
 
     // Check if user owns the resource
     const resourceId = req.params[resourceOwnerId] || req.body[resourceOwnerId];
-    
+
     if (req.user._id.toString() === resourceId.toString()) {
       return next();
     }
 
     // Company admin can access company resources
-    if (req.user.role === 'company_admin' && req.user.companyId) {
+    if (req.user.role === "company_admin" && req.user.companyId) {
       // Additional logic for company-owned resources
       return next();
     }
 
     return res.status(403).json({
       success: false,
-      message: 'Access denied. You do not own this resource.'
+      message: "Access denied. You do not own this resource.",
     });
   };
 };
 
 /**
+ * Check if user can access delivery chat
+ * User must be either the customer or the assigned driver for the delivery
+ */
+export const canAccessDeliveryChat = async (req, res, next) => {
+  try {
+    const { deliveryId } = req.params;
+    const userId = req.user._id;
+
+    const Delivery = (await import("../models/delivery.models.js")).default;
+    const delivery = await Delivery.findById(deliveryId)
+      .select("customerId driverId status")
+      .populate("driverId", "userId");
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found",
+      });
+    }
+
+    // Check if user is customer or driver
+    const isCustomer = delivery.customerId.toString() === userId.toString();
+    const isDriver =
+      delivery.driverId?.userId?.toString() === userId.toString();
+
+    if (!isCustomer && !isDriver) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You are not part of this delivery.",
+      });
+    }
+
+    // Attach delivery info to request
+    req.delivery = delivery;
+    req.isCustomer = isCustomer;
+    req.isDriver = isDriver;
+
+    next();
+  } catch (error) {
+    console.error("Delivery chat access check error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify chat access",
+    });
+  }
+};
+
+/**
  * Add aliases for compatibility
  */
-export const protect = authenticate;  // Alias for authenticate
-export const auth = authenticate;     // Another alias
+export const protect = authenticate; // Alias for authenticate
+export const auth = authenticate; // Another alias
