@@ -98,7 +98,15 @@ const startServer = async () => {
     // Initialize Socket.IO with CORS configuration
     const io = new Server(httpServer, {
       cors: {
-        origin: ['http://localhost:3000', 'http://localhost:3001'], // Specific origins
+        origin: [
+          'http://localhost:3000', 
+          'http://localhost:3001',
+          'https://riderr.ng',
+          'https://www.riderr.ng',
+          'https://riderrr.vercel.app',
+          process.env.FRONTEND_URL,
+          process.env.CLIENT_URL
+        ].filter(Boolean),
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         credentials: true
       },

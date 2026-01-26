@@ -24,8 +24,11 @@ const corsOptions = {
       'http://127.0.0.1:3001',
       'https://riderr.ng',
       'https://www.riderr.ng',
-      'https://riderrr.vercel.app'
-    ];
+      'https://riderrr.vercel.app',
+      // Add your actual deployed backend URL
+      process.env.FRONTEND_URL,
+      process.env.CLIENT_URL
+    ].filter(Boolean);
     
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
@@ -90,6 +93,30 @@ app.get('/api/health', (req, res) => {
     message: 'Server is healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
+  });
+});
+
+/**
+ * Debug endpoint for deployment
+ */
+app.get('/api/debug', (req, res) => {
+  res.json({
+    success: true,
+    environment: process.env.NODE_ENV,
+    port: process.env.PORT,
+    frontendUrl: process.env.FRONTEND_URL,
+    backendUrl: process.env.BACKEND_URL,
+    corsOrigins: [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://riderr.ng',
+      'https://www.riderr.ng',
+      'https://riderrr.vercel.app',
+      process.env.FRONTEND_URL,
+      process.env.CLIENT_URL
+    ].filter(Boolean),
+    requestOrigin: req.headers.origin,
+    timestamp: new Date().toISOString()
   });
 });
 
