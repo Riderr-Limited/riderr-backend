@@ -9,6 +9,7 @@ import companyRoutes from "./company.routes.js";
 import paymentRoutes from "./payment.routes.js";
 import notificationRoutes from "./notification.routes.js";
 import chatRoutes from "./chat.routes.js";
+import voiceCallRoutes from "./voiceCall.routes.js";
 
 const router = express.Router();
 
@@ -152,6 +153,7 @@ router.use("/company", companyRoutes);
 router.use("/payments", paymentRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/chat", chatRoutes);
+router.use("/voice", voiceCallRoutes);
 
 /**
  * @route   ALL *

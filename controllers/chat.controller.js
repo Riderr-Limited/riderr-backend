@@ -1,5 +1,7 @@
 import ChatMessage from "../models/chat.model.js";
+import VoiceCall from "../models/voiceCall.model.js";
 import { validationResult } from "express-validator";
+import crypto from "crypto";
 
 /**
  * Get chat history for a delivery
@@ -141,6 +143,76 @@ export const getUnreadCount = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get unread count",
+    });
+  }
+};
+
+/**
+ * Initiate voice call from chat
+ */
+export const initiateVoiceCallFromChat = async (req, res) => {
+  try {
+    const { deliveryId } = req.params;
+    const callerId = req.user._id;
+
+    // Verify delivery access (reuse existing middleware logic)
+    const delivery = req.delivery;
+    const receiverId = req.isCustomer
+      ? delivery.driverId.userId
+      : delivery.customerId;
+
+    // Check for existing active call
+    const existingCall = await VoiceCall.findOne({
+      deliveryId,
+      status: { $in: ["initiated", "ringing", "answered"] },
+    });
+
+    if (existingCall) {
+      return res.status(400).json({
+        success: false,
+        message: "Call already in progress",
+      });
+    }
+
+    // Create call record
+    const callId = `CALL-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const voiceCall = new VoiceCall({
+      deliveryId,
+      callId,
+      caller: callerId,
+      receiver: receiverId,
+      status: "initiated",
+    });
+
+    await voiceCall.save();
+
+    res.status(201).json({
+      success: true,
+      data: {
+        callId,
+        status: "initiated",
+        receiver: receiverId,
+      },
+    });
+
+    // Emit to receiver via Socket.IO
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`user_${receiverId}`).emit("incoming_voice_call", {
+        callId,
+        deliveryId,
+        caller: {
+          id: callerId,
+          name: req.user.name,
+          avatarUrl: req.user.avatarUrl,
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Initiate voice call from chat error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to initiate call",
     });
   }
 };

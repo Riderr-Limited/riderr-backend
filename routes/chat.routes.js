@@ -5,6 +5,7 @@ import {
   sendMessage,
   markMessagesAsRead,
   getUnreadCount,
+  initiateVoiceCallFromChat,
 } from "../controllers/chat.controller.js";
 import {
   authenticate,
@@ -38,5 +39,8 @@ router.post(
 );
 router.put("/:deliveryId/read", canAccessDeliveryChat, markMessagesAsRead);
 router.get("/unread/count", getUnreadCount);
+
+// Voice call integration
+router.post("/:deliveryId/voice-call", canAccessDeliveryChat, initiateVoiceCallFromChat);
 
 export default router;
