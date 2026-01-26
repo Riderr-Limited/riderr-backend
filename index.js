@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import app from './app.js';
 import dotenv from 'dotenv';
 import { setupDeliverySocket } from './socket/deliverySocket.js';
+import { setupVoiceCallSocket } from './socket/voiceCallSocket.js';
 
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -108,6 +109,7 @@ const startServer = async () => {
     
     // Setup delivery socket events
     setupDeliverySocket(io);
+    setupVoiceCallSocket(io);
     console.log('✅ Socket.IO initialized and delivery socket setup complete');
     
     // Start the server
@@ -119,7 +121,11 @@ const startServer = async () => {
       console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
       console.log(`🔌 WebSocket available at: ws://localhost:${PORT}`);
       console.log(`📁 Uploads available at: http://localhost:${PORT}/uploads`);
+      console.log(`📞 Voice calls enabled with WebRTC`);
     });
+    
+    // Store io instance for controllers
+    app.set('io', io);
     
     // Handle server errors
     httpServer.on('error', (error) => {
