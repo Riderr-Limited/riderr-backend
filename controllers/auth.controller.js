@@ -1063,6 +1063,7 @@ export const forgotPassword = async (req, res) => {
     // Generate OTP
     const otp = generateVerificationCode();
     const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+    console.log(otp)
 
     // Save OTP to user
     user.resetPasswordToken = otp;
@@ -1071,6 +1072,7 @@ export const forgotPassword = async (req, res) => {
 
     // Send OTP email
     const emailResult = await sendOTPEmail(email, otp, user.name, user.phone);
+    console.log(emailResult)
 
     if (!emailResult.success) {
       return res.status(500).json({
