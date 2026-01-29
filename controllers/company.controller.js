@@ -739,7 +739,7 @@ export const getCompanyNotifications = async (req, res) => {
       actionUrl: notification.actionUrl,
       actionLabel: notification.actionLabel,
       createdAt: notification.createdAt,
-      timeAgo: notification.timeAgo, // Virtual field from your model
+      timeAgo: notification.timeAgo,  
       data: notification.data || {}
     }));
 
@@ -775,6 +775,6 @@ export default {
   getCompanyStats,
   requestCompanyVerification,
   getCompanyNotifications,
-};// controllers/notification.controller.js
+};
 
  
