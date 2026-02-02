@@ -361,19 +361,19 @@ export const completeAndSettlePayment = async (req, res) => {
   try {
     const customer = req.user;
     const { deliveryId } = req.params;
-    const {  review, verified } = req.body;
+    const { review, verified } = req.body;
 
     console.log(`📦 [STEP 5] Customer ${customer._id} verifying delivery ${deliveryId}`);
 
-    // Must be verified by customer
     if (!verified) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: 'Please confirm that you received the delivery',
       });
     }
 
-    // Find delivery
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       customerId: customer._id,
@@ -391,8 +391,7 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // Delivery must be in "delivered" status
-    if (delivery.status !== 'delivered') {
+    if (!['delivered', 'completed'].includes(delivery.status)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -401,7 +400,6 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // Find payment
     const payment = await Payment.findOne({
       deliveryId: delivery._id,
       status: 'successful',
@@ -416,8 +414,8 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // Check if already settled
-    if (payment.metadata?.escrowStatus === 'settled') {
+    // ✅ Check if already settled using escrowDetails
+    if (payment.escrowDetails?.settledToCompany) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -426,10 +424,9 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // Update payment - Mark as ready for settlement
+    // ✅ UPDATE: Store customer verification in metadata
     payment.metadata = {
       ...payment.metadata,
-      escrowStatus: 'settling',
       customerVerifiedAt: new Date(),
       customerVerified: true,
     };
@@ -441,26 +438,32 @@ export const completeAndSettlePayment = async (req, res) => {
 
     await payment.save({ session });
 
-    // Update delivery with rating
-    delivery.status = 'completed'; // Final status
-     delivery.review = review;
+    // Update delivery
+    delivery.status = 'completed';
+    delivery.review = review;
     delivery.ratedAt = new Date();
-    delivery.payment.status = 'completed'; // Payment process completed
+    delivery.payment.status = 'completed';
     await delivery.save({ session });
 
     // ✅ SETTLEMENT LOGIC
-    // In a real-world scenario, you would:
-    // 1. Call Paystack Transfer API to send company's share
-    // 2. Platform fee is already deducted by Paystack
-    // 3. Update payment settlement status
-
-    // Simulate settlement (replace with actual Paystack Transfer API call)
     const settlementResult = await settlePaymentToCompany(payment, delivery.companyId);
 
     if (settlementResult.success) {
-      payment.metadata.escrowStatus = 'settled';
-      payment.metadata.settledAt = new Date();
-      payment.metadata.settlementTransferId = settlementResult.transferId;
+      // ✅ Use the schema method or update escrowDetails directly
+      payment.escrowDetails.settledToCompany = true;
+      payment.escrowDetails.settlementDate = new Date();
+      payment.escrowDetails.paystackTransferId = settlementResult.transferId;
+      
+      // Also add to audit log
+      payment.auditLog.push({
+        action: 'settled_to_company',
+        timestamp: new Date(),
+        details: { 
+          transferId: settlementResult.transferId,
+          amount: payment.companyAmount 
+        },
+      });
+      
       await payment.save({ session });
 
       // Update company earnings
@@ -480,17 +483,6 @@ export const completeAndSettlePayment = async (req, res) => {
         if (driver) {
           driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
           driver.lastDeliveryDate = new Date();
-          
-          // Update rating
-         // if (rating) {
-         //   const totalRatings = driver.totalRatings || 0;
-         //   const currentRating = driver.rating || 0;
-         //   const newTotalRatings = totalRatings + 1;
-         //   const newRating = (currentRating * totalRatings + rating) / newTotalRatings;
-         //   driver.rating = newRating;
-         //   driver.totalRatings = newTotalRatings;
-         // }
-          
           await driver.save({ session });
         }
       }
@@ -501,42 +493,44 @@ export const completeAndSettlePayment = async (req, res) => {
 
     console.log(`✅ [COMPLETE] Delivery verified and payment settled - Delivery: ${deliveryId}`);
 
-    // Notify company
-    if (delivery.companyId) {
-      const company = await Company.findById(delivery.companyId._id).populate('ownerId');
-      if (company && company.ownerId) {
-        await sendNotification({
-          userId: company.ownerId._id,
-          title: '💰 Payment Received',
-          message: `₦${payment.companyAmount.toLocaleString()} credited to your account for delivery #${delivery.referenceId}`,
-          data: {
-            type: 'payment_settled',
-            deliveryId: delivery._id,
-            paymentId: payment._id,
-            amount: payment.companyAmount,
-            platformFee: payment.platformFee,
-          },
-        });
+    // Notifications (with error handling)
+    try {
+      if (delivery.companyId) {
+        const company = await Company.findById(delivery.companyId._id);
+        // Check your Company schema for the correct field (userId, ownerId, owner, etc.)
+        // For now, let's skip the populate and just notify based on company
+        if (company) {
+          await sendNotification({
+            userId: company.userId || company.ownerId || company.owner, // Adjust based on your schema
+            title: '💰 Payment Received',
+            message: `₦${payment.companyAmount.toLocaleString()} credited to your account for delivery #${delivery.referenceId}`,
+            data: {
+              type: 'payment_settled',
+              deliveryId: delivery._id,
+              paymentId: payment._id,
+              amount: payment.companyAmount,
+              platformFee: payment.platformFee,
+            },
+          });
+        }
       }
-    }
 
-    // Notify driver
-    if (delivery.driverId) {
-      const driver = await Driver.findById(delivery.driverId._id).populate('userId');
-      if (driver && driver.userId) {
-        await sendNotification({
-          userId: driver.userId._id,
-          title: '✅ Delivery Completed & Payment Settled',
-          message: rating 
-            ? `Customer rated ${rating}/5 stars! Company received payment for delivery #${delivery.referenceId}`
-            : `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
-          data: {
-            type: 'delivery_completed',
-            deliveryId: delivery._id,
-            rating: rating,
-          },
-        });
+      if (delivery.driverId) {
+        const driver = await Driver.findById(delivery.driverId._id).populate('userId');
+        if (driver && driver.userId) {
+          await sendNotification({
+            userId: driver.userId._id,
+            title: '✅ Delivery Completed & Payment Settled',
+            message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
+            data: {
+              type: 'delivery_completed',
+              deliveryId: delivery._id,
+            },
+          });
+        }
       }
+    } catch (notificationError) {
+      console.error('⚠️ Notification error (non-critical):', notificationError);
     }
 
     res.status(200).json({
@@ -546,18 +540,22 @@ export const completeAndSettlePayment = async (req, res) => {
         deliveryId: delivery._id,
         paymentId: payment._id,
         status: 'completed',
-        rating: rating,
+        review: review,
         settlement: {
           companyReceived: `₦${payment.companyAmount.toLocaleString()}`,
           platformFee: `₦${payment.platformFee.toLocaleString()}`,
-          settledAt: new Date(),
+          settledAt: payment.escrowDetails.settlementDate,
           transferId: settlementResult.transferId,
+          settled: payment.escrowDetails.settledToCompany,
         },
       },
     });
   } catch (error) {
-    await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     session.endSession();
+    
     console.error('❌ Complete and settle payment error:', error);
     res.status(500).json({
       success: false,
@@ -566,7 +564,6 @@ export const completeAndSettlePayment = async (req, res) => {
     });
   }
 };
-
 /**
  * Helper function to settle payment to company
  * NOTE: Replace this with actual Paystack Transfer API integration
@@ -1067,7 +1064,7 @@ export const getMyPayments = async (req, res) => {
   }
 };
 
-/**
+ /**
  * @desc    Get company payments and settlement history
  * @route   GET /api/payments/company-payments
  * @access  Private (Company)
@@ -1092,15 +1089,19 @@ export const getCompanyPayments = async (req, res) => {
       settlementStatus,
     } = req.query;
 
-    // Build query
     const query = { companyId: company._id };
     
     if (status && status !== "all") {
       query.status = status;
     }
     
+    // ✅ Update to use escrowDetails
     if (settlementStatus) {
-      query['metadata.escrowStatus'] = settlementStatus;
+      if (settlementStatus === 'settled') {
+        query['escrowDetails.settledToCompany'] = true;
+      } else if (settlementStatus === 'pending' || settlementStatus === 'held') {
+        query['escrowDetails.settledToCompany'] = false;
+      }
     }
     
     if (startDate && endDate) {
@@ -1112,19 +1113,18 @@ export const getCompanyPayments = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get payments
     const [payments, total] = await Promise.all([
       Payment.find(query)
-        .populate("customerId", "name email phone")
+        .populate("customerId", "name email phone avatarUrl")
         .populate({
           path: "deliveryId",
-          select: "pickup dropoff status referenceId createdAt completedAt",
+          select: "pickup dropoff status referenceId createdAt completedAt review ratedAt",
           populate: {
             path: "driverId",
-            select: "userId vehicleType",
+            select: "userId vehicleType plateNumber vehicleMake vehicleModel",
             populate: {
               path: "userId",
-              select: "name phone",
+              select: "name phone avatarUrl",
             },
           },
         })
@@ -1135,7 +1135,7 @@ export const getCompanyPayments = async (req, res) => {
       Payment.countDocuments(query),
     ]);
 
-    // Calculate totals
+    // ✅ Update aggregation to use escrowDetails
     const summary = await Payment.aggregate([
       { $match: { companyId: company._id, status: 'successful' } },
       {
@@ -1146,70 +1146,110 @@ export const getCompanyPayments = async (req, res) => {
           totalTransactions: { $sum: 1 },
           pendingSettlements: {
             $sum: {
-              $cond: [{ $eq: ["$metadata.escrowStatus", "held"] }, 1, 0]
+              $cond: [
+                { $ne: ["$escrowDetails.settledToCompany", true] }, 
+                1, 
+                0
+              ]
             }
           },
           settledAmount: {
             $sum: {
-              $cond: [{ $eq: ["$metadata.escrowStatus", "settled"] }, "$companyAmount", 0]
+              $cond: [
+                { $eq: ["$escrowDetails.settledToCompany", true] }, 
+                "$companyAmount", 
+                0
+              ]
             }
           },
           pendingAmount: {
             $sum: {
-              $cond: [{ $eq: ["$metadata.escrowStatus", "held"] }, "$companyAmount", 0]
+              $cond: [
+                { $ne: ["$escrowDetails.settledToCompany", true] }, 
+                "$companyAmount", 
+                0
+              ]
             }
           },
         }
       }
     ]);
 
-    // Get recent settlements
+    // ✅ Update recent settlements query
     const recentSettlements = await Payment.find({
       companyId: company._id,
       status: 'successful',
-      'metadata.escrowStatus': 'settled'
+      'escrowDetails.settledToCompany': true
     })
-      .sort({ 'metadata.settledAt': -1 })
+      .sort({ 'escrowDetails.settlementDate': -1 })
       .limit(5)
-      .select('amount companyAmount platformFee metadata.settledAt deliveryId')
+      .select('amount companyAmount platformFee escrowDetails paystackReference deliveryId paidAt')
       .populate('deliveryId', 'referenceId')
       .lean();
 
-    // Format response data
-    const formattedPayments = payments.map(payment => ({
-      _id: payment._id,
-      delivery: payment.deliveryId ? {
-        _id: payment.deliveryId._id,
-        referenceId: payment.deliveryId.referenceId,
-        status: payment.deliveryId.status,
-        pickup: payment.deliveryId.pickup?.address,
-        dropoff: payment.deliveryId.dropoff?.address,
-        driver: payment.deliveryId.driverId?.userId ? {
-          name: payment.deliveryId.driverId.userId.name,
-          phone: payment.deliveryId.driverId.userId.phone,
-          vehicleType: payment.deliveryId.driverId.vehicleType,
+    // ✅ Update formatting to use escrowDetails
+    const formattedPayments = payments.map(payment => {
+      const settled = payment.escrowDetails?.settledToCompany || false;
+      const escrowStatus = settled ? 'settled' : 'pending';
+      const settledAt = payment.escrowDetails?.settlementDate || null;
+      const transferId = payment.escrowDetails?.paystackTransferId || null;
+      
+      return {
+        _id: payment._id,
+        delivery: payment.deliveryId ? {
+          _id: payment.deliveryId._id,
+          referenceId: payment.deliveryId.referenceId,
+          status: payment.deliveryId.status,
+          pickup: payment.deliveryId.pickup?.address,
+          dropoff: payment.deliveryId.dropoff?.address,
+          review: payment.deliveryId.review,
+          ratedAt: payment.deliveryId.ratedAt,
+          driver: payment.deliveryId.driverId?.userId ? {
+            name: payment.deliveryId.driverId.userId.name,
+            phone: payment.deliveryId.driverId.userId.phone,
+            avatarUrl: payment.deliveryId.driverId.userId.avatarUrl,
+            vehicleType: payment.deliveryId.driverId.vehicleType,
+            vehicleMake: payment.deliveryId.driverId.vehicleMake,
+            vehicleModel: payment.deliveryId.driverId.vehicleModel,
+            plateNumber: payment.deliveryId.driverId.plateNumber,
+          } : null,
         } : null,
-      } : null,
-      customer: payment.customerId ? {
-        name: payment.customerId.name,
-        email: payment.customerId.email,
-        phone: payment.customerId.phone,
-      } : null,
-      amount: payment.amount,
-      companyAmount: payment.companyAmount,
-      platformFee: payment.platformFee,
-      status: payment.status,
-      escrowStatus: payment.metadata?.escrowStatus || 'pending',
-      paidAt: payment.paidAt,
-      settledAt: payment.metadata?.settledAt,
-      transferId: payment.metadata?.settlementTransferId,
-      paymentMethod: payment.paymentMethod,
-      paystackReference: payment.paystackReference,
+        customer: payment.customerId ? {
+          name: payment.customerId.name,
+          email: payment.customerId.email,
+          phone: payment.customerId.phone,
+          avatarUrl: payment.customerId.avatarUrl,
+        } : null,
+        amount: payment.amount,
+        companyAmount: payment.companyAmount,
+        platformFee: payment.platformFee,
+        status: payment.status,
+        escrowStatus: escrowStatus, // ✅ Now will show "settled"
+        paidAt: payment.paidAt,
+        settledAt: settledAt,
+        transferId: transferId,
+        paymentMethod: payment.paymentMethod,
+        paystackReference: payment.paystackReference,
+        currency: payment.currency || 'NGN',
+      };
+    });
+
+    // ✅ Format recent settlements
+    const formattedRecentSettlements = recentSettlements.map(settlement => ({
+      _id: settlement._id,
+      deliveryReference: settlement.deliveryId?.referenceId || 'N/A',
+      amount: settlement.amount,
+      companyAmount: settlement.companyAmount,
+      platformFee: settlement.platformFee,
+      settledAt: settlement.escrowDetails?.settlementDate,
+      transferId: settlement.escrowDetails?.paystackTransferId,
+      paystackReference: settlement.paystackReference,
+      paidAt: settlement.paidAt,
     }));
 
     res.status(200).json({
       success: true,
-      message: `Found ${formattedPayments.length} payments for ${company.name}`,
+      message: `Found ${formattedPayments.length} payment${formattedPayments.length !== 1 ? 's' : ''} for ${company.name}`,
       data: {
         payments: formattedPayments,
         summary: summary[0] || {
@@ -1220,10 +1260,12 @@ export const getCompanyPayments = async (req, res) => {
           settledAmount: 0,
           pendingAmount: 0,
         },
-        recentSettlements,
+        recentSettlements: formattedRecentSettlements,
         company: {
           _id: company._id,
           name: company.name,
+          email: company.email,
+          phone: company.contactPhone,
           earnings: company.totalEarnings || 0,
           totalDeliveries: company.totalDeliveries || 0,
           lastPaymentReceived: company.lastPaymentReceived,
@@ -1233,6 +1275,17 @@ export const getCompanyPayments = async (req, res) => {
           page: parseInt(page),
           limit: parseInt(limit),
           pages: Math.ceil(total / parseInt(limit)),
+        },
+        filters: {
+          applied: {
+            status: status || 'all',
+            settlementStatus: settlementStatus || 'all',
+            dateRange: startDate && endDate ? { startDate, endDate } : null,
+          },
+          available: {
+            statuses: ['all', 'pending', 'successful', 'failed'],
+            settlementStatuses: ['all', 'pending', 'held', 'settling', 'settled'],
+          },
         },
       },
     });
@@ -1245,7 +1298,6 @@ export const getCompanyPayments = async (req, res) => {
     });
   }
 };
-
 /**
  * @desc    Get company settlement details
  * @route   GET /api/payments/company-settlements/:paymentId
