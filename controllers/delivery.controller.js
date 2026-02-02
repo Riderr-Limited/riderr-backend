@@ -8,7 +8,7 @@ import { calculateFare } from "../utils/fareCalculator.js";
 import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 import crypto from "crypto";
 import { smartReverseGeocode } from "../utils/geocoding.js";
-
+import Payment from '../models/payments.models.js'
 /**
  * UTILITY FUNCTIONS
  */
@@ -34,17 +34,112 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 /**
- * ✅ FIXED: Enhanced driver details function with proper ID handling
+ * ✅ ENHANCED: Complete driver and company details population
  */
-const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
+const populateDriverAndCompanyDetails = async (delivery) => {
   try {
-    console.log(`💾 saveDriverDetailsToDelivery called for delivery: ${deliveryId}`);
-    console.log(`🚗 Driver data received:`, {
-      driverId: driver?._id,
-      userId: driver?.userId,
-      hasUserObject: typeof driver?.userId === 'object'
-    });
+    if (!delivery) return null;
 
+    // Convert to plain object if it's a mongoose document
+    const deliveryObj = delivery.toObject ? delivery.toObject() : { ...delivery };
+
+    // If no driver assigned, return as is
+    if (!deliveryObj.driverId) {
+      console.log('ℹ️ No driver assigned to delivery');
+      return deliveryObj;
+    }
+
+    console.log(`🔍 Populating driver and company for delivery: ${deliveryObj._id}`);
+
+    // Fetch driver with populated user AND company
+    const driver = await Driver.findById(deliveryObj.driverId)
+      .populate('userId', 'name phone avatarUrl rating')
+      .populate('companyId', 'name logo contactPhone address email rating')
+      .lean();
+
+    if (!driver) {
+      console.log('❌ Driver not found');
+      return deliveryObj;
+    }
+
+    // Build driver details
+    if (driver.userId) {
+      deliveryObj.driverDetails = {
+        driverId: driver._id,
+        userId: driver.userId._id,
+        name: driver.userId.name || "Driver",
+        phone: driver.userId.phone || "",
+        avatarUrl: driver.userId.avatarUrl,
+        rating: driver.userId.rating || 0,
+        vehicle: {
+          type: driver.vehicleType || "bike",
+          make: driver.vehicleMake || "",
+          model: driver.vehicleModel || "",
+          plateNumber: driver.plateNumber || "",
+        },
+      };
+
+      // Add current location if available
+      if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        deliveryObj.driverDetails.currentLocation = {
+          lat: driver.currentLocation.lat,
+          lng: driver.currentLocation.lng,
+          updatedAt: driver.currentLocation.updatedAt || new Date(),
+        };
+      } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+        deliveryObj.driverDetails.currentLocation = {
+          lat: driver.location.coordinates[1],
+          lng: driver.location.coordinates[0],
+          updatedAt: new Date(),
+        };
+      }
+
+      // Save to database if not already saved
+      if (!delivery.driverDetails?.name) {
+        await Delivery.findByIdAndUpdate(deliveryObj._id, {
+          driverDetails: deliveryObj.driverDetails
+        });
+      }
+    }
+
+    // Build company details
+    if (driver.companyId) {
+      deliveryObj.companyDetails = {
+        companyId: driver.companyId._id,
+        name: driver.companyId.name || "Company",
+        logo: driver.companyId.logo,
+        contactPhone: driver.companyId.contactPhone || "",
+        address: driver.companyId.address || "",
+        email: driver.companyId.email || "",
+        rating: driver.companyId.rating || 0,
+      };
+
+      // Also set companyId if not set
+      if (!deliveryObj.companyId) {
+        deliveryObj.companyId = driver.companyId._id;
+        await Delivery.findByIdAndUpdate(deliveryObj._id, {
+          companyId: driver.companyId._id,
+          companyDetails: deliveryObj.companyDetails
+        });
+      }
+    }
+
+    console.log('✅ Driver and company details populated');
+    return deliveryObj;
+
+  } catch (error) {
+    console.error('❌ Error populating driver and company details:', error);
+    return delivery;
+  }
+};
+
+/**
+ * ✅ ENHANCED: Save driver and company details to delivery
+ */
+const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
+  try {
+    console.log(`💾 Saving driver and company details for delivery: ${deliveryId}`);
+    
     const delivery = await Delivery.findById(deliveryId);
     if (!delivery) {
       console.log('❌ Delivery not found');
@@ -61,29 +156,24 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
     let driverUserId;
     
     if (typeof driver.userId === 'object' && driver.userId !== null) {
-      // Already populated
       driverUser = driver.userId;
       driverUserId = driver.userId._id;
     } else if (driver.userId) {
-      // Need to populate
       driverUserId = driver.userId;
       driverUser = await User.findById(driver.userId)
         .select('name phone avatarUrl rating')
         .lean();
-    } else {
-      console.log('❌ No driver userId found');
-      return false;
     }
 
     if (!driverUser) {
-      console.log('❌ Driver user not found in database');
+      console.log('❌ Driver user not found');
       return false;
     }
 
-    // ✅ FIX: Store BOTH driverId and userId correctly
+    // Build driver details
     const driverDetails = {
-      driverId: driver._id, // The Driver document ID
-      userId: driverUserId, // The User document ID
+      driverId: driver._id,
+      userId: driverUserId,
       name: driverUser.name || "Driver",
       phone: driverUser.phone || "",
       avatarUrl: driverUser.avatarUrl,
@@ -96,82 +186,52 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
       },
     };
 
-    console.log('📋 Driver details to save:', driverDetails);
+    // Add current location if available
+    if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+      driverDetails.currentLocation = {
+        lat: driver.currentLocation.lat,
+        lng: driver.currentLocation.lng,
+        updatedAt: driver.currentLocation.updatedAt || new Date(),
+      };
+    }
 
-    // Update delivery
     delivery.driverDetails = driverDetails;
+
+    // Get and save company details
+    if (driver.companyId) {
+      let companyData;
+      
+      if (typeof driver.companyId === 'object' && driver.companyId !== null) {
+        companyData = driver.companyId;
+      } else {
+        companyData = await Company.findById(driver.companyId)
+          .select('name logo contactPhone address email rating')
+          .lean();
+      }
+
+      if (companyData) {
+        const companyDetails = {
+          companyId: companyData._id,
+          name: companyData.name || "Company",
+          logo: companyData.logo,
+          contactPhone: companyData.contactPhone || "",
+          address: companyData.address || "",
+          email: companyData.email || "",
+          rating: companyData.rating || 0,
+        };
+
+        delivery.companyId = companyData._id;
+        delivery.companyDetails = companyDetails;
+      }
+    }
+
     await delivery.save();
-    
-    console.log(`✅ Driver details saved for delivery ${deliveryId}`);
+    console.log(`✅ Driver and company details saved for delivery ${deliveryId}`);
     return true;
     
   } catch (error) {
-    console.error("❌ Error in saveDriverDetailsToDelivery:", error);
+    console.error("❌ Error saving driver and company details:", error);
     return false;
-  }
-};
-
-/**
- * ✅ NEW: Function to populate driver details in delivery response
- */
-const populateDriverInDelivery = async (delivery) => {
-  try {
-    if (!delivery) return null;
-
-    // Convert to plain object if it's a mongoose document
-    const deliveryObj = delivery.toObject ? delivery.toObject() : { ...delivery };
-
-    // If driver details already exist and are complete, return them
-    if (deliveryObj.driverDetails?.name && deliveryObj.driverDetails?.driverId) {
-      console.log('✅ Using existing driverDetails');
-      return deliveryObj;
-    }
-
-    // If no driver assigned, return as is
-    if (!deliveryObj.driverId) {
-      console.log('ℹ️ No driver assigned to delivery');
-      return deliveryObj;
-    }
-
-    console.log('🔍 Fetching driver details for delivery:', deliveryObj._id);
-
-    // Fetch driver with populated user
-    const driver = await Driver.findById(deliveryObj.driverId)
-      .populate('userId', 'name phone avatarUrl rating')
-      .lean();
-
-    if (!driver || !driver.userId) {
-      console.log('❌ Driver or driver.userId not found');
-      return deliveryObj;
-    }
-
-    // Build complete driver details
-    deliveryObj.driverDetails = {
-      driverId: driver._id,
-      userId: driver.userId._id,
-      name: driver.userId.name || "Driver",
-      phone: driver.userId.phone || "",
-      avatarUrl: driver.userId.avatarUrl,
-      rating: driver.userId.rating || 0,
-      vehicle: {
-        type: driver.vehicleType || "bike",
-        make: driver.vehicleMake || "",
-        model: driver.vehicleModel || "",
-        plateNumber: driver.plateNumber || "",
-      },
-    };
-
-    // Save to database for future use
-    await Delivery.findByIdAndUpdate(deliveryObj._id, {
-      driverDetails: deliveryObj.driverDetails
-    });
-
-    console.log('✅ Driver details populated and saved');
-    return deliveryObj;
-
-  } catch (error) {
-    console.error('❌ Error populating driver details:', error);
-    return delivery;
   }
 };
 
@@ -201,7 +261,9 @@ export const getNearbyDrivers = async (req, res) => {
         { "location.coordinates": { $exists: true, $ne: [0, 0] } },
         { "currentLocation.lat": { $exists: true } },
       ],
-    }).populate("userId", "name phone avatarUrl rating");
+    })
+      .populate("userId", "name phone avatarUrl rating")
+      .populate("companyId", "name logo rating contactPhone");
 
     const driversWithDistance = drivers
       .map((driver) => {
@@ -262,7 +324,7 @@ export const getNearbyDrivers = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get customer's deliveries with proper driver details
+ * ✅ FIXED: Get customer's deliveries with complete driver and company details
  */
 export const getMyDeliveries = async (req, res) => {
   try {
@@ -290,16 +352,16 @@ export const getMyDeliveries = async (req, res) => {
 
     const total = await Delivery.countDocuments(query);
 
-    // ✅ FIX: Populate driver details for each delivery
-    const deliveriesWithDriverDetails = await Promise.all(
+    // ✅ Populate driver and company details for each delivery
+    const deliveriesWithDetails = await Promise.all(
       deliveries.map(async (delivery) => {
-        return await populateDriverInDelivery(delivery);
+        return await populateDriverAndCompanyDetails(delivery);
       })
     );
 
     res.status(200).json({
       success: true,
-      data: deliveriesWithDriverDetails,
+      data: deliveriesWithDetails,
       pagination: {
         total,
         page: parseInt(page),
@@ -449,9 +511,6 @@ export const getNearbyDeliveryRequests = async (req, res) => {
   }
 };
 
-/**
- * ✅ FIXED: Accept delivery with proper driver details saving
- */
 export const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -460,25 +519,26 @@ export const acceptDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`🚗 Driver ${driverUser._id} accepting delivery ${deliveryId}`);
+    console.log(`🚗 [STEP 3] Driver ${driverUser._id} accepting delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return res.status(403).json({
         success: false,
         message: "Only drivers can accept deliveries",
       });
     }
 
-    // ✅ FIX: Populate driver with user details
+    // Get driver with session
     const driver = await Driver.findOne({ userId: driverUser._id })
       .populate('userId', 'name phone avatarUrl rating')
+      .populate('companyId', 'name logo contactPhone address email rating paystackSubaccountCode')
       .session(session);
       
     if (!driver) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return res.status(404).json({
         success: false,
         message: "Driver profile not found",
@@ -487,33 +547,77 @@ export const acceptDelivery = async (req, res) => {
 
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return res.status(400).json({
         success: false,
         message: "Driver is not available for new deliveries",
       });
     }
 
+    // Get delivery with session
     const delivery = await Delivery.findById(deliveryId).session(session);
     if (!delivery) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return res.status(404).json({
         success: false,
         message: "Delivery not found",
       });
     }
 
+    // ✅ CHECK: Delivery must be paid before driver can accept
+    if (delivery.payment.status !== 'paid') {
+      await session.abortTransaction();
+      await session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "This delivery has not been paid yet. Customer must complete payment first.",
+        data: {
+          paymentStatus: delivery.payment.status,
+          requiresPayment: true,
+        },
+      });
+    }
+
     if (delivery.status !== "created" || delivery.driverId) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return res.status(400).json({
         success: false,
         message: "Delivery is no longer available",
       });
     }
 
-    let driverToPickupDistance = 5;
+    // Update payment with driver and company info (if Payment model exists)
+    let payment = null;
+    try {
+      payment = await Payment.findOne({
+        deliveryId: delivery._id,
+        status: 'successful',
+      }).session(session);
+
+      if (payment) {
+        payment.driverId = driver._id;
+        payment.companyId = driver.companyId?._id || driver.companyId;
+        
+        // Add company subaccount for settlement
+        if (driver.companyId && driver.companyId.paystackSubaccountCode) {
+          payment.metadata = {
+            ...payment.metadata,
+            companySubaccount: driver.companyId.paystackSubaccountCode,
+            driverAssignedAt: new Date(),
+          };
+        }
+        
+        await payment.save({ session });
+      }
+    } catch (error) {
+      console.warn("⚠️ Payment update skipped:", error.message);
+      // Continue with delivery acceptance even if payment update fails
+    }
+
+    // Calculate distance from driver to pickup
+    let driverToPickupDistance = 5; // default
     if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
       driverToPickupDistance = calculateDistance(
         driver.currentLocation.lat,
@@ -523,14 +627,51 @@ export const acceptDelivery = async (req, res) => {
       );
     }
 
-    // ✅ FIX: Set BOTH driverId and companyId
+    // Prepare driver and company details
+    const driverDetails = {
+      driverId: driver._id,
+      userId: driver.userId._id,
+      name: driver.userId.name || "Driver",
+      phone: driver.userId.phone || "",
+      avatarUrl: driver.userId.avatarUrl,
+      rating: driver.userId.rating || 0,
+      vehicle: {
+        type: driver.vehicleType || "bike",
+        make: driver.vehicleMake || "",
+        model: driver.vehicleModel || "",
+        plateNumber: driver.plateNumber || "",
+      },
+    };
+
+    // Add current location if available
+    if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+      driverDetails.currentLocation = {
+        lat: driver.currentLocation.lat,
+        lng: driver.currentLocation.lng,
+        updatedAt: driver.currentLocation.updatedAt || new Date(),
+      };
+    }
+
+    const companyDetails = driver.companyId ? {
+      companyId: driver.companyId._id,
+      name: driver.companyId.name || "Company",
+      logo: driver.companyId.logo,
+      contactPhone: driver.companyId.contactPhone || "",
+      address: driver.companyId.address || "",
+      email: driver.companyId.email || "",
+      rating: driver.companyId.rating || 0,
+    } : null;
+
+    // Update delivery in a single operation
     delivery.driverId = driver._id;
-    delivery.companyId = driver.companyId;
+    delivery.companyId = companyDetails?.companyId || null;
     delivery.status = "assigned";
     delivery.assignedAt = new Date();
-    delivery.estimatedPickupTime = new Date(
-      Date.now() + driverToPickupDistance * 3 * 60000
-    );
+    delivery.estimatedPickupTime = new Date(Date.now() + driverToPickupDistance * 3 * 60000);
+    delivery.driverDetails = driverDetails;
+    if (companyDetails) {
+      delivery.companyDetails = companyDetails;
+    }
 
     // Update driver
     driver.currentDeliveryId = delivery._id;
@@ -538,70 +679,95 @@ export const acceptDelivery = async (req, res) => {
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     driver.acceptedRequests = (driver.acceptedRequests || 0) + 1;
 
-    // ✅ FIX: Save driver details immediately
-    await saveDriverDetailsToDelivery(delivery._id, driver);
+    // Execute all updates in sequence to avoid write conflicts
+    await delivery.save({ session });
+    await driver.save({ session });
 
-    await Promise.all([delivery.save({ session }), driver.save({ session })]);
-
-    // Notifications
+    // Get customer for notification
     const customer = await User.findById(delivery.customerId);
-    const company = await Company.findById(driver.companyId);
     
+    // Commit transaction first
+    await session.commitTransaction();
+    await session.endSession();
+
+    // Send notifications (outside transaction)
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        ...NotificationTemplates.PAYMENT_REQUIRED(
-          delivery._id,
-          delivery.fare.totalFare,
-          driver.userId.name,
-          company?.name || "Company"
-        ),
+        title: '🚗 Driver Assigned!',
+        message: `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. Payment is held securely.`,
+        data: {
+          type: 'driver_assigned',
+          deliveryId: delivery._id,
+          driverId: driver._id,
+          driverName: driver.userId.name,
+          companyName: driver.companyId?.name,
+        },
       });
     }
 
     await sendNotification({
       userId: driverUser._id,
-      ...NotificationTemplates.DELIVERY_ACCEPTED_SUCCESS(
-        delivery._id,
-        customer?.name || "Customer"
-      ),
+      title: '✅ Delivery Accepted',
+      message: `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to pickup location.`,
+      data: {
+        type: 'delivery_accepted',
+        deliveryId: delivery._id,
+      },
     });
 
-    await session.commitTransaction();
-    session.endSession();
+    // Fetch updated delivery with populated details
+    const updatedDelivery = await Delivery.findById(delivery._id)
+      .populate("customerId", "name phone avatarUrl rating")
+      .lean();
+    
+    const deliveryWithDetails = await populateDriverAndCompanyDetails(updatedDelivery);
 
-    // ✅ FIX: Fetch fresh delivery with driver details
-    const updatedDelivery = await Delivery.findById(delivery._id).lean();
-    const deliveryWithDriver = await populateDriverInDelivery(updatedDelivery);
+    console.log(`✅ Delivery accepted with secured payment`);
 
     res.status(200).json({
       success: true,
-      message: "Delivery accepted successfully!",
+      message: "Delivery accepted successfully! Payment is secured.",
       data: {
-        delivery: deliveryWithDriver,
-        driver: {
-          name: driver.userId.name,
-          phone: driver.userId.phone,
-          vehicle: `${driver.vehicleMake || ""} ${driver.vehicleModel || ""}`.trim() || "Vehicle",
-          plateNumber: driver.plateNumber,
+        delivery: deliveryWithDetails,
+        driver: deliveryWithDetails.driverDetails,
+        company: deliveryWithDetails.companyDetails,
+        payment: {
+          status: 'secured',
+          amount: delivery.fare.totalFare,
+          message: 'Payment held in escrow until delivery completion',
         },
-        company: {
-          _id: company?._id,
-          name: company?.name,
-        }
       },
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    // Handle transaction errors
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    await session.endSession();
+    
     console.error("❌ Accept delivery error:", error);
+    
+    // Check for write conflict errors specifically
+    if (error.code === 112) { // WriteConflict error code
+      return res.status(409).json({
+        success: false,
+        message: "Operation conflicted with another process. Please try again.",
+        error: "WriteConflict",
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: "Failed to accept delivery",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
+/**
+ * ✅ UPDATED: Start delivery
+  */
 export const startDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -610,7 +776,7 @@ export const startDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`🚚 Driver ${driverUser._id} starting delivery ${deliveryId}`);
+    console.log(`📦 [STEP 3b] Driver ${driverUser._id} starting delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
@@ -621,9 +787,7 @@ export const startDelivery = async (req, res) => {
       });
     }
 
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(
-      session
-    );
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
     if (!driver) {
       await session.abortTransaction();
       session.endSession();
@@ -656,6 +820,21 @@ export const startDelivery = async (req, res) => {
       });
     }
 
+    // Verify payment is still secured
+    const payment = await Payment.findOne({
+      deliveryId: delivery._id,
+      status: 'successful',
+    }).session(session);
+
+    if (!payment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Payment not found or not confirmed",
+      });
+    }
+
     delivery.status = "picked_up";
     delivery.pickedUpAt = new Date();
 
@@ -665,15 +844,19 @@ export const startDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        ...NotificationTemplates.PACKAGE_PICKED_UP(
-          delivery._id,
-          driverUser.name
-        ),
+        title: '📦 Package Picked Up',
+        message: `Driver has picked up your package and is heading to the destination. Payment is secured.`,
+        data: {
+          type: 'package_picked_up',
+          deliveryId: delivery._id,
+        },
       });
     }
 
     await session.commitTransaction();
     session.endSession();
+
+    console.log(`✅ Delivery started - Payment still secured`);
 
     res.status(200).json({
       success: true,
@@ -684,6 +867,10 @@ export const startDelivery = async (req, res) => {
           status: delivery.status,
           pickedUpAt: delivery.pickedUpAt,
           nextStep: "Proceed to dropoff location",
+        },
+        payment: {
+          status: 'secured',
+          message: 'Payment held until customer confirms delivery',
         },
       },
     });
@@ -698,6 +885,8 @@ export const startDelivery = async (req, res) => {
   }
 };
 
+
+
 export const completeDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -706,9 +895,7 @@ export const completeDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(
-      `✅ Driver ${driverUser._id} completing delivery ${deliveryId}`
-    );
+    console.log(`✅ [STEP 4] Driver ${driverUser._id} completing delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
@@ -719,9 +906,7 @@ export const completeDelivery = async (req, res) => {
       });
     }
 
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(
-      session
-    );
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
     if (!driver) {
       await session.abortTransaction();
       session.endSession();
@@ -754,13 +939,13 @@ export const completeDelivery = async (req, res) => {
       });
     }
 
+    // Mark as delivered (waiting for customer verification)
     delivery.status = "delivered";
     delivery.deliveredAt = new Date();
 
+    // Driver becomes available for next delivery
     driver.currentDeliveryId = null;
     driver.isAvailable = true;
-    driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
-    driver.earnings = (driver.earnings || 0) + (delivery.fare.totalFare || 0);
 
     await Promise.all([delivery.save({ session }), driver.save({ session })]);
 
@@ -768,19 +953,24 @@ export const completeDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        ...NotificationTemplates.DELIVERY_COMPLETED(
-          delivery._id,
-          delivery.referenceId
-        ),
+        title: '✅ Package Delivered',
+        message: `Your package has been delivered! Please verify the delivery to release payment.`,
+        data: {
+          type: 'delivery_completed',
+          deliveryId: delivery._id,
+          requiresVerification: true,
+        },
       });
     }
 
     await session.commitTransaction();
     session.endSession();
 
+    console.log(`✅ Delivery completed - Waiting for customer verification`);
+
     res.status(200).json({
       success: true,
-      message: "Delivery completed successfully",
+      message: "Delivery completed! Waiting for customer verification to release payment.",
       data: {
         delivery: {
           _id: delivery._id,
@@ -789,7 +979,11 @@ export const completeDelivery = async (req, res) => {
           fare: delivery.fare,
         },
         driverAvailable: true,
-        earnings: delivery.fare.totalFare || 0,
+        payment: {
+          status: 'awaiting_verification',
+          message: 'Payment will be released after customer verifies delivery',
+          expectedAmount: delivery.fare.totalFare,
+        },
       },
     });
   } catch (error) {
@@ -803,8 +997,9 @@ export const completeDelivery = async (req, res) => {
   }
 };
 
+
 /**
- * ✅ FIXED: Get driver's active delivery with proper driver details
+ * ✅ FIXED: Get driver's active delivery with complete details
  */
 export const getDriverActiveDelivery = async (req, res) => {
   try {
@@ -849,8 +1044,8 @@ export const getDriverActiveDelivery = async (req, res) => {
       });
     }
 
-    // ✅ FIX: Ensure driver details are populated
-    const deliveryWithDriver = await populateDriverInDelivery(delivery);
+    // ✅ Populate complete details
+    const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let etaMinutes = null;
     if (delivery.status === "assigned") {
@@ -868,7 +1063,7 @@ export const getDriverActiveDelivery = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        ...deliveryWithDriver,
+        ...deliveryWithDetails,
         etaMinutes,
         nextAction:
           delivery.status === "assigned"
@@ -888,7 +1083,7 @@ export const getDriverActiveDelivery = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get driver's deliveries with proper driver details
+ * ✅ FIXED: Get driver's deliveries with complete details
  */
 export const getDriverDeliveries = async (req, res) => {
   try {
@@ -925,16 +1120,16 @@ export const getDriverDeliveries = async (req, res) => {
 
     const total = await Delivery.countDocuments(query);
 
-    // ✅ FIX: Populate driver details for each delivery
-    const deliveriesWithDriver = await Promise.all(
+    // ✅ Populate complete details for each delivery
+    const deliveriesWithDetails = await Promise.all(
       deliveries.map(async (delivery) => {
-        return await populateDriverInDelivery(delivery);
+        return await populateDriverAndCompanyDetails(delivery);
       })
     );
 
     res.status(200).json({
       success: true,
-      data: deliveriesWithDriver,
+      data: deliveriesWithDetails,
       pagination: {
         total,
         page: parseInt(page),
@@ -992,7 +1187,7 @@ export const rejectDelivery = async (req, res) => {
  */
 
 /**
- * ✅ FIXED: Get delivery details with proper driver details
+ * ✅ FIXED: Get delivery details with complete driver and company info
  */
 export const getDeliveryDetails = async (req, res) => {
   try {
@@ -1021,12 +1216,12 @@ export const getDeliveryDetails = async (req, res) => {
       });
     }
 
-    // ✅ FIX: Populate driver details
-    const deliveryWithDriver = await populateDriverInDelivery(delivery);
+    // ✅ Populate complete details
+    const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     res.status(200).json({
       success: true,
-      data: deliveryWithDriver,
+      data: deliveryWithDetails,
     });
   } catch (error) {
     console.error("❌ Get delivery details error:", error);
@@ -1038,7 +1233,7 @@ export const getDeliveryDetails = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Track delivery with proper driver details
+ * ✅ FIXED: Track delivery with complete driver and company info
  */
 export const trackDelivery = async (req, res) => {
   try {
@@ -1046,7 +1241,7 @@ export const trackDelivery = async (req, res) => {
     const { deliveryId } = req.params;
 
     const delivery = await Delivery.findById(deliveryId)
-      .select("status pickup dropoff driverId driverDetails customerId estimatedPickupTime recipientName recipientPhone fare createdAt assignedAt pickedUpAt deliveredAt")
+      .select("status pickup dropoff driverId driverDetails companyDetails customerId estimatedPickupTime recipientName recipientPhone fare createdAt assignedAt pickedUpAt deliveredAt")
       .lean();
 
     if (!delivery) {
@@ -1067,8 +1262,8 @@ export const trackDelivery = async (req, res) => {
       });
     }
 
-    // ✅ FIX: Populate driver details
-    const deliveryWithDriver = await populateDriverInDelivery(delivery);
+    // ✅ Populate complete details
+    const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let driverLocation = null;
     if (delivery.driverId) {
@@ -1114,7 +1309,7 @@ export const trackDelivery = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        ...deliveryWithDriver,
+        ...deliveryWithDetails,
         driverLocation: driverLocation,
         timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
         canTrack: ["assigned", "picked_up"].includes(delivery.status),
@@ -1600,7 +1795,7 @@ export const getDriverDeliveryStats = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get company deliveries with proper driver details
+ * ✅ FIXED: Get company deliveries with complete driver and company details
  */
 export const getCompanyDeliveries = async (req, res) => {
   try {
@@ -1666,7 +1861,6 @@ export const getCompanyDeliveries = async (req, res) => {
     const [deliveries, total] = await Promise.all([
       Delivery.find(query)
         .populate("customerId", "name phone email avatarUrl")
-        .populate("companyId", "name logo contactPhone address")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -1676,38 +1870,32 @@ export const getCompanyDeliveries = async (req, res) => {
 
     console.log(`📦 Found ${deliveries.length} deliveries for company`);
 
-    // ✅ FIX: Populate driver details for each delivery
+    // ✅ Populate complete driver and company details for each delivery
     const formattedDeliveries = await Promise.all(
       deliveries.map(async (delivery) => {
-        const deliveryWithDriver = await populateDriverInDelivery(delivery);
+        const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
         
         // Add customer info
-        if (deliveryWithDriver.customerId) {
-          deliveryWithDriver.customer = {
-            _id: deliveryWithDriver.customerId._id,
-            name: deliveryWithDriver.customerId.name || "Customer",
-            phone: deliveryWithDriver.customerId.phone || "",
-            email: deliveryWithDriver.customerId.email || "",
-            avatarUrl: deliveryWithDriver.customerId.avatarUrl,
+        if (deliveryWithDetails.customerId) {
+          deliveryWithDetails.customer = {
+            _id: deliveryWithDetails.customerId._id,
+            name: deliveryWithDetails.customerId.name || "Customer",
+            phone: deliveryWithDetails.customerId.phone || "",
+            email: deliveryWithDetails.customerId.email || "",
+            avatarUrl: deliveryWithDetails.customerId.avatarUrl,
           };
         }
         
-        // Add company info
-        if (deliveryWithDriver.companyId) {
-          deliveryWithDriver.company = {
-            _id: deliveryWithDriver.companyId._id,
-            name: deliveryWithDriver.companyId.name || "Company",
-            logo: deliveryWithDriver.companyId.logo,
-            contactPhone: deliveryWithDriver.companyId.contactPhone || "",
-            address: deliveryWithDriver.companyId.address || "",
-          };
-        } else {
-          deliveryWithDriver.company = {
-            _id: company._id,
+        // Ensure company details are present
+        if (!deliveryWithDetails.companyDetails) {
+          deliveryWithDetails.companyDetails = {
+            companyId: company._id,
             name: company.name,
             logo: company.logo,
             contactPhone: company.contactPhone || "",
             address: company.address || "",
+            email: company.email || "",
+            rating: company.rating || 0,
           };
         }
         
@@ -1720,9 +1908,9 @@ export const getCompanyDeliveries = async (req, res) => {
           "failed": "Failed"
         };
         
-        deliveryWithDriver.statusDisplay = statusDisplay[deliveryWithDriver.status] || deliveryWithDriver.status;
+        deliveryWithDetails.statusDisplay = statusDisplay[deliveryWithDetails.status] || deliveryWithDetails.status;
         
-        return deliveryWithDriver;
+        return deliveryWithDetails;
       })
     );
 
@@ -2333,7 +2521,7 @@ export const createDeliveryRequest = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get customer's active delivery with proper driver details
+ * ✅ FIXED: Get customer's active delivery with complete driver and company details
  */
 export const getCustomerActiveDelivery = async (req, res) => {
   try {
@@ -2351,7 +2539,6 @@ export const getCustomerActiveDelivery = async (req, res) => {
       status: { $in: ["created", "assigned", "picked_up", "in_transit"] }
     })
       .populate("customerId", "name phone")
-      .populate("companyId", "name logo contactPhone")
       .lean();
 
     if (!delivery) {
@@ -2366,8 +2553,8 @@ export const getCustomerActiveDelivery = async (req, res) => {
     console.log('📊 Status:', delivery.status);
     console.log('🚗 Driver ID:', delivery.driverId);
 
-    // ✅ FIX: Populate driver details
-    const deliveryWithDriver = await populateDriverInDelivery(delivery);
+    // ✅ Populate complete driver and company details
+    const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let driverLocation = null;
     let etaMinutes = null;
@@ -2414,9 +2601,9 @@ export const getCustomerActiveDelivery = async (req, res) => {
       }
     }
 
-    // Add driver location to driverDetails
-    if (deliveryWithDriver.driverDetails && driverLocation) {
-      deliveryWithDriver.driverDetails.currentLocation = driverLocation;
+    // Add driver location to driverDetails if it exists
+    if (deliveryWithDetails.driverDetails && driverLocation) {
+      deliveryWithDetails.driverDetails.currentLocation = driverLocation;
     }
 
     const timeline = [];
@@ -2452,9 +2639,9 @@ export const getCustomerActiveDelivery = async (req, res) => {
     const response = {
       success: true,
       data: {
-        _id: deliveryWithDriver._id,
-        referenceId: deliveryWithDriver.referenceId,
-        status: deliveryWithDriver.status,
+        _id: deliveryWithDetails._id,
+        referenceId: deliveryWithDetails.referenceId,
+        status: deliveryWithDetails.status,
         currentStep,
         nextStep,
         
@@ -2468,27 +2655,23 @@ export const getCustomerActiveDelivery = async (req, res) => {
           _id: customer._id
         },
         
-        company: delivery.companyId ? {
-          name: delivery.companyId.name,
-          logo: delivery.companyId.logo,
-          contactPhone: delivery.companyId.contactPhone,
-          _id: delivery.companyId._id
-        } : null,
+        // ✅ Complete company details
+        company: deliveryWithDetails.companyDetails,
         
-        pickup: deliveryWithDriver.pickup,
-        dropoff: deliveryWithDriver.dropoff,
-        recipientName: deliveryWithDriver.recipientName,
-        recipientPhone: deliveryWithDriver.recipientPhone,
+        pickup: deliveryWithDetails.pickup,
+        dropoff: deliveryWithDetails.dropoff,
+        recipientName: deliveryWithDetails.recipientName,
+        recipientPhone: deliveryWithDetails.recipientPhone,
         
-        // ✅ FIX: Include complete driver details
-        driver: deliveryWithDriver.driverDetails,
-        driverDetails: deliveryWithDriver.driverDetails, // Alias for compatibility
+        // ✅ Complete driver details with current location
+        driver: deliveryWithDetails.driverDetails,
+        driverDetails: deliveryWithDetails.driverDetails, // Alias for compatibility
         
-        itemDetails: deliveryWithDriver.itemDetails,
-        fare: deliveryWithDriver.fare,
+        itemDetails: deliveryWithDetails.itemDetails,
+        fare: deliveryWithDetails.fare,
         etaMinutes,
-        estimatedDistanceKm: deliveryWithDriver.estimatedDistanceKm,
-        estimatedDurationMin: deliveryWithDriver.estimatedDurationMin,
+        estimatedDistanceKm: deliveryWithDetails.estimatedDistanceKm,
+        estimatedDurationMin: deliveryWithDetails.estimatedDurationMin,
         timeline: timeline.sort((a, b) => new Date(a.time) - new Date(b.time)),
         progress: {
           step: currentStep,
@@ -2496,16 +2679,18 @@ export const getCustomerActiveDelivery = async (req, res) => {
           message: getDeliveryStatusMessage(delivery.status),
         },
         canTrack: ["assigned", "picked_up", "in_transit"].includes(delivery.status),
-        tracking: deliveryWithDriver.tracking || null,
-        payment: deliveryWithDriver.payment || { method: "cash", status: "pending" },
-        createdAt: deliveryWithDriver.createdAt,
-        updatedAt: deliveryWithDriver.updatedAt,
-        assignedAt: deliveryWithDriver.assignedAt,
-        pickedUpAt: deliveryWithDriver.pickedUpAt,
+        tracking: deliveryWithDetails.tracking || null,
+        payment: deliveryWithDetails.payment || { method: "cash", status: "pending" },
+        createdAt: deliveryWithDetails.createdAt,
+        updatedAt: deliveryWithDetails.updatedAt,
+        assignedAt: deliveryWithDetails.assignedAt,
+        pickedUpAt: deliveryWithDetails.pickedUpAt,
       },
     };
 
-    console.log('✅ Sending response with driver details:', deliveryWithDriver.driverDetails ? 'YES' : 'NO');
+    console.log('✅ Sending response with complete details');
+    console.log('  - Driver details:', deliveryWithDetails.driverDetails ? 'YES' : 'NO');
+    console.log('  - Company details:', deliveryWithDetails.companyDetails ? 'YES' : 'NO');
     return res.status(200).json(response);
 
   } catch (error) {

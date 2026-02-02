@@ -369,7 +369,7 @@ export const signUp = async (req, res) => {
       emailCode = generateVerificationCode();
       const emailExpiry = Date.now() + 10 * 60 * 1000;
       const hashedPassword = await bcrypt.hash(password, 10);
-
+       console.log(emailCode)
       if (role === "company_admin") {
         const {
           companyName,
@@ -1259,7 +1259,7 @@ export const resendVerification = async (req, res) => {
 
     // Generate new email verification code
     const newCode = generateVerificationCode();
-
+   console.log(newCode);
     user.emailVerificationToken = newCode;
     user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
     await user.save();

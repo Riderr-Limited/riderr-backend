@@ -292,7 +292,7 @@ paymentSchema.pre('save', function(next) {
     this.escrowDetails.subaccountCode = this.metadata.companySubaccount;
   }
   
-  next();
+ // next();
 });
 
 const Payment = mongoose.model('Payment', paymentSchema);

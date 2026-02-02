@@ -9,21 +9,29 @@ import {
   getMyPayments,
   mobilePaymentCallback,
   checkPaymentStatus,
+  completeAndSettlePayment,
+  getCompanyPayments,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
+
+// ============ WEBHOOK ROUTES (Public - must be first) ============
+router.post('/webhook', handlePaystackWebhook);
+
+// ============ MOBILE-SPECIFIC ROUTES ============
+router.get('/mobile-callback', mobilePaymentCallback);  
 
 // ============ CUSTOMER PAYMENT ROUTES ============
 router.post('/initialize', authenticate, initializeDeliveryPayment);
 router.get('/verify/:reference', authenticate, verifyDeliveryPayment);
 router.get('/my-payments', authenticate, getMyPayments);
-router.get('/:paymentId', authenticate, getPaymentDetails);
-
-// ============ MOBILE-SPECIFIC ROUTES ============
-router.get('/mobile-callback', mobilePaymentCallback);  
 router.get('/status/:reference', authenticate, checkPaymentStatus);
 
-// ============ WEBHOOK ROUTES ============
-router.post('/webhook', handlePaystackWebhook);
+// ============ COMPANY ROUTES (Must come before /:paymentId) ============
+router.get('/company-payments', authenticate, getCompanyPayments);
+router.post('/complete-and-settle/:deliveryId', authenticate, completeAndSettlePayment);
+
+// ============ DYNAMIC ROUTES (Must be last) ============
+router.get('/:paymentId', authenticate, getPaymentDetails);
 
 export default router;

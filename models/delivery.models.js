@@ -9,20 +9,35 @@ const deliverySchema = new mongoose.Schema({
     index: true,
   },
 
-  // Driver details - FIXED to use correct structure
-  driverDetails: {
-    driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    name: String,
-    phone: String,
-    avatarUrl: String,
-    vehicle: {
-      type: String,
-      make: String,
-      model: String,
-      plateNumber: String,
-    },
+ // ✅  driver 
+driverDetails: {
+  driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  name: String,
+  phone: String,
+  avatarUrl: String,
+  rating: { type: Number, default: 0 },
+  vehicle: {
+    type: { type: String },  
+    make: String,
+    model: String,
+    plateNumber: String,
   },
+  currentLocation: {
+    lat: Number,
+    lng: Number,
+    updatedAt: Date
+  }
+},
+companyDetails: {
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+  name: String,
+  logo: String,
+  contactPhone: String,
+  address: String,
+  email: String,
+  rating: { type: Number, default: 0 }
+},  
 
   // Main relationships
   customerId: {
@@ -129,6 +144,7 @@ const deliverySchema = new mongoose.Schema({
       "picked_up",
       "delivered",
       "cancelled",
+      'completed',
       "failed",
     ],
     default: "created",
