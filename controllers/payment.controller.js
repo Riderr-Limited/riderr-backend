@@ -4,7 +4,9 @@ import Delivery from '../models/delivery.models.js';
 import Driver from '../models/riders.models.js';
 import Company from '../models/company.models.js';
 import User from '../models/user.models.js';
-import { initializePayment, verifyPayment, createSubaccount } from '../utils/paystack-hardcoded.js';
+import { initializePayment, verifyPayment, createSubaccount,   chargeCardViaPaystack,  
+  submitOtpToPaystack,         
+  createDedicatedVirtualAccount  } from '../utils/paystack-hardcoded.js';
 import { sendNotification } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
@@ -19,23 +21,28 @@ import crypto from 'crypto';
  * 6. Payment automatically released to company account (90%) and platform (10%)
  */
 
-/**
- * @desc    Initialize escrow payment for delivery
- * @route   POST /api/payments/initialize
- * @access  Private (Customer)
- * @flow    Step 2: Customer pays after creating delivery
- */
 export const initializeDeliveryPayment = async (req, res) => {
   try {
     const customer = req.user;
-    const { deliveryId, mobilePlatform } = req.body;
+    const { deliveryId, mobilePlatform, paymentChannel } = req.body; // ✅ Add paymentChannel
 
     console.log(`💳 [STEP 2] Customer ${customer._id} initializing payment for delivery ${deliveryId}`);
+    console.log(`💳 Payment Channel: ${paymentChannel || 'card (default)'}`);
 
     if (customer.role !== 'customer') {
       return res.status(403).json({
         success: false,
         message: 'Only customers can make payments',
+      });
+    }
+
+    // ✅ VALIDATE PAYMENT CHANNEL
+    const validChannels = ['card', 'bank'];
+    if (paymentChannel && !validChannels.includes(paymentChannel)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment channel. Choose either "card" or "bank"',
+        validOptions: validChannels,
       });
     }
 
@@ -100,11 +107,11 @@ export const initializeDeliveryPayment = async (req, res) => {
     }
 
     // Initialize payment with Paystack
-    // NOTE: Payment is held in ESCROW by Paystack until delivery is completed
     const paymentResult = await initializePayment({
       email: customer.email,
       amount: amount,
       callback_url: callbackUrl,
+      paymentChannel: paymentChannel || 'card', // ✅ Pass user's selection or default to card
       metadata: {
         deliveryId: delivery._id.toString(),
         customerId: customer._id.toString(),
@@ -114,7 +121,7 @@ export const initializeDeliveryPayment = async (req, res) => {
         companyAmount: companyAmount,
         isMobile: isMobileRequest,
         mobilePlatform: mobilePlatform || (isMobileRequest ? 'mobile' : 'web'),
-        // Will be used later when delivery is completed
+        paymentChannel: paymentChannel || 'card', // ✅ Store in metadata
         pendingSettlement: true,
       },
     });
@@ -132,26 +139,26 @@ export const initializeDeliveryPayment = async (req, res) => {
     const payment = new Payment({
       deliveryId: delivery._id,
       customerId: customer._id,
-      driverId: null, // Not assigned yet
-      companyId: null, // Will be set when driver accepts
+      driverId: null,
+      companyId: null,
       amount: amount,
       currency: 'NGN',
       paystackReference: paymentResult.data.reference,
       paystackAccessCode: paymentResult.data.access_code,
       paystackAuthorizationUrl: paymentResult.data.authorization_url,
       status: 'pending',
-      paymentMethod: 'card',
+      paymentMethod: paymentChannel || 'card', // ✅ Store payment method
       companyAmount: companyAmount,
       platformFee: platformFee,
       paymentType: 'escrow',
-      isMobile: isMobileRequest,
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
         splitType: 'escrow',
         platform: isMobileRequest ? (mobilePlatform || 'mobile') : 'web',
         callbackUrl: callbackUrl,
-        pendingSettlement: true, // Funds held in escrow
+        paymentChannel: paymentChannel || 'card', // ✅ Store channel
+        pendingSettlement: true,
       },
     });
 
@@ -175,11 +182,13 @@ export const initializeDeliveryPayment = async (req, res) => {
         companyAmount: companyAmount,
         platformFee: platformFee,
         currency: 'NGN',
+        paymentChannel: paymentChannel || 'card', // ✅ Return selected channel
         isMobile: isMobileRequest,
         paymentInfo: {
           totalAmount: `₦${amount.toLocaleString()}`,
           platformFee: `₦${platformFee.toLocaleString()} (10%)`,
           escrowMessage: 'Payment will be held securely until delivery is completed and verified',
+          paymentMethod: paymentChannel === 'bank' ? 'Bank Transfer' : 'Card Payment',
         },
       },
     });
@@ -1808,3 +1817,352 @@ export const downloadSettlementReceipt = async (req, res) => {
 };
 
 
+/**
+ * @desc    Charge card with OTP support (TEST MODE COMPATIBLE)
+ * @route   POST /api/payments/charge-card
+ * @access  Private (Customer)
+ */
+export const chargeCard = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { deliveryId, cardDetails } = req.body;
+
+    console.log(`💳 [IN-APP] Customer ${customer._id} charging card for delivery ${deliveryId}`);
+
+    // Validate card details
+    if (!cardDetails || !cardDetails.number || !cardDetails.cvv || !cardDetails.expiry_month || !cardDetails.expiry_year) {
+      return res.status(400).json({
+        success: false,
+        message: 'Complete card details required (number, cvv, expiry_month, expiry_year)',
+      });
+    }
+
+    // Find delivery
+    const delivery = await Delivery.findOne({
+      _id: deliveryId,
+      customerId: customer._id,
+    }).populate('companyId');
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery not found',
+      });
+    }
+
+    if (delivery.status !== 'created') {
+      return res.status(400).json({
+        success: false,
+        message: `Payment can only be made for newly created deliveries. Current status: ${delivery.status}`,
+      });
+    }
+
+    // Check if payment already exists
+    const existingPayment = await Payment.findOne({
+      deliveryId: delivery._id,
+      status: { $in: ['successful', 'processing', 'pending'] },
+    });
+
+    if (existingPayment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment already initialized for this delivery',
+      });
+    }
+
+    const amount = delivery.fare.totalFare;
+    const platformFee = Math.round((amount * 10) / 100);
+    const companyAmount = amount - platformFee;
+
+    // Create payment reference
+    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
+    // 🎯 SIMULATE OTP REQUIREMENT BASED ON CARD NUMBER
+    // Cards ending in even number = No OTP
+    // Cards ending in odd number = Requires OTP
+    const lastDigit = cardDetails.number.slice(-1);
+    const requiresOtp = parseInt(lastDigit) % 2 !== 0; // Odd = OTP required
+
+    // Create payment record
+    const payment = new Payment({
+      deliveryId: delivery._id,
+      customerId: customer._id,
+      amount: amount,
+      currency: 'NGN',
+      paystackReference: reference,
+      status: requiresOtp ? 'processing' : 'successful',
+      paymentMethod: 'card',
+      companyAmount: companyAmount,
+      platformFee: platformFee,
+      paymentType: 'escrow',
+      paidAt: requiresOtp ? null : new Date(),
+      verifiedAt: requiresOtp ? null : new Date(),
+      metadata: {
+        customerEmail: customer.email,
+        customerName: customer.name,
+        splitType: 'escrow',
+        platform: 'in-app',
+        pendingSettlement: true,
+        cardLast4: cardDetails.number.slice(-4),
+        requiresOtp: requiresOtp,
+        testMode: true,
+      },
+    });
+
+    await payment.save();
+
+    if (requiresOtp) {
+      // Payment requires OTP
+      delivery.payment.status = 'pending_otp';
+      delivery.payment.paystackReference = reference;
+      await delivery.save();
+
+      console.log(`📱 OTP required for card ending in ${cardDetails.number.slice(-4)}`);
+
+      return res.status(200).json({
+        success: true,
+        requiresOtp: true,
+        message: 'OTP has been sent to your phone number registered with your card',
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: amount,
+          displayMessage: `Please enter the OTP sent to the phone number ending in *****${customer.phone.slice(-4)}`,
+          testOtp: '123456', // ⚠️ Only in test mode - remove in production
+        },
+      });
+    }
+
+    // Payment successful without OTP
+    delivery.payment.status = 'paid';
+    delivery.payment.paidAt = new Date();
+    delivery.payment.paystackReference = reference;
+    await delivery.save();
+
+    console.log(`✅ Payment successful without OTP - Card ending in ${cardDetails.number.slice(-4)}`);
+
+    // Notify customer
+    await sendNotification({
+      userId: customer._id,
+      title: '✅ Payment Successful',
+      message: `Your payment of ₦${amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      data: {
+        type: 'payment_successful',
+        deliveryId: delivery._id,
+        paymentId: payment._id,
+        amount: amount,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      requiresOtp: false,
+      message: 'Payment successful!',
+      data: {
+        paymentId: payment._id,
+        reference: reference,
+        amount: amount,
+        deliveryId: delivery._id,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Charge card error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process card payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Submit OTP for card charge
+ * @route   POST /api/payments/submit-otp
+ * @access  Private (Customer)
+ */
+export const submitOtp = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { reference, otp } = req.body;
+
+    if (!reference || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reference and OTP are required',
+      });
+    }
+
+    // Find payment
+    const payment = await Payment.findOne({
+      paystackReference: reference,
+      customerId: customer._id,
+    });
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found',
+      });
+    }
+
+    if (payment.status === 'successful') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment already completed',
+      });
+    }
+
+    // Submit OTP to Paystack
+    const otpResult = await submitOtpToPaystack({
+      otp: otp,
+      reference: reference,
+    });
+
+    if (!otpResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: otpResult.message || 'Invalid OTP',
+        error: otpResult.error,
+      });
+    }
+
+    // Update payment as successful
+    payment.status = 'successful';
+    payment.paidAt = new Date();
+    payment.verifiedAt = new Date();
+    payment.webhookData = otpResult.data;
+    payment.metadata.requiresOtp = false;
+    await payment.save();
+
+    // Update delivery
+    const delivery = await Delivery.findById(payment.deliveryId);
+    if (delivery) {
+      delivery.payment.status = 'paid';
+      delivery.payment.paidAt = new Date();
+      await delivery.save();
+    }
+
+    // Notify customer
+    await sendNotification({
+      userId: customer._id,
+      title: '✅ Payment Successful',
+      message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      data: {
+        type: 'payment_successful',
+        deliveryId: payment.deliveryId,
+        paymentId: payment._id,
+        amount: payment.amount,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment completed successfully!',
+      data: {
+        paymentId: payment._id,
+        reference: reference,
+        amount: payment.amount,
+        deliveryId: payment.deliveryId,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Submit OTP error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Initiate bank transfer payment
+ * @route   POST /api/payments/initiate-bank-transfer
+ * @access  Private (Customer)
+ */
+export const initiateBankTransfer = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { deliveryId } = req.body;
+
+    // Find delivery
+    const delivery = await Delivery.findOne({
+      _id: deliveryId,
+      customerId: customer._id,
+    });
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery not found',
+      });
+    }
+
+    const amount = delivery.fare.totalFare;
+    const platformFee = Math.round((amount * 10) / 100);
+    const companyAmount = amount - platformFee;
+
+    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
+    // Create dedicated virtual account for this payment
+    const bankTransferResult = await createDedicatedVirtualAccount({
+      email: customer.email,
+      amount: amount,
+      reference: reference,
+    });
+
+    if (!bankTransferResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to generate bank transfer details',
+      });
+    }
+
+    // Create payment record
+    const payment = new Payment({
+      deliveryId: delivery._id,
+      customerId: customer._id,
+      amount: amount,
+      currency: 'NGN',
+      paystackReference: reference,
+      status: 'pending',
+      paymentMethod: 'bank_transfer',
+      companyAmount: companyAmount,
+      platformFee: platformFee,
+      paymentType: 'escrow',
+      metadata: {
+        customerEmail: customer.email,
+        customerName: customer.name,
+        bankTransferDetails: bankTransferResult.data,
+        platform: 'in-app',
+        pendingSettlement: true,
+      },
+    });
+
+    await payment.save();
+
+    delivery.payment.status = 'pending_payment';
+    delivery.payment.paystackReference = reference;
+    await delivery.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Bank transfer details generated',
+      data: {
+        paymentId: payment._id,
+        reference: reference,
+        amount: amount,
+        bankDetails: bankTransferResult.data,
+        expiresAt: bankTransferResult.data.expiresAt,
+        instructions: 'Transfer the exact amount to the account details below. Payment will be confirmed automatically.',
+      },
+    });
+  } catch (error) {
+    console.error('❌ Initiate bank transfer error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initiate bank transfer',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};

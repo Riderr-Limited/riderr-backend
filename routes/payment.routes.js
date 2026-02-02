@@ -11,6 +11,9 @@ import {
   checkPaymentStatus,
   completeAndSettlePayment,
   getCompanyPayments,
+   chargeCard, 
+  submitOtp, 
+  initiateBankTransfer, 
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -20,6 +23,13 @@ router.post('/webhook', handlePaystackWebhook);
 
 // ============ MOBILE-SPECIFIC ROUTES ============
 router.get('/mobile-callback', mobilePaymentCallback);  
+
+
+// ============ IN-APP PAYMENT ROUTES ✅ NEW ============
+router.post('/charge-card', authenticate, chargeCard);
+router.post('/submit-otp', authenticate, submitOtp);
+router.post('/initiate-bank-transfer', authenticate, initiateBankTransfer);
+
 
 // ============ CUSTOMER PAYMENT ROUTES ============
 router.post('/initialize', authenticate, initializeDeliveryPayment);
@@ -33,5 +43,8 @@ router.post('/complete-and-settle/:deliveryId', authenticate, completeAndSettleP
 
 // ============ DYNAMIC ROUTES (Must be last) ============
 router.get('/:paymentId', authenticate, getPaymentDetails);
+
+
+
 
 export default router;

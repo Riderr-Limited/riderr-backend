@@ -22,12 +22,15 @@ const paystackAxios = axios.create({
 
 /**
  * Initialize payment with Paystack (Mobile & Web)
+ * @param {Object} paymentData - Payment initialization data
+ * @param {string} paymentData.paymentChannel - 'card' or 'bank' (user's selection)
  */
 export const initializePayment = async (paymentData) => {
   try {
     console.log('💰 Initializing payment...');
     console.log('Email:', paymentData.email);
     console.log('Amount:', paymentData.amount);
+    console.log('Payment Channel:', paymentData.paymentChannel || 'card'); // Default to card
     console.log('Subaccount:', paymentData.subaccount || 'None');
     console.log('Is Mobile:', paymentData.metadata?.isMobile || false);
     
@@ -41,6 +44,10 @@ export const initializePayment = async (paymentData) => {
       currency: 'NGN',
       metadata: paymentData.metadata || {},
       reference: paymentData.reference || `RIDERR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      // ✅ LIMIT PAYMENT CHANNELS TO CARD AND BANK TRANSFER ONLY
+      channels: paymentData.paymentChannel 
+        ? [paymentData.paymentChannel] // Use user's selection
+        : ['card', 'bank'], // Default: show both options
     };
 
     // Set callback URL
@@ -64,6 +71,8 @@ export const initializePayment = async (paymentData) => {
       
       console.log('🏦 ESCROW MODE: Payment will split to subaccount');
     }
+    
+    console.log('📋 Payment channels:', payload.channels);
     
     // Make the request
     const response = await paystackAxios.post('/transaction/initialize', payload);
@@ -93,6 +102,182 @@ export const initializePayment = async (paymentData) => {
     return {
       success: false,
       message: error.response?.data?.message || 'Payment initialization failed',
+      error: error.response?.data,
+    };
+  }
+};
+
+// utils/paystack-hardcoded.js - ADD THESE FUNCTIONS
+
+/**
+ * Charge card directly via Paystack
+ */
+export const chargeCardViaPaystack = async (chargeData) => {
+  try {
+    console.log('💳 Charging card via Paystack...');
+    
+    const amountInKobo = Math.round(chargeData.amount * 100);
+    
+    const payload = {
+      email: chargeData.email,
+      amount: amountInKobo,
+      card: {
+        number: chargeData.cardDetails.number,
+        cvv: chargeData.cardDetails.cvv,
+        expiry_month: chargeData.cardDetails.expiry_month,
+        expiry_year: chargeData.cardDetails.expiry_year,
+      },
+      metadata: chargeData.metadata || {},
+      reference: chargeData.reference,
+    };
+
+    const response = await paystackAxios.post('/transaction/charge', payload);
+
+    if (response.data.status === true) {
+      const data = response.data.data;
+      
+      // Check if OTP is required
+      if (data.status === 'send_otp' || data.status === 'pending') {
+        return {
+          success: true,
+          requiresOtp: true,
+          message: 'OTP required',
+          otpReference: data.reference,
+          displayMessage: data.display_text || 'Please enter the OTP sent to your phone',
+          data: data,
+        };
+      }
+      
+      // Payment successful
+      if (data.status === 'success') {
+        return {
+          success: true,
+          requiresOtp: false,
+          message: 'Payment successful',
+          data: data,
+        };
+      }
+      
+      // Payment failed
+      return {
+        success: false,
+        message: data.gateway_response || 'Payment failed',
+        error: data,
+      };
+    }
+    
+    return {
+      success: false,
+      message: response.data.message || 'Charge failed',
+      error: response.data,
+    };
+  } catch (error) {
+    console.error('❌ Charge card error:', error.response?.data || error.message);
+    
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Card charge failed',
+      error: error.response?.data,
+    };
+  }
+};
+
+/**
+ * Submit OTP for pending charge
+ */
+export const submitOtpToPaystack = async (otpData) => {
+  try {
+    console.log('🔐 Submitting OTP to Paystack...');
+    
+    const payload = {
+      otp: otpData.otp,
+      reference: otpData.reference,
+    };
+
+    const response = await paystackAxios.post('/transaction/submit_otp', payload);
+
+    if (response.data.status === true) {
+      const data = response.data.data;
+      
+      if (data.status === 'success') {
+        return {
+          success: true,
+          message: 'Payment successful',
+          data: data,
+        };
+      }
+      
+      return {
+        success: false,
+        message: data.gateway_response || 'OTP verification failed',
+        error: data,
+      };
+    }
+    
+    return {
+      success: false,
+      message: response.data.message || 'OTP submission failed',
+      error: response.data,
+    };
+  } catch (error) {
+    console.error('❌ Submit OTP error:', error.response?.data || error.message);
+    
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Invalid OTP',
+      error: error.response?.data,
+    };
+  }
+};
+
+/**
+ * Create dedicated virtual account for bank transfer
+ */
+export const createDedicatedVirtualAccount = async (accountData) => {
+  try {
+    console.log('🏦 Creating dedicated virtual account...');
+    
+    const amountInKobo = Math.round(accountData.amount * 100);
+    
+    const payload = {
+      email: accountData.email,
+      amount: amountInKobo,
+      currency: 'NGN',
+      preferred_bank: 'wema-bank', // You can make this configurable
+      reference: accountData.reference,
+    };
+
+    const response = await paystackAxios.post('/dedicated_account', payload);
+
+    if (response.data.status === true) {
+      const data = response.data.data;
+      
+      return {
+        success: true,
+        message: 'Virtual account created',
+        data: {
+          accountNumber: data.account_number,
+          accountName: data.account_name,
+          bankName: data.bank.name,
+          bankCode: data.bank.id,
+          reference: data.reference,
+          amount: accountData.amount,
+          expiresAt: data.expires_at,
+        },
+      };
+    }
+    
+    return {
+      success: false,
+      message: response.data.message || 'Failed to create virtual account',
+      error: response.data,
+    };
+  } catch (error) {
+    console.error('❌ Create virtual account error:', error.response?.data || error.message);
+    
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Failed to create virtual account',
       error: error.response?.data,
     };
   }
