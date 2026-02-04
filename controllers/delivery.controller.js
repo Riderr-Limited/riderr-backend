@@ -2909,3 +2909,203 @@ export const getNearbyAvailableDrivers = async (req, res) => {
     });
   }
 };
+
+
+
+
+/**
+ * @desc    Driver confirms cash collection
+ * @route   POST /api/deliveries/:deliveryId/confirm-cash
+ * @access  Private (Driver)
+ */
+export const confirmCashCollection = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const driverUser = req.user;
+    const { deliveryId } = req.params;
+
+    console.log(`💰 Driver ${driverUser._id} confirming cash collection for delivery ${deliveryId}`);
+
+    if (driverUser.role !== 'driver') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({
+        success: false,
+        message: 'Only drivers can confirm cash collection',
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
+    if (!driver) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: 'Driver profile not found',
+      });
+    }
+
+    const delivery = await Delivery.findOne({
+      _id: deliveryId,
+      driverId: driver._id,
+    }).session(session);
+
+    if (!delivery) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery not found or not assigned to this driver',
+      });
+    }
+
+    // Check if it's a cash payment
+    if (delivery.payment.method !== 'cash') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: 'This is not a cash payment delivery',
+      });
+    }
+
+    // Check if payment is already confirmed
+    if (delivery.payment.status === 'paid') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: 'Cash payment already confirmed',
+      });
+    }
+
+    // Update delivery payment status
+    delivery.payment.status = 'paid';
+    delivery.payment.paidAt = new Date();
+
+    // Create or update payment record
+    let payment = await Payment.findOne({
+      deliveryId: delivery._id,
+    }).session(session);
+
+    if (!payment) {
+      payment = new Payment({
+        deliveryId: delivery._id,
+        customerId: delivery.customerId,
+        driverId: driver._id,
+        companyId: delivery.companyId,
+        amount: delivery.fare.totalFare,
+        currency: 'NGN',
+        status: 'successful',
+        paymentMethod: 'cash',
+        companyAmount: delivery.fare.totalFare, // Full amount to company for now
+        platformFee: 0,
+        paymentType: 'cash_on_delivery',
+        paidAt: new Date(),
+        verifiedAt: new Date(),
+        metadata: {
+          cashCollectedAt: new Date(),
+          collectedByDriverId: driver._id,
+          requiresSettlement: true,
+          isSettledToDriver: false,
+        },
+      });
+    } else {
+      payment.status = 'successful';
+      payment.paidAt = new Date();
+      payment.verifiedAt = new Date();
+      payment.metadata = {
+        ...payment.metadata,
+        cashCollectedAt: new Date(),
+        collectedByDriverId: driver._id,
+        requiresSettlement: true,
+        isSettledToDriver: false,
+      };
+    }
+
+    // Save both
+    await delivery.save({ session });
+    await payment.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Notify customer
+    const customer = await User.findById(delivery.customerId);
+    if (customer) {
+      await sendNotification({
+        userId: customer._id,
+        title: '✅ Cash Payment Confirmed',
+        message: `Driver has confirmed cash payment of ₦${delivery.fare.totalFare.toLocaleString()} for your delivery`,
+        data: {
+          type: 'cash_payment_confirmed',
+          deliveryId: delivery._id,
+          amount: delivery.fare.totalFare,
+          driverName: driverUser.name,
+        },
+      });
+    }
+
+    // Notify company if exists
+    if (delivery.companyId) {
+      const company = await Company.findById(delivery.companyId);
+      if (company) {
+        const companyUser = await User.findOne({
+          $or: [
+            { _id: company.ownerId },
+            { email: company.email }
+          ]
+        });
+
+        if (companyUser) {
+          await sendNotification({
+            userId: companyUser._id,
+            title: '💰 Cash Payment Collected',
+            message: `Driver ${driverUser.name} has collected ₦${delivery.fare.totalFare.toLocaleString()} cash payment for delivery #${delivery.referenceId}`,
+            data: {
+              type: 'cash_payment_collected',
+              deliveryId: delivery._id,
+              paymentId: payment._id,
+              amount: delivery.fare.totalFare,
+              driverId: driver._id,
+              driverName: driverUser.name,
+            },
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Cash payment confirmed successfully',
+      data: {
+        delivery: {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          payment: delivery.payment,
+        },
+        payment: {
+          _id: payment._id,
+          amount: payment.amount,
+          status: payment.status,
+          requiresSettlement: true,
+          settlementStatus: 'pending',
+        },
+      },
+    });
+  } catch (error) {
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    session.endSession();
+    
+    console.error('❌ Confirm cash collection error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to confirm cash collection',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
