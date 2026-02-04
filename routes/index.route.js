@@ -10,6 +10,7 @@ import paymentRoutes from "./payment.routes.js";
 import notificationRoutes from "./notification.routes.js";
 import chatRoutes from "./chat.routes.js";
 import voiceCallRoutes from "./voiceCall.routes.js";
+import supportTicketRoutes from "./supportTicket.routes.js";
 
 const router = express.Router();
 
@@ -144,16 +145,9 @@ router.get("/", (req, res) => {
 });
 
 // Mount route modules
-router.use("/auth", authRoutes);
-router.use("/users", userRoutes);
-router.use("/deliveries", deliveryRoutes);
-router.use("/rides", rideRoutes);
-router.use("/driver", driverRoutes);
-router.use("/company", companyRoutes);
-router.use("/payments", paymentRoutes);
-router.use("/notifications", notificationRoutes);
-router.use("/chat", chatRoutes);
-router.use("/voice", voiceCallRoutes);
+
+// Support ticket routes (v1)
+router.use("/v1/support", supportTicketRoutes);
 
 /**
  * @route   ALL *
