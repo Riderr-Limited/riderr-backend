@@ -2102,20 +2102,58 @@ export const initiateBankTransfer = async (req, res) => {
     const platformFee = Math.round((amount * 10) / 100);
     const companyAmount = amount - platformFee;
 
-    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 
-    // Create dedicated virtual account for this payment
-    const bankTransferResult = await createDedicatedVirtualAccount({
-      email: customer.email,
-      amount: amount,
-      reference: reference,
-    });
+    let bankDetails = null;
+    let paymentMethod = 'bank_transfer';
 
-    if (!bankTransferResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to generate bank transfer details',
+    try {
+      // Try Paystack virtual account first
+      const paymentResult = await initializePayment({
+        email: customer.email,
+        amount: amount,
+        reference: reference,
+        callback_url: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/payments/bank-transfer-callback`,
+        channels: ['bank_transfer'],
+        metadata: {
+          deliveryId: delivery._id.toString(),
+          customerId: customer._id.toString(),
+          type: 'bank_transfer_delivery',
+        },
       });
+
+      if (paymentResult.success && paymentResult.data.authorization_url) {
+        bankDetails = {
+          authorizationUrl: paymentResult.data.authorization_url,
+          accessCode: paymentResult.data.access_code,
+          reference: paymentResult.data.reference,
+          type: 'paystack_virtual',
+          instructions: 'Complete transfer via the authorization URL',
+        };
+        console.log(`✅ Paystack virtual account created for ${reference}`);
+      } else {
+        throw new Error('Paystack virtual account not available');
+      }
+    } catch (paystackError) {
+      console.warn('⚠️ Paystack virtual account failed, using manual method:', paystackError.message);
+      
+      // Fallback to manual bank transfer
+      bankDetails = {
+        bankName: process.env.FALLBACK_BANK_NAME || 'Zenith Bank',
+        accountNumber: process.env.FALLBACK_ACCOUNT_NUMBER || '1012345678',
+        accountName: process.env.FALLBACK_ACCOUNT_NAME || 'RIDERR NIG LTD',
+        reference: reference,
+        amount: amount,
+        type: 'manual_transfer',
+        narration: `Riderr Delivery - ${delivery.referenceId}`,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        instructions: [
+          `Transfer exactly ₦${amount.toLocaleString()}`,
+          `Use "${reference}" as narration`,
+          `Payment valid for 24 hours`,
+        ],
+      };
+      paymentMethod = 'manual_bank_transfer';
     }
 
     // Create payment record
@@ -2126,16 +2164,19 @@ export const initiateBankTransfer = async (req, res) => {
       currency: 'NGN',
       paystackReference: reference,
       status: 'pending',
-      paymentMethod: 'bank_transfer',
+      paymentMethod: paymentMethod,
       companyAmount: companyAmount,
       platformFee: platformFee,
       paymentType: 'escrow',
+      paystackAuthorizationUrl: bankDetails.authorizationUrl || null,
+      paystackAccessCode: bankDetails.accessCode || null,
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
-        bankTransferDetails: bankTransferResult.data,
+        bankTransferDetails: bankDetails,
         platform: 'in-app',
         pendingSettlement: true,
+        transferType: bankDetails.type,
       },
     });
 
@@ -2145,16 +2186,39 @@ export const initiateBankTransfer = async (req, res) => {
     delivery.payment.paystackReference = reference;
     await delivery.save();
 
+    console.log(`✅ Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`);
+
     res.status(200).json({
       success: true,
-      message: 'Bank transfer details generated',
+      message: 'Bank transfer details generated successfully',
       data: {
         paymentId: payment._id,
         reference: reference,
         amount: amount,
-        bankDetails: bankTransferResult.data,
-        expiresAt: bankTransferResult.data.expiresAt,
-        instructions: 'Transfer the exact amount to the account details below. Payment will be confirmed automatically.',
+        bankDetails: bankDetails,
+        transferType: bankDetails.type,
+        paymentBreakdown: {
+          totalAmount: `₦${amount.toLocaleString()}`,
+          platformFee: `₦${platformFee.toLocaleString()} (10%)`,
+          companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
+          escrowStatus: 'Payment held securely until delivery completion',
+        },
+        nextSteps: bankDetails.type === 'paystack_virtual' ? [
+          'Click the authorization URL below',
+          'Select your bank',
+          'Complete the transfer',
+          'Payment confirmed automatically',
+        ] : [
+          'Transfer to the bank account below',
+          'Use exact amount and reference',
+          'Keep proof of payment',
+          'Contact support if needed',
+        ],
+        support: {
+          email: process.env.SUPPORT_EMAIL || 'support@riderr.com',
+          phone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
+          hours: '9AM - 6PM, Mon - Fri',
+        },
       },
     });
   } catch (error) {

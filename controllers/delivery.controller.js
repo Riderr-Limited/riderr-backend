@@ -511,6 +511,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
   }
 };
 
+
 export const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -565,18 +566,29 @@ export const acceptDelivery = async (req, res) => {
       });
     }
 
-    // ✅ CHECK: Delivery must be paid before driver can accept
-    if (delivery.payment.status !== 'paid') {
+    // ✅ UPDATED: Check if payment is required based on payment method
+    const isCashPayment = delivery.payment?.method === 'cash';
+    
+    // For non-cash payments (card, bank transfer, escrow), require payment to be completed
+    if (!isCashPayment && delivery.payment.status !== 'paid') {
       await session.abortTransaction();
       await session.endSession();
       return res.status(400).json({
         success: false,
-        message: "This delivery has not been paid yet. Customer must complete payment first.",
+        message: "This delivery requires payment before a driver can accept it. Customer must complete payment first.",
         data: {
           paymentStatus: delivery.payment.status,
+          paymentMethod: delivery.payment.method,
           requiresPayment: true,
         },
       });
+    }
+
+    // For cash payments, we can proceed without upfront payment
+    if (isCashPayment && delivery.payment.status !== 'pending') {
+      console.log(`💰 Cash delivery - Payment status: ${delivery.payment.status}`);
+      // You might want to set the payment status to 'pending' if it's not already
+      delivery.payment.status = 'pending';
     }
 
     if (delivery.status !== "created" || delivery.driverId) {
@@ -588,32 +600,66 @@ export const acceptDelivery = async (req, res) => {
       });
     }
 
-    // Update payment with driver and company info (if Payment model exists)
+    // Update payment with driver and company info (if Payment model exists and not cash)
     let payment = null;
-    try {
-      payment = await Payment.findOne({
-        deliveryId: delivery._id,
-        status: 'successful',
-      }).session(session);
+    if (!isCashPayment) {
+      try {
+        payment = await Payment.findOne({
+          deliveryId: delivery._id,
+          status: 'successful',
+        }).session(session);
 
-      if (payment) {
-        payment.driverId = driver._id;
-        payment.companyId = driver.companyId?._id || driver.companyId;
-        
-        // Add company subaccount for settlement
-        if (driver.companyId && driver.companyId.paystackSubaccountCode) {
-          payment.metadata = {
-            ...payment.metadata,
-            companySubaccount: driver.companyId.paystackSubaccountCode,
-            driverAssignedAt: new Date(),
-          };
+        if (payment) {
+          payment.driverId = driver._id;
+          payment.companyId = driver.companyId?._id || driver.companyId;
+          
+          // Add company subaccount for settlement
+          if (driver.companyId && driver.companyId.paystackSubaccountCode) {
+            payment.metadata = {
+              ...payment.metadata,
+              companySubaccount: driver.companyId.paystackSubaccountCode,
+              driverAssignedAt: new Date(),
+            };
+          }
+          
+          await payment.save({ session });
         }
-        
-        await payment.save({ session });
+      } catch (error) {
+        console.warn("⚠️ Payment update skipped:", error.message);
+        // Continue with delivery acceptance even if payment update fails
       }
-    } catch (error) {
-      console.warn("⚠️ Payment update skipped:", error.message);
-      // Continue with delivery acceptance even if payment update fails
+    } else {
+      // For cash payments, create a payment record if it doesn't exist
+      try {
+        payment = await Payment.findOne({
+          deliveryId: delivery._id,
+        }).session(session);
+
+        if (!payment) {
+          payment = new Payment({
+            deliveryId: delivery._id,
+            customerId: delivery.customerId,
+            driverId: driver._id,
+            companyId: driver.companyId?._id || driver.companyId,
+            amount: delivery.fare.totalFare,
+            currency: 'NGN',
+            status: 'pending',
+            paymentMethod: 'cash',
+            companyAmount: delivery.fare.totalFare, // For cash, company gets full amount
+            platformFee: 0, // Platform fee can be deducted later or set differently
+            paymentType: 'cash_on_delivery',
+            metadata: {
+              paymentType: 'cash',
+              requiresCashCollection: true,
+              driverAssignedAt: new Date(),
+              paymentStatus: 'to_be_collected',
+            },
+          });
+          await payment.save({ session });
+        }
+      } catch (error) {
+        console.warn("⚠️ Cash payment record creation skipped:", error.message);
+      }
     }
 
     // Calculate distance from driver to pickup
@@ -692,27 +738,40 @@ export const acceptDelivery = async (req, res) => {
 
     // Send notifications (outside transaction)
     if (customer) {
+      const paymentMessage = isCashPayment 
+        ? 'This is a cash-on-delivery payment. Please have ₦' + delivery.fare.totalFare.toLocaleString() + ' ready when the driver arrives.'
+        : 'Payment is held securely and will be released after delivery completion.';
+      
       await sendNotification({
         userId: customer._id,
         title: '🚗 Driver Assigned!',
-        message: `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. Payment is held securely.`,
+        message: `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. ${paymentMessage}`,
         data: {
           type: 'driver_assigned',
           deliveryId: delivery._id,
           driverId: driver._id,
           driverName: driver.userId.name,
           companyName: driver.companyId?.name,
+          paymentMethod: delivery.payment.method,
+          isCashPayment: isCashPayment,
         },
       });
     }
 
+    const driverMessage = isCashPayment
+      ? `You've accepted a cash-on-delivery delivery. Please collect ₦${delivery.fare.totalFare.toLocaleString()} from the customer upon delivery.`
+      : `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to pickup location.`;
+
     await sendNotification({
       userId: driverUser._id,
       title: '✅ Delivery Accepted',
-      message: `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to pickup location.`,
+      message: driverMessage,
       data: {
         type: 'delivery_accepted',
         deliveryId: delivery._id,
+        paymentMethod: delivery.payment.method,
+        isCashPayment: isCashPayment,
+        amountToCollect: isCashPayment ? delivery.fare.totalFare : null,
       },
     });
 
@@ -723,19 +782,26 @@ export const acceptDelivery = async (req, res) => {
     
     const deliveryWithDetails = await populateDriverAndCompanyDetails(updatedDelivery);
 
-    console.log(`✅ Delivery accepted with secured payment`);
+    console.log(`Delivery accepted - Payment method: ${delivery.payment.method}`);
 
     res.status(200).json({
       success: true,
-      message: "Delivery accepted successfully! Payment is secured.",
+      message: isCashPayment 
+        ? "Delivery accepted successfully! Please collect cash payment upon delivery."
+        : "Delivery accepted successfully! Payment is secured.",
       data: {
         delivery: deliveryWithDetails,
         driver: deliveryWithDetails.driverDetails,
         company: deliveryWithDetails.companyDetails,
         payment: {
-          status: 'secured',
+          method: delivery.payment.method,
+          status: isCashPayment ? 'pending_cash_collection' : 'secured',
           amount: delivery.fare.totalFare,
-          message: 'Payment held in escrow until delivery completion',
+          message: isCashPayment 
+            ? 'Cash payment to be collected upon delivery'
+            : 'Payment held in escrow until delivery completion',
+          cashCollectionRequired: isCashPayment,
+          amountToCollect: isCashPayment ? delivery.fare.totalFare : null,
         },
       },
     });
