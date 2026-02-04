@@ -3,6 +3,9 @@ import Delivery from "../models/delivery.models.js";
 import User from "../models/user.models.js";
 import crypto from "crypto";
 
+// Store signaling messages temporarily
+const signalingMessages = new Map();
+
 /**
  * Initiate voice call
  */
@@ -259,6 +262,50 @@ export const getCallHistory = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get call history",
+    });
+  }
+};
+
+/**
+ * Send signaling message for WebRTC
+ */
+export const sendSignalingMessage = async (req, res) => {
+  try {
+    const { callId } = req.params;
+    const message = req.body;
+    
+    if (!signalingMessages.has(callId)) {
+      signalingMessages.set(callId, []);
+    }
+    
+    signalingMessages.get(callId).push(message);
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Send signaling message error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send signaling message",
+    });
+  }
+};
+
+/**
+ * Get signaling messages for WebRTC
+ */
+export const getSignalingMessages = async (req, res) => {
+  try {
+    const { callId } = req.params;
+    const messages = signalingMessages.get(callId) || [];
+    
+    // Clear messages after sending
+    signalingMessages.set(callId, []);
+    
+    res.json(messages);
+  } catch (error) {
+    console.error("Get signaling messages error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get signaling messages",
     });
   }
 };
