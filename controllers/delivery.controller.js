@@ -405,7 +405,12 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
       return res.status(400).json({
         success: false,
-        message: "Driver is not available for new requests",
+        message: "You're not available to accept new deliveries right now",
+        reasons: {
+          offline: !driver.isOnline ? "You need to be online" : null,
+          unavailable: !driver.isAvailable ? "You're marked as unavailable" : null,
+          busy: driver.currentDeliveryId ? "You have an active delivery" : null,
+        }
       });
     }
 
@@ -422,13 +427,25 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     } else {
       return res.status(400).json({
         success: false,
-        message: "Driver location is required",
+        message: "We couldn't find your location. Please enable location services and try again",
       });
     }
 
+    // ✅ UPDATED: Only show deliveries that are either:
+    // 1. Cash payments (payment.method === 'cash')
+    // 2. Paid non-cash payments (payment.status === 'paid')
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
+      $or: [
+        { 
+          'payment.method': 'cash' 
+        },
+        { 
+          'payment.method': { $in: ['card', 'bank_transfer', 'bank'] },
+          'payment.status': 'paid'
+        }
+      ]
     })
       .populate("customerId", "name phone avatarUrl rating")
       .sort({ createdAt: -1 })
@@ -474,7 +491,12 @@ export const getNearbyDeliveryRequests = async (req, res) => {
           estimatedDistanceKm: delivery.estimatedDistanceKm || distance,
           estimatedDurationMin:
             delivery.estimatedDurationMin || Math.ceil(distance * 3),
-          payment: delivery.payment,
+          payment: {
+            method: delivery.payment.method,
+            status: delivery.payment.status,
+            isPaid: delivery.payment.method === 'cash' ? false : delivery.payment.status === 'paid',
+            cashOnDelivery: delivery.payment.method === 'cash',
+          },
           customer: delivery.customerId,
           createdAt: delivery.createdAt,
           distanceFromDriver: parseFloat(distance.toFixed(2)),
@@ -492,9 +514,13 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       (a, b) => a.distanceFromDriver - b.distanceFromDriver
     );
 
+    const message = nearbyDeliveries.length > 0
+      ? `Found ${nearbyDeliveries.length} delivery ${nearbyDeliveries.length === 1 ? 'request' : 'requests'} near you`
+      : "No delivery requests available in your area right now";
+
     res.status(200).json({
       success: true,
-      message: `Found ${nearbyDeliveries.length} nearby delivery requests`,
+      message: message,
       data: {
         deliveries: nearbyDeliveries,
         driverLocation: { lat: latitude, lng: longitude },
@@ -506,7 +532,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     console.error("❌ Get nearby deliveries error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get nearby deliveries",
+      message: "Something went wrong while loading delivery requests. Please try again",
     });
   }
 };
@@ -542,16 +568,27 @@ export const acceptDelivery = async (req, res) => {
       await session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Driver profile not found",
+        message: "Your driver profile wasn't found. Please contact support",
       });
     }
 
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
       await session.abortTransaction();
       await session.endSession();
+      
+      let specificMessage = "You cannot accept new deliveries right now";
+      
+      if (!driver.isOnline) {
+        specificMessage = "You need to be online to accept deliveries. Please go online first";
+      } else if (driver.currentDeliveryId) {
+        specificMessage = "You already have an active delivery. Please complete it before accepting a new one";
+      } else if (!driver.isAvailable) {
+        specificMessage = "You're currently unavailable. Please mark yourself as available to accept deliveries";
+      }
+      
       return res.status(400).json({
         success: false,
-        message: "Driver is not available for new deliveries",
+        message: specificMessage,
       });
     }
 
@@ -562,7 +599,7 @@ export const acceptDelivery = async (req, res) => {
       await session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Delivery not found",
+        message: "This delivery request no longer exists or has been cancelled",
       });
     }
 
@@ -573,9 +610,12 @@ export const acceptDelivery = async (req, res) => {
     if (!isCashPayment && delivery.payment.status !== 'paid') {
       await session.abortTransaction();
       await session.endSession();
+      
+      const paymentMethodName = delivery.payment.method === 'card' ? 'card' : 'bank transfer';
+      
       return res.status(400).json({
         success: false,
-        message: "This delivery requires payment before a driver can accept it. Customer must complete payment first.",
+        message: `Customer hasn't completed payment yet. This delivery requires ${paymentMethodName} payment before you can accept it`,
         data: {
           paymentStatus: delivery.payment.status,
           paymentMethod: delivery.payment.method,
@@ -587,16 +627,26 @@ export const acceptDelivery = async (req, res) => {
     // For cash payments, we can proceed without upfront payment
     if (isCashPayment && delivery.payment.status !== 'pending') {
       console.log(`💰 Cash delivery - Payment status: ${delivery.payment.status}`);
-      // You might want to set the payment status to 'pending' if it's not already
       delivery.payment.status = 'pending';
     }
 
     if (delivery.status !== "created" || delivery.driverId) {
       await session.abortTransaction();
       await session.endSession();
+      
+      let specificMessage = "This delivery is no longer available";
+      
+      if (delivery.driverId) {
+        specificMessage = "Another driver has already accepted this delivery";
+      } else if (delivery.status === 'cancelled') {
+        specificMessage = "This delivery has been cancelled by the customer";
+      } else if (delivery.status !== 'created') {
+        specificMessage = "This delivery is no longer available for acceptance";
+      }
+      
       return res.status(400).json({
         success: false,
-        message: "Delivery is no longer available",
+        message: specificMessage,
       });
     }
 
@@ -626,7 +676,6 @@ export const acceptDelivery = async (req, res) => {
         }
       } catch (error) {
         console.warn("⚠️ Payment update skipped:", error.message);
-        // Continue with delivery acceptance even if payment update fails
       }
     } else {
       // For cash payments, create a payment record if it doesn't exist
@@ -645,8 +694,8 @@ export const acceptDelivery = async (req, res) => {
             currency: 'NGN',
             status: 'pending',
             paymentMethod: 'cash',
-            companyAmount: delivery.fare.totalFare, // For cash, company gets full amount
-            platformFee: 0, // Platform fee can be deducted later or set differently
+            companyAmount: delivery.fare.totalFare,
+            platformFee: 0,
             paymentType: 'cash_on_delivery',
             metadata: {
               paymentType: 'cash',
@@ -689,7 +738,6 @@ export const acceptDelivery = async (req, res) => {
       },
     };
 
-    // Add current location if available
     if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
       driverDetails.currentLocation = {
         lat: driver.currentLocation.lat,
@@ -708,7 +756,7 @@ export const acceptDelivery = async (req, res) => {
       rating: driver.companyId.rating || 0,
     } : null;
 
-    // Update delivery in a single operation
+    // Update delivery
     delivery.driverId = driver._id;
     delivery.companyId = companyDetails?.companyId || null;
     delivery.status = "assigned";
@@ -725,7 +773,6 @@ export const acceptDelivery = async (req, res) => {
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     driver.acceptedRequests = (driver.acceptedRequests || 0) + 1;
 
-    // Execute all updates in sequence to avoid write conflicts
     await delivery.save({ session });
     await driver.save({ session });
 
@@ -739,7 +786,7 @@ export const acceptDelivery = async (req, res) => {
     // Send notifications (outside transaction)
     if (customer) {
       const paymentMessage = isCashPayment 
-        ? 'This is a cash-on-delivery payment. Please have ₦' + delivery.fare.totalFare.toLocaleString() + ' ready when the driver arrives.'
+        ? `This is a cash-on-delivery payment. Please have ₦${delivery.fare.totalFare.toLocaleString()} ready when the driver arrives.`
         : 'Payment is held securely and will be released after delivery completion.';
       
       await sendNotification({
@@ -759,8 +806,8 @@ export const acceptDelivery = async (req, res) => {
     }
 
     const driverMessage = isCashPayment
-      ? `You've accepted a cash-on-delivery delivery. Please collect ₦${delivery.fare.totalFare.toLocaleString()} from the customer upon delivery.`
-      : `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to pickup location.`;
+      ? `You've accepted a cash delivery. Please collect ₦${delivery.fare.totalFare.toLocaleString()} from the customer upon delivery`
+      : `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to the pickup location`;
 
     await sendNotification({
       userId: driverUser._id,
@@ -782,13 +829,13 @@ export const acceptDelivery = async (req, res) => {
     
     const deliveryWithDetails = await populateDriverAndCompanyDetails(updatedDelivery);
 
-    console.log(`Delivery accepted - Payment method: ${delivery.payment.method}`);
+    console.log(`✅ Delivery accepted - Payment method: ${delivery.payment.method}`);
 
     res.status(200).json({
       success: true,
       message: isCashPayment 
-        ? "Delivery accepted successfully! Please collect cash payment upon delivery."
-        : "Delivery accepted successfully! Payment is secured.",
+        ? "Delivery accepted! Remember to collect cash payment upon delivery"
+        : "Delivery accepted! Payment is secured. Head to the pickup location",
       data: {
         delivery: deliveryWithDetails,
         driver: deliveryWithDetails.driverDetails,
@@ -799,14 +846,13 @@ export const acceptDelivery = async (req, res) => {
           amount: delivery.fare.totalFare,
           message: isCashPayment 
             ? 'Cash payment to be collected upon delivery'
-            : 'Payment held in escrow until delivery completion',
+            : 'Payment held securely until delivery completion',
           cashCollectionRequired: isCashPayment,
           amountToCollect: isCashPayment ? delivery.fare.totalFare : null,
         },
       },
     });
   } catch (error) {
-    // Handle transaction errors
     if (session.inTransaction()) {
       await session.abortTransaction();
     }
@@ -814,19 +860,16 @@ export const acceptDelivery = async (req, res) => {
     
     console.error("❌ Accept delivery error:", error);
     
-    // Check for write conflict errors specifically
-    if (error.code === 112) { // WriteConflict error code
+    if (error.code === 112) {
       return res.status(409).json({
         success: false,
-        message: "Operation conflicted with another process. Please try again.",
-        error: "WriteConflict",
+        message: "Another driver just accepted this delivery. Please try another one",
       });
     }
     
     res.status(500).json({
       success: false,
-      message: "Failed to accept delivery",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: "Something went wrong while accepting the delivery. Please try again",
     });
   }
 };
