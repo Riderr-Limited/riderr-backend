@@ -382,7 +382,6 @@ export const getMyDeliveries = async (req, res) => {
 /**
  * DRIVER CONTROLLERS
  */
-
 export const getNearbyDeliveryRequests = async (req, res) => {
   try {
     const driverUser = req.user;
@@ -402,6 +401,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       });
     }
 
+    // Check if driver is available
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
       return res.status(400).json({
         success: false,
@@ -431,31 +431,78 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       });
     }
 
-    // ✅ UPDATED: Only show deliveries that are either:
-    // 1. Cash payments (payment.method === 'cash')
-    // 2. Paid non-cash payments (payment.status === 'paid')
+    console.log(`📍 Driver location: ${latitude}, ${longitude}`);
+    console.log(`🔍 Driver ID: ${driver._id}`);
+
+    // ✅ STEP 1: Get all available deliveries with basic filters
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
-      $or: [
-        { 
-          'payment.method': 'cash' 
-        },
-        { 
-          'payment.method': { $in: ['card', 'bank_transfer', 'bank'] },
-          'payment.status': 'paid'
-        }
-      ]
     })
       .populate("customerId", "name phone avatarUrl rating")
       .sort({ createdAt: -1 })
-      .limit(50);
+      .limit(50)
+      .lean(); // Use lean for better performance
+
+    console.log(`📦 Total deliveries found before filtering: ${deliveries.length}`);
 
     const nearbyDeliveries = [];
-
+    
     for (const delivery of deliveries) {
-      if (!delivery.pickup?.lat || !delivery.pickup?.lng) continue;
+      // ✅ CHECK 1: Has valid pickup location
+      if (!delivery.pickup?.lat || !delivery.pickup?.lng) {
+        console.log(`❌ Delivery ${delivery._id} has no pickup location`);
+        continue;
+      }
 
+      // ✅ CHECK 2: Driver hasn't rejected this delivery
+      if (delivery.rejectedByDrivers && Array.isArray(delivery.rejectedByDrivers)) {
+        const hasRejected = delivery.rejectedByDrivers.some(
+          rejection => {
+            // Handle both ObjectId and string comparisons
+            const rejectedDriverId = rejection.driverId?.toString() || rejection.driverId;
+            const currentDriverId = driver._id.toString();
+            return rejectedDriverId === currentDriverId;
+          }
+        );
+        
+        if (hasRejected) {
+          console.log(`⏭️ Delivery ${delivery._id} was rejected by this driver - skipping`);
+          continue;
+        }
+      }
+
+      // ✅ CHECK 3: Payment method validation
+      const paymentMethod = delivery.payment?.method;
+      const paymentStatus = delivery.payment?.status;
+      
+      console.log(`💳 Delivery ${delivery._id}: method=${paymentMethod}, status=${paymentStatus}`);
+      
+      // Skip if payment validation fails
+      let shouldSkip = false;
+      
+      if (paymentMethod === 'cash') {
+        // Cash payments are always OK regardless of status
+        console.log(`✅ Cash payment - OK to show`);
+      } else if (['card', 'bank_transfer', 'bank', 'online'].includes(paymentMethod)) {
+        // Non-cash payments must be paid
+        if (paymentStatus !== 'paid') {
+          console.log(`❌ ${paymentMethod} payment not paid (status: ${paymentStatus}) - skipping`);
+          shouldSkip = true;
+        } else {
+          console.log(`✅ ${paymentMethod} payment is paid - OK to show`);
+        }
+      } else {
+        // Unknown payment method - skip to be safe
+        console.log(`⚠️ Unknown payment method: ${paymentMethod} - skipping`);
+        shouldSkip = true;
+      }
+      
+      if (shouldSkip) {
+        continue;
+      }
+
+      // ✅ CHECK 4: Distance validation
       const distance = calculateDistance(
         latitude,
         longitude,
@@ -463,59 +510,73 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         delivery.pickup.lng
       );
 
-      if (distance <= parseFloat(maxDistance)) {
-        const pickupTimeMinutes = Math.ceil(distance * 3);
+      console.log(`📏 Delivery ${delivery._id} distance: ${distance.toFixed(2)} km`);
 
-        const formattedDelivery = {
-          _id: delivery._id,
-          pickup: {
-            address: delivery.pickup.address || "Address not specified",
-            lat: delivery.pickup.lat,
-            lng: delivery.pickup.lng,
-            name: delivery.pickup.name || "Pickup Location",
-            phone: delivery.pickup.phone || "Phone not specified",
-            instructions: delivery.pickup.instructions || "",
-          },
-          dropoff: {
-            address: delivery.dropoff.address || "Address not specified",
-            lat: delivery.dropoff.lat,
-            lng: delivery.dropoff.lng,
-            name: delivery.dropoff.name || "Dropoff Location",
-            phone: delivery.dropoff.phone || "Phone not specified",
-            instructions: delivery.dropoff.instructions || "",
-          },
-          recipientName: delivery.recipientName,
-          recipientPhone: delivery.recipientPhone,
-          itemDetails: delivery.itemDetails,
-          fare: delivery.fare,
-          estimatedDistanceKm: delivery.estimatedDistanceKm || distance,
-          estimatedDurationMin:
-            delivery.estimatedDurationMin || Math.ceil(distance * 3),
-          payment: {
-            method: delivery.payment.method,
-            status: delivery.payment.status,
-            isPaid: delivery.payment.method === 'cash' ? false : delivery.payment.status === 'paid',
-            cashOnDelivery: delivery.payment.method === 'cash',
-          },
-          customer: delivery.customerId,
-          createdAt: delivery.createdAt,
-          distanceFromDriver: parseFloat(distance.toFixed(2)),
-          distanceText: `${distance.toFixed(1)} km away`,
-          estimatedPickupTime: pickupTimeMinutes,
-          estimatedPickupTimeText: `${pickupTimeMinutes} min`,
-          canAccept: true,
-        };
-
-        nearbyDeliveries.push(formattedDelivery);
+      if (distance > parseFloat(maxDistance)) {
+        console.log(`❌ Delivery ${delivery._id} too far (${distance.toFixed(2)} km > ${maxDistance} km)`);
+        continue;
       }
+
+      // ✅ All checks passed - add to results
+      const pickupTimeMinutes = Math.ceil(distance * 3);
+      const isCashPayment = paymentMethod === 'cash';
+      const isPaid = paymentStatus === 'paid';
+
+      const formattedDelivery = {
+        _id: delivery._id,
+        pickup: {
+          address: delivery.pickup.address || "Address not specified",
+          lat: delivery.pickup.lat,
+          lng: delivery.pickup.lng,
+          name: delivery.pickup.name || "Pickup Location",
+          phone: delivery.pickup.phone || "Phone not specified",
+          instructions: delivery.pickup.instructions || "",
+        },
+        dropoff: {
+          address: delivery.dropoff.address || "Address not specified",
+          lat: delivery.dropoff.lat,
+          lng: delivery.dropoff.lng,
+          name: delivery.dropoff.name || "Dropoff Location",
+          phone: delivery.dropoff.phone || "Phone not specified",
+          instructions: delivery.dropoff.instructions || "",
+        },
+        recipientName: delivery.recipientName,
+        recipientPhone: delivery.recipientPhone,
+        itemDetails: delivery.itemDetails,
+        fare: delivery.fare,
+        estimatedDistanceKm: delivery.estimatedDistanceKm || distance,
+        estimatedDurationMin: delivery.estimatedDurationMin || Math.ceil(distance * 3),
+        payment: {
+          method: paymentMethod,
+          status: paymentStatus,
+          isPaid: isPaid,
+          cashOnDelivery: isCashPayment,
+        },
+        customer: delivery.customerId,
+        createdAt: delivery.createdAt,
+        distanceFromDriver: parseFloat(distance.toFixed(2)),
+        distanceText: `${distance.toFixed(1)} km away`,
+        estimatedPickupTime: pickupTimeMinutes,
+        estimatedPickupTimeText: `${pickupTimeMinutes} min`,
+        canAccept: true,
+        previouslyRejected: false,
+      };
+
+      nearbyDeliveries.push(formattedDelivery);
+      console.log(`✅ Added delivery ${delivery._id} to results`);
     }
 
-    nearbyDeliveries.sort(
-      (a, b) => a.distanceFromDriver - b.distanceFromDriver
-    );
+    // Sort by distance (closest first)
+    nearbyDeliveries.sort((a, b) => a.distanceFromDriver - b.distanceFromDriver);
+
+    console.log(`✅ Final nearby deliveries: ${nearbyDeliveries.length}`);
+
+    // Count payment types for debugging
+    const cashCount = nearbyDeliveries.filter(d => d.payment.method === 'cash').length;
+    const cardCount = nearbyDeliveries.filter(d => d.payment.method !== 'cash').length;
 
     const message = nearbyDeliveries.length > 0
-      ? `Found ${nearbyDeliveries.length} delivery ${nearbyDeliveries.length === 1 ? 'request' : 'requests'} near you`
+      ? `Found ${nearbyDeliveries.length} delivery ${nearbyDeliveries.length === 1 ? 'request' : 'requests'} near you (${cashCount} cash, ${cardCount} paid online)`
       : "No delivery requests available in your area right now";
 
     res.status(200).json({
@@ -523,9 +584,25 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       message: message,
       data: {
         deliveries: nearbyDeliveries,
-        driverLocation: { lat: latitude, lng: longitude },
+        driverLocation: { 
+          lat: latitude, 
+          lng: longitude,
+          source: lat && lng ? 'query' : 'driver_current_location'
+        },
         searchRadius: maxDistance,
         count: nearbyDeliveries.length,
+        // Debug info (remove in production)
+        debug: {
+          driverId: driver._id,
+          driverAvailable: driver.isAvailable,
+          driverOnline: driver.isOnline,
+          totalFound: deliveries.length,
+          nearbyAfterDistance: nearbyDeliveries.length,
+          paymentTypes: {
+            cash: cashCount,
+            card_bank: cardCount
+          }
+        }
       },
     });
   } catch (error) {
@@ -533,9 +610,12 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Something went wrong while loading delivery requests. Please try again",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
+
+
 
 
 export const acceptDelivery = async (req, res) => {
@@ -1259,6 +1339,7 @@ export const rejectDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
+    const { reason } = req.body;
 
     if (driverUser.role !== "driver") {
       return res.status(403).json({
@@ -1275,18 +1356,72 @@ export const rejectDelivery = async (req, res) => {
       });
     }
 
+    console.log(`🚫 Driver ${driver._id} rejecting delivery ${deliveryId}`);
+
+    // Find and update the delivery
+    const delivery = await Delivery.findById(deliveryId);
+    
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found",
+      });
+    }
+
+    // Check if already rejected by this driver
+    if (delivery.rejectedByDrivers && Array.isArray(delivery.rejectedByDrivers)) {
+      const alreadyRejected = delivery.rejectedByDrivers.some(
+        rejection => {
+          const rejectedDriverId = rejection.driverId?.toString() || rejection.driverId;
+          const currentDriverId = driver._id.toString();
+          return rejectedDriverId === currentDriverId;
+        }
+      );
+      
+      if (alreadyRejected) {
+        return res.status(400).json({
+          success: false,
+          message: "You have already rejected this delivery",
+        });
+      }
+    }
+
+    // Initialize array if it doesn't exist
+    if (!delivery.rejectedByDrivers) {
+      delivery.rejectedByDrivers = [];
+    }
+
+    // Add rejection
+    delivery.rejectedByDrivers.push({
+      driverId: driver._id,
+      rejectedAt: new Date(),
+      reason: reason || "No reason provided"
+    });
+
+    await delivery.save();
+
+    // Update driver stats
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     await driver.save();
+
+    console.log(`✅ Rejection recorded for delivery ${deliveryId}`);
+    console.log(`   Total rejections: ${delivery.rejectedByDrivers.length}`);
 
     res.status(200).json({
       success: true,
       message: "Delivery request rejected",
+      data: {
+        deliveryId,
+        rejectedAt: new Date(),
+        reason: reason || "No reason provided",
+      }
     });
   } catch (error) {
     console.error("❌ Reject delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to reject delivery",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
