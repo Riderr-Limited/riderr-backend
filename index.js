@@ -9,16 +9,13 @@ import supportSocket from "./socket/supportSocket.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
-import express from "express"; // Add this import
+import express from "express"; 
 
-// Load environment variables
-dotenv.config();
+ dotenv.config();
 
-// Configure static file serving
-const __filename = fileURLToPath(import.meta.url);
+ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Serve static files from uploads directory
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 const PORT = process.env.PORT || 5000;
