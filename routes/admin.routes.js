@@ -46,15 +46,14 @@ import {
   exportData,
 } from "../controllers/admin.controller.js";
 
-// Import middleware
-import { protect, restrictTo } from "../middleware/auth.middleware.js";
-import { validateAdminAction } from "../middleware/validation.middleware.js";
+// Import middleware - using correct function names from auth.middleware.js
+import { protect, authorize } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
 // Apply authentication middleware to all routes
-router.use(protect);
-router.use(restrictTo("admin")); // Only admins can access these routes
+router.use(protect); // Authenticate user (protect is an alias for authenticate)
+router.use(authorize("admin")); // Only admins can access these routes
 
 /**
  * ========================================
