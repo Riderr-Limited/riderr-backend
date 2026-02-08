@@ -25,7 +25,8 @@ export default function supportSocket(io) {
         const userId = socket.user.userId;
         const user = await User.findById(userId);
         if (!user) return cb && cb({ error: "User not found" });
-        socket.join(userId);
+        if (!ticketId) return cb && cb({ error: "Ticket ID required" });
+        socket.join(ticketId);
         if (cb) cb({ success: true });
       } catch (err) {
         if (cb) cb({ error: "Join failed" });
@@ -33,12 +34,13 @@ export default function supportSocket(io) {
     });
 
     // System Admin joins any user's room
-    socket.on("agent_join", async ({ userId }, cb) => {
+    socket.on("agent_join", async ({ ticketId }, cb) => {
       try {
         const user = await User.findById(socket.user.userId);
         if (!user || user.role !== "System Admin")
           return cb && cb({ error: "Unauthorized" });
-        socket.join(userId);
+        if (!ticketId) return cb && cb({ error: "Ticket ID required" });
+        socket.join(ticketId);
         if (cb) cb({ success: true });
       } catch (err) {
         if (cb) cb({ error: "Agent join failed" });
@@ -57,7 +59,7 @@ export default function supportSocket(io) {
           timestamp,
           ticketId,
         });
-        nsp.to(senderId).emit("receive_message", message);
+        nsp.to(ticketId).emit("receive_message", message);
         if (cb) cb({ success: true, message });
       } catch (err) {
         if (cb) cb({ error: "Send failed" });
