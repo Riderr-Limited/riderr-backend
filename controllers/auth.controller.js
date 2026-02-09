@@ -576,7 +576,8 @@ export const signUp = async (req, res) => {
   }
 };
 
-// auth.controller.js - Update the signUpCompanyDriver function
+
+
 /**
  * @desc    Sign up company driver (for company admins)
  * @route   POST /api/auth/signup-company-driver
@@ -598,21 +599,23 @@ export const signUpCompanyDriver = async (req, res) => {
       });
     }
 
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, vehicleType, plateNumber, vehicleColor } = req.body;
 
     // Validate required fields
-    if (!name || !email || !password || !phone) {
+    if (!name || !email || !password || !phone || !vehicleType || !plateNumber || !vehicleColor) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Name, email, password, and phone are required",
+        message: "Name, email, password, phone, vehicle type, plate number, and vehicle color are required",
       });
     }
 
     console.log("📝 Company driver signup request:", {
       name,
       email,
+      vehicleType,
+      plateNumber,
       companyId: req.user.companyId,
     });
 
@@ -627,6 +630,20 @@ export const signUpCompanyDriver = async (req, res) => {
       return res.status(409).json({
         success: false,
         message: "User with this email or phone already exists",
+      });
+    }
+
+    // Check if plate number already exists
+    const existingDriver = await Driver.findOne({
+      plateNumber: plateNumber.toUpperCase().trim(),
+    }).session(session);
+
+    if (existingDriver) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        success: false,
+        message: "Vehicle with this plate number already exists",
       });
     }
 
@@ -661,43 +678,39 @@ export const signUpCompanyDriver = async (req, res) => {
 
     console.log("🚗 Company driver created:", newUser._id);
 
-    // Driver details
-    const {
-      licenseNumber,
-      vehicleType,
-      vehicleMake,
-      vehicleModel,
-      vehicleYear,
-      vehicleColor,
-      plateNumber,
-      licenseExpiry,
-    } = req.body;
+    // Generate a temporary license number (can be updated later by driver)
+    const tempLicenseNumber = `TEMP-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`;
+    
+    // Set a default license expiry (1 year from now - can be updated later)
+    const defaultLicenseExpiry = new Date();
+    defaultLicenseExpiry.setFullYear(defaultLicenseExpiry.getFullYear() + 1);
 
-    // Create driver profile
+    // Create driver profile with minimal required fields
     await Driver.create(
       [
         {
           userId: newUser._id,
           companyId: req.user.companyId,
-          licenseNumber,
+          licenseNumber: tempLicenseNumber, // Temporary - driver can update later
           vehicleType,
-          vehicleMake,
-          vehicleModel,
-          vehicleYear,
           vehicleColor,
-          plateNumber,
-          licenseExpiry,
+          plateNumber: plateNumber.toUpperCase().trim(),
+          licenseExpiry: defaultLicenseExpiry, // Default - driver can update later
           approvalStatus: "pending",
           isOnline: false,
           isAvailable: false,
-          canAcceptDeliveries: false, // Driver cannot accept deliveries until verified
           stats: {
-            totalDeliveries: 0,
+            totalTrips: 0,
+            completedTrips: 0,
+            cancelledTrips: 0,
             totalEarnings: 0,
+            todayEarnings: 0,
+            weekEarnings: 0,
+            monthEarnings: 0,
             acceptanceRate: 100,
           },
           rating: {
-            average: 0,
+            average: 5.0,
             totalRatings: 0,
           },
         },
@@ -713,20 +726,6 @@ export const signUpCompanyDriver = async (req, res) => {
       phone
     );
 
-    // Don't generate tokens yet - driver needs to verify email first
-    // const accessToken = generateAccessToken({
-    //   userId: newUser._id,
-    //   role: newUser.role,
-    //   isVerified: false,
-    // });
-
-    // const refreshToken = generateRefreshToken({
-    //   userId: newUser._id,
-    // });
-
-    // newUser.refreshToken = refreshToken;
-    // await newUser.save({ session });
-
     await session.commitTransaction();
     session.endSession();
 
@@ -738,10 +737,14 @@ export const signUpCompanyDriver = async (req, res) => {
         email: newUser.email,
         phone: newUser.phone,
         name: newUser.name,
+        vehicleType,
+        plateNumber: plateNumber.toUpperCase(),
+        vehicleColor,
         requiresVerification: true,
         ...(process.env.NODE_ENV === "development" && {
           debug: {
             verificationCode: emailCode,
+            tempLicenseNumber,
             ...(emailResult?.etherealUrl && {
               etherealUrl: emailResult.etherealUrl,
             }),
@@ -761,7 +764,6 @@ export const signUpCompanyDriver = async (req, res) => {
     });
   }
 };
-
 /**
  * @desc    Sign in user
  * @route   POST /api/auth/login

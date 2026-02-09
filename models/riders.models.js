@@ -31,7 +31,7 @@ const DriverSchema = new mongoose.Schema(
       required: [true, "License expiry date is required"]
     },
 
-    // Vehicle Information
+    // Vehicle Information - SIMPLIFIED
     vehicleType: {
       type: String,
       enum: ["bike", "car", "van", "truck"],
@@ -41,22 +41,26 @@ const DriverSchema = new mongoose.Schema(
 
     vehicleMake: {
       type: String,
-      trim: true
+      trim: true,
+      default: null // Optional - can be updated later
     },
 
     vehicleModel: {
       type: String,
-      trim: true
+      trim: true,
+      default: null // Optional - can be updated later
     },
 
     vehicleYear: {
       type: Number,
       min: 1990,
-      max: new Date().getFullYear() + 1
+      max: new Date().getFullYear() + 1,
+      default: null // Optional - can be updated later
     },
 
     vehicleColor: {
       type: String,
+      required: [true, "Vehicle color is required"],
       trim: true
     },
 
@@ -187,7 +191,7 @@ const DriverSchema = new mongoose.Schema(
       }
     },
 
-    // Documents
+    // Documents - All optional, can be uploaded later
     documents: [
       {
         type: {
@@ -225,7 +229,7 @@ const DriverSchema = new mongoose.Schema(
       }
     ],
 
-    // Banking Information
+    // Banking Information - Optional
     bankDetails: {
       accountName: String,
       accountNumber: String,
@@ -237,14 +241,14 @@ const DriverSchema = new mongoose.Schema(
       }
     },
 
-    // Emergency Contact
+    // Emergency Contact - Optional
     emergencyContact: {
       name: String,
       phone: String,
       relationship: String
     },
 
-    // Operational Details
+    // Operational Details - Optional
     workingHours: {
       start: String, // "08:00"
       end: String    // "20:00"
@@ -397,6 +401,7 @@ DriverSchema.pre('save', function(next) {
     this.plateNumber = this.plateNumber.toUpperCase().trim();
   }
 
+  next();
 });
 
 // ========== INSTANCE METHODS ==========
