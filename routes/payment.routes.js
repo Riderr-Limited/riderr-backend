@@ -14,6 +14,11 @@ import {
    chargeCard, 
   submitOtp, 
   initiateBankTransfer, 
+   getDriverPayments,
+  getDriverPaymentDetails,
+  requestCashSettlement,
+  markCashPaymentAsSettled,
+  getDriverEarningsSummary,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -44,7 +49,12 @@ router.post('/complete-and-settle/:deliveryId', authenticate, completeAndSettleP
 // ============ DYNAMIC ROUTES (Must be last) ============
 router.get('/:paymentId', authenticate, getPaymentDetails);
 
-
+// Driver Payment Routes
+router.get('/driver-payments', authenticate, getDriverPayments);
+router.get('/driver-payments/:paymentId', authenticate, getDriverPaymentDetails);
+router.post('/driver-payments/:paymentId/request-settlement', authenticate, requestCashSettlement);
+router.post('/driver-payments/:paymentId/mark-settled', authenticate, markCashPaymentAsSettled);
+router.get('/driver-earnings', authenticate, getDriverEarningsSummary);
 
 
 export default router;
