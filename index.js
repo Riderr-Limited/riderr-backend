@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { setupDeliverySocket } from "./socket/deliverySocket.js";
 import { setupVoiceCallSocket } from "./socket/voiceCallSocket.js";
 import supportSocket from "./socket/supportSocket.js";
+import adminChatSocket from "./socket/adminChatSocket.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
@@ -113,10 +114,11 @@ const startServer = async () => {
       pingInterval: 25000,
     });
 
-    // Setup delivery, voice call, and support chat socket events
+    // Setup delivery, voice call, support, and admin chat socket events
     setupDeliverySocket(io);
     setupVoiceCallSocket(io);
     supportSocket(io);
+    adminChatSocket(io);
     console.log(
       "✅ Socket.IO initialized and all socket namespaces setup complete",
     );
