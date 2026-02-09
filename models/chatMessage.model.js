@@ -12,6 +12,5 @@ const ChatMessageSchema = new Schema(
   { timestamps: true },
 );
 
- const ChatMessage = mongoose.models.ChatMessage || mongoose.model("ChatMessage", ChatMessageSchema);
-
-export default ChatMessage;
+export default mongoose.models.ChatMessage ||
+  model("ChatMessage", ChatMessageSchema);
