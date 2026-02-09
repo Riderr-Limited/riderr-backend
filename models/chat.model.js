@@ -82,6 +82,6 @@ chatMessageSchema.statics.markMessagesAsRead = function (deliveryId, userId) {
   );
 };
 
-const ChatMessage = mongoose.model("ChatMessage", chatMessageSchema);
+const ChatMessage = mongoose.models.ChatMessage || mongoose.model("ChatMessage", chatMessageSchema);
 
 export default ChatMessage;
