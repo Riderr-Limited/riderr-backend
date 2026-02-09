@@ -382,6 +382,7 @@ export const getMyDeliveries = async (req, res) => {
 /**
  * DRIVER CONTROLLERS
  */
+ 
 export const getNearbyDeliveryRequests = async (req, res) => {
   try {
     const driverUser = req.user;
@@ -442,7 +443,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       .populate("customerId", "name phone avatarUrl rating")
       .sort({ createdAt: -1 })
       .limit(50)
-      .lean(); // Use lean for better performance
+      .lean();
 
     console.log(`📦 Total deliveries found before filtering: ${deliveries.length}`);
 
@@ -459,7 +460,6 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       if (delivery.rejectedByDrivers && Array.isArray(delivery.rejectedByDrivers)) {
         const hasRejected = delivery.rejectedByDrivers.some(
           rejection => {
-            // Handle both ObjectId and string comparisons
             const rejectedDriverId = rejection.driverId?.toString() || rejection.driverId;
             const currentDriverId = driver._id.toString();
             return rejectedDriverId === currentDriverId;
@@ -472,20 +472,19 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         }
       }
 
-      // ✅ CHECK 3: Payment method validation
+      // ✅ CHECK 3: Payment method validation - UPDATED TO INCLUDE BANK TRANSFERS
       const paymentMethod = delivery.payment?.method;
       const paymentStatus = delivery.payment?.status;
       
       console.log(`💳 Delivery ${delivery._id}: method=${paymentMethod}, status=${paymentStatus}`);
       
-      // Skip if payment validation fails
       let shouldSkip = false;
       
       if (paymentMethod === 'cash') {
         // Cash payments are always OK regardless of status
         console.log(`✅ Cash payment - OK to show`);
       } else if (['card', 'bank_transfer', 'bank', 'online'].includes(paymentMethod)) {
-        // Non-cash payments must be paid
+        // ✅ UPDATED: Non-cash payments (card AND bank transfer) must be paid
         if (paymentStatus !== 'paid') {
           console.log(`❌ ${paymentMethod} payment not paid (status: ${paymentStatus}) - skipping`);
           shouldSkip = true;
@@ -573,10 +572,10 @@ export const getNearbyDeliveryRequests = async (req, res) => {
 
     // Count payment types for debugging
     const cashCount = nearbyDeliveries.filter(d => d.payment.method === 'cash').length;
-    const cardCount = nearbyDeliveries.filter(d => d.payment.method !== 'cash').length;
+    const paidOnlineCount = nearbyDeliveries.filter(d => d.payment.method !== 'cash').length;
 
     const message = nearbyDeliveries.length > 0
-      ? `Found ${nearbyDeliveries.length} delivery ${nearbyDeliveries.length === 1 ? 'request' : 'requests'} near you (${cashCount} cash, ${cardCount} paid online)`
+      ? `Found ${nearbyDeliveries.length} delivery ${nearbyDeliveries.length === 1 ? 'request' : 'requests'} near you (${cashCount} cash, ${paidOnlineCount} paid online)`
       : "No delivery requests available in your area right now";
 
     res.status(200).json({
@@ -591,7 +590,6 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         },
         searchRadius: maxDistance,
         count: nearbyDeliveries.length,
-        // Debug info (remove in production)
         debug: {
           driverId: driver._id,
           driverAvailable: driver.isAvailable,
@@ -600,7 +598,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
           nearbyAfterDistance: nearbyDeliveries.length,
           paymentTypes: {
             cash: cashCount,
-            card_bank: cardCount
+            paid_online: paidOnlineCount
           }
         }
       },
@@ -610,11 +608,10 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Something went wrong while loading delivery requests. Please try again",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
-
 
 
 

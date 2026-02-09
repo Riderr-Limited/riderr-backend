@@ -463,10 +463,10 @@ export const signUp = async (req, res) => {
           { session },
         );
 
-        const { licenseNumber, vehicleType, plateNumber, licenseExpiry } =
+        const { vehicleType, plateNumber, vehicleColor } =
           req.body;
 
-        if (!licenseNumber || !vehicleType || !plateNumber || !licenseExpiry) {
+        if ( !vehicleType || !plateNumber || !vehicleColor ) {
           throw new Error("DRIVER_DETAILS_REQUIRED");
         }
 
@@ -475,10 +475,9 @@ export const signUp = async (req, res) => {
             {
               userId: newUser._id,
               companyId,
-              licenseNumber,
-              vehicleType,
+ \              vehicleType,
               plateNumber,
-              licenseExpiry,
+              vehicleColor,
               approvalStatus: "pending",
             },
           ],
