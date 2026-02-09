@@ -2102,20 +2102,58 @@ export const initiateBankTransfer = async (req, res) => {
     const platformFee = Math.round((amount * 10) / 100);
     const companyAmount = amount - platformFee;
 
-    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 
-    // Create dedicated virtual account for this payment
-    const bankTransferResult = await createDedicatedVirtualAccount({
-      email: customer.email,
-      amount: amount,
-      reference: reference,
-    });
+    let bankDetails = null;
+    let paymentMethod = 'bank_transfer';
 
-    if (!bankTransferResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to generate bank transfer details',
+    try {
+      // Try Paystack virtual account first
+      const paymentResult = await initializePayment({
+        email: customer.email,
+        amount: amount,
+        reference: reference,
+        callback_url: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/payments/bank-transfer-callback`,
+        channels: ['bank_transfer'],
+        metadata: {
+          deliveryId: delivery._id.toString(),
+          customerId: customer._id.toString(),
+          type: 'bank_transfer_delivery',
+        },
       });
+
+      if (paymentResult.success && paymentResult.data.authorization_url) {
+        bankDetails = {
+          authorizationUrl: paymentResult.data.authorization_url,
+          accessCode: paymentResult.data.access_code,
+          reference: paymentResult.data.reference,
+          type: 'paystack_virtual',
+          instructions: 'Complete transfer via the authorization URL',
+        };
+        console.log(`✅ Paystack virtual account created for ${reference}`);
+      } else {
+        throw new Error('Paystack virtual account not available');
+      }
+    } catch (paystackError) {
+      console.warn('⚠️ Paystack virtual account failed, using manual method:', paystackError.message);
+      
+      // Fallback to manual bank transfer
+      bankDetails = {
+        bankName: process.env.FALLBACK_BANK_NAME || 'Zenith Bank',
+        accountNumber: process.env.FALLBACK_ACCOUNT_NUMBER || '1012345678',
+        accountName: process.env.FALLBACK_ACCOUNT_NAME || 'RIDERR NIG LTD',
+        reference: reference,
+        amount: amount,
+        type: 'manual_transfer',
+        narration: `Riderr Delivery - ${delivery.referenceId}`,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        instructions: [
+          `Transfer exactly ₦${amount.toLocaleString()}`,
+          `Use "${reference}" as narration`,
+          `Payment valid for 24 hours`,
+        ],
+      };
+      paymentMethod = 'manual_bank_transfer';
     }
 
     // Create payment record
@@ -2126,16 +2164,19 @@ export const initiateBankTransfer = async (req, res) => {
       currency: 'NGN',
       paystackReference: reference,
       status: 'pending',
-      paymentMethod: 'bank_transfer',
+      paymentMethod: paymentMethod,
       companyAmount: companyAmount,
       platformFee: platformFee,
       paymentType: 'escrow',
+      paystackAuthorizationUrl: bankDetails.authorizationUrl || null,
+      paystackAccessCode: bankDetails.accessCode || null,
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
-        bankTransferDetails: bankTransferResult.data,
+        bankTransferDetails: bankDetails,
         platform: 'in-app',
         pendingSettlement: true,
+        transferType: bankDetails.type,
       },
     });
 
@@ -2145,16 +2186,39 @@ export const initiateBankTransfer = async (req, res) => {
     delivery.payment.paystackReference = reference;
     await delivery.save();
 
+    console.log(`✅ Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`);
+
     res.status(200).json({
       success: true,
-      message: 'Bank transfer details generated',
+      message: 'Bank transfer details generated successfully',
       data: {
         paymentId: payment._id,
         reference: reference,
         amount: amount,
-        bankDetails: bankTransferResult.data,
-        expiresAt: bankTransferResult.data.expiresAt,
-        instructions: 'Transfer the exact amount to the account details below. Payment will be confirmed automatically.',
+        bankDetails: bankDetails,
+        transferType: bankDetails.type,
+        paymentBreakdown: {
+          totalAmount: `₦${amount.toLocaleString()}`,
+          platformFee: `₦${platformFee.toLocaleString()} (10%)`,
+          companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
+          escrowStatus: 'Payment held securely until delivery completion',
+        },
+        nextSteps: bankDetails.type === 'paystack_virtual' ? [
+          'Click the authorization URL below',
+          'Select your bank',
+          'Complete the transfer',
+          'Payment confirmed automatically',
+        ] : [
+          'Transfer to the bank account below',
+          'Use exact amount and reference',
+          'Keep proof of payment',
+          'Contact support if needed',
+        ],
+        support: {
+          email: process.env.SUPPORT_EMAIL || 'support@riderr.com',
+          phone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
+          hours: '9AM - 6PM, Mon - Fri',
+        },
       },
     });
   } catch (error) {
@@ -2162,6 +2226,1035 @@ export const initiateBankTransfer = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to initiate bank transfer',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Get driver payments and earnings
+ * @route   GET /api/payments/driver-payments
+ * @access  Private (Driver)
+ */
+export const getDriverPayments = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    
+    if (driverUser.role !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only drivers can view payment history',
+      });
+    }
+
+    // Find driver
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver profile not found',
+      });
+    }
+
+    const { 
+      status, 
+      startDate, 
+      endDate, 
+      page = 1, 
+      limit = 10,
+      paymentMethod,
+      settledStatus 
+    } = req.query;
+
+    // Build query
+    const query = { driverId: driver._id };
+    
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    
+    if (paymentMethod && paymentMethod !== 'all') {
+      query.paymentMethod = paymentMethod;
+    }
+    
+    if (startDate && endDate) {
+      query.paidAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+    
+    // Filter by settlement status (for cash payments that need to be settled)
+    if (settledStatus) {
+      if (settledStatus === 'settled') {
+        query['metadata.isSettledToDriver'] = true;
+      } else if (settledStatus === 'pending') {
+        query['metadata.isSettledToDriver'] = false;
+      }
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [payments, total] = await Promise.all([
+      Payment.find(query)
+        .populate('customerId', 'name email phone avatarUrl')
+        .populate('companyId', 'name logo contactPhone')
+        .populate({
+          path: 'deliveryId',
+          select: 'pickup dropoff status referenceId createdAt completedAt driverDetails fare',
+        })
+        .sort({ paidAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Payment.countDocuments(query),
+    ]);
+
+    // Calculate earnings summary
+    const summary = await Payment.aggregate([
+      { $match: { driverId: driver._id, status: 'successful' } },
+      {
+        $group: {
+          _id: null,
+          totalEarnings: { $sum: '$amount' },
+          totalTransactions: { $sum: 1 },
+          cashPayments: {
+            $sum: {
+              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, 1, 0]
+            }
+          },
+          cashAmount: {
+            $sum: {
+              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+          onlinePayments: {
+            $sum: {
+              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, 1, 0]
+            }
+          },
+          onlineAmount: {
+            $sum: {
+              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+          pendingSettlements: {
+            $sum: {
+              $cond: [
+                { 
+                  $and: [
+                    { $eq: ['$paymentMethod', 'cash'] },
+                    { $ne: ['$metadata.isSettledToDriver', true] }
+                  ]
+                }, 
+                1, 
+                0
+              ]
+            }
+          },
+          pendingAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$paymentMethod', 'cash'] },
+                    { $ne: ['$metadata.isSettledToDriver', true] }
+                  ]
+                },
+                '$amount',
+                0
+              ]
+            }
+          },
+          settledAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$paymentMethod', 'cash'] },
+                    { $eq: ['$metadata.isSettledToDriver', true] }
+                  ]
+                },
+                '$amount',
+                0
+              ]
+            }
+          },
+        }
+      }
+    ]);
+
+    // Get recent cash payments that need settlement
+    const pendingCashSettlements = await Payment.find({
+      driverId: driver._id,
+      paymentMethod: 'cash',
+      status: 'successful',
+      'metadata.isSettledToDriver': { $ne: true }
+    })
+      .sort({ paidAt: -1 })
+      .limit(5)
+      .select('amount deliveryId paidAt metadata.companyId')
+      .populate('companyId', 'name contactPhone')
+      .populate('deliveryId', 'referenceId')
+      .lean();
+
+    // Format payments for response
+    const formattedPayments = payments.map(payment => {
+      const isCash = payment.paymentMethod === 'cash';
+      const settledToDriver = payment.metadata?.isSettledToDriver || false;
+      const settledAt = payment.metadata?.settledToDriverAt || null;
+      const settlementMethod = payment.metadata?.settlementMethod || null;
+      
+      return {
+        _id: payment._id,
+        delivery: payment.deliveryId ? {
+          _id: payment.deliveryId._id,
+          referenceId: payment.deliveryId.referenceId,
+          status: payment.deliveryId.status,
+          pickup: payment.deliveryId.pickup?.address,
+          dropoff: payment.deliveryId.dropoff?.address,
+          fare: payment.deliveryId.fare,
+        } : null,
+        customer: payment.customerId ? {
+          name: payment.customerId.name,
+          phone: payment.customerId.phone,
+          avatarUrl: payment.customerId.avatarUrl,
+        } : null,
+        company: payment.companyId ? {
+          name: payment.companyId.name,
+          contactPhone: payment.companyId.contactPhone,
+          logo: payment.companyId.logo,
+        } : null,
+        amount: payment.amount,
+        status: payment.status,
+        paymentMethod: payment.paymentMethod,
+        isCash: isCash,
+        paidAt: payment.paidAt,
+        
+        // Cash payment specific fields
+        settlementStatus: isCash ? (settledToDriver ? 'settled' : 'pending') : 'n/a',
+        settledAt: settledAt,
+        settlementMethod: settlementMethod,
+        canCollect: isCash && !settledToDriver,
+        
+        // Online payment specific fields
+        escrowStatus: !isCash ? payment.metadata?.escrowStatus || 'pending' : 'n/a',
+        
+        currency: payment.currency || 'NGN',
+        paystackReference: payment.paystackReference,
+        notes: payment.metadata?.notes || '',
+      };
+    });
+
+    // Format pending cash settlements
+    const formattedPendingSettlements = pendingCashSettlements.map(settlement => ({
+      _id: settlement._id,
+      deliveryReference: settlement.deliveryId?.referenceId || 'N/A',
+      amount: settlement.amount,
+      companyName: settlement.companyId?.name || 'Unknown Company',
+      companyPhone: settlement.companyId?.contactPhone || '',
+      paidAt: settlement.paidAt,
+      daysPending: Math.floor((new Date() - new Date(settlement.paidAt)) / (1000 * 60 * 60 * 24)),
+    }));
+
+    res.status(200).json({
+      success: true,
+      message: `Found ${formattedPayments.length} payments for ${driverUser.name}`,
+      data: {
+        payments: formattedPayments,
+        summary: summary[0] || {
+          totalEarnings: 0,
+          totalTransactions: 0,
+          cashPayments: 0,
+          cashAmount: 0,
+          onlinePayments: 0,
+          onlineAmount: 0,
+          pendingSettlements: 0,
+          pendingAmount: 0,
+          settledAmount: 0,
+        },
+        pendingCashSettlements: formattedPendingSettlements,
+        driver: {
+          _id: driver._id,
+          name: driverUser.name,
+          phone: driverUser.phone,
+          rating: driver.rating || 0,
+          totalDeliveries: driver.totalDeliveries || 0,
+          acceptanceRate: driver.totalRequests ? 
+            Math.round((driver.acceptedRequests / driver.totalRequests) * 100) : 0,
+          currentStatus: {
+            isOnline: driver.isOnline,
+            isAvailable: driver.isAvailable,
+            hasActiveDelivery: !!driver.currentDeliveryId,
+          },
+        },
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+        filters: {
+          applied: {
+            status: status || 'all',
+            paymentMethod: paymentMethod || 'all',
+            settlementStatus: settledStatus || 'all',
+            dateRange: startDate && endDate ? { startDate, endDate } : null,
+          },
+          available: {
+            statuses: ['all', 'pending', 'successful', 'failed'],
+            paymentMethods: ['all', 'cash', 'card', 'bank_transfer'],
+            settlementStatuses: ['all', 'pending', 'settled'],
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get driver payments error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get driver payments',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Get driver payment details
+ * @route   GET /api/payments/driver-payments/:paymentId
+ * @access  Private (Driver)
+ */
+export const getDriverPaymentDetails = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    const { paymentId } = req.params;
+
+    if (driverUser.role !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only drivers can view payment details',
+      });
+    }
+
+    // Validate paymentId format
+    if (!mongoose.Types.ObjectId.isValid(paymentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment ID format',
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver profile not found',
+      });
+    }
+
+    // Find payment that belongs to this driver
+    const payment = await Payment.findOne({
+      _id: paymentId,
+      driverId: driver._id,
+    })
+      .populate('customerId', 'name email phone avatarUrl rating')
+      .populate('companyId', 'name logo contactPhone address')
+      .populate({
+        path: 'deliveryId',
+        select: 'pickup dropoff status referenceId createdAt completedAt driverDetails fare estimatedDistanceKm',
+        populate: {
+          path: 'driverId',
+          select: 'userId vehicleType plateNumber',
+          populate: {
+            path: 'userId',
+            select: 'name phone avatarUrl rating',
+          },
+        },
+      })
+      .lean();
+
+    if (!payment) {
+      // Check if payment exists but belongs to another driver
+      const existingPayment = await Payment.findById(paymentId).select('driverId').lean();
+      if (existingPayment) {
+        return res.status(403).json({
+          success: false,
+          message: 'You don\'t have permission to view this payment',
+        });
+      }
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found',
+      });
+    }
+
+    const isCash = payment.paymentMethod === 'cash';
+    const settledToDriver = payment.metadata?.isSettledToDriver || false;
+    const settledAt = payment.metadata?.settledToDriverAt || null;
+    const settlementMethod = payment.metadata?.settlementMethod || null;
+    const settlementNotes = payment.metadata?.settlementNotes || '';
+
+    // Calculate driver's share (for commission-based systems)
+    // In your case, driver might get the full cash amount or a percentage
+    const driverShare = payment.amount; // Adjust this based on your commission structure
+    const platformFee = isCash ? 0 : payment.platformFee || 0; // For cash, driver might get full amount
+    const companyShare = isCash ? 0 : payment.companyAmount || 0;
+
+    // Build timeline
+    const timeline = [];
+    
+    if (payment.createdAt) timeline.push({
+      event: 'payment_created',
+      time: payment.createdAt,
+      description: 'Payment record created',
+      icon: '📝',
+      details: 'Payment initiated for delivery'
+    });
+    
+    if (payment.paidAt) timeline.push({
+      event: 'payment_received',
+      time: payment.paidAt,
+      description: isCash ? 'Cash payment collected' : 'Payment received',
+      icon: isCash ? '💵' : '💳',
+      details: `₦${payment.amount.toLocaleString()} ${isCash ? 'cash collected' : 'received via ' + payment.paymentMethod}`
+    });
+    
+    // Add delivery events if delivery exists
+    if (payment.deliveryId) {
+      const delivery = await Delivery.findById(payment.deliveryId._id)
+        .select('assignedAt pickedUpAt deliveredAt')
+        .lean();
+      
+      if (delivery?.assignedAt) timeline.push({
+        event: 'delivery_assigned',
+        time: delivery.assignedAt,
+        description: 'Delivery assigned to driver',
+        icon: '🚗',
+        details: 'You accepted the delivery request'
+      });
+      
+      if (delivery?.pickedUpAt) timeline.push({
+        event: 'package_picked_up',
+        time: delivery.pickedUpAt,
+        description: 'Package picked up',
+        icon: '📦',
+        details: 'Package collected from customer'
+      });
+      
+      if (delivery?.deliveredAt) timeline.push({
+        event: 'delivery_completed',
+        time: delivery.deliveredAt,
+        description: 'Package delivered',
+        icon: '✅',
+        details: 'Delivery completed successfully'
+      });
+    }
+    
+    // Add settlement event for cash payments
+    if (isCash && settledToDriver && settledAt) {
+      timeline.push({
+        event: 'payment_settled',
+        time: settledAt,
+        description: 'Cash payment settled',
+        icon: '💰',
+        details: `₦${payment.amount.toLocaleString()} settled to you via ${settlementMethod || 'cash'}`
+      });
+    }
+
+    // Sort timeline
+    timeline.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+    // Get related payments for same customer
+    const relatedPayments = await Payment.find({
+      driverId: driver._id,
+      customerId: payment.customerId,
+      status: 'successful',
+      _id: { $ne: payment._id }
+    })
+      .sort({ paidAt: -1 })
+      .limit(3)
+      .select('amount paymentMethod paidAt deliveryId')
+      .populate('deliveryId', 'referenceId')
+      .lean();
+
+    const response = {
+      success: true,
+      message: 'Payment details retrieved successfully',
+      data: {
+        payment: {
+          _id: payment._id,
+          reference: payment.paystackReference || `CASH-${payment._id}`,
+          amount: payment.amount,
+          driverShare,
+          platformFee,
+          companyShare,
+          status: payment.status,
+          paymentMethod: payment.paymentMethod,
+          isCash,
+          paidAt: payment.paidAt,
+          currency: payment.currency || 'NGN',
+          settlementStatus: isCash ? (settledToDriver ? 'settled' : 'pending') : 'n/a',
+          settledAt,
+          settlementMethod,
+          settlementNotes,
+          canRequestSettlement: isCash && !settledToDriver,
+        },
+        delivery: payment.deliveryId ? {
+          _id: payment.deliveryId._id,
+          referenceId: payment.deliveryId.referenceId,
+          status: payment.deliveryId.status,
+          pickup: {
+            address: payment.deliveryId.pickup?.address,
+            lat: payment.deliveryId.pickup?.lat,
+            lng: payment.deliveryId.pickup?.lng,
+            name: payment.deliveryId.pickup?.name,
+            phone: payment.deliveryId.pickup?.phone,
+          },
+          dropoff: {
+            address: payment.deliveryId.dropoff?.address,
+            lat: payment.deliveryId.dropoff?.lat,
+            lng: payment.deliveryId.dropoff?.lng,
+            name: payment.deliveryId.dropoff?.name,
+            phone: payment.deliveryId.dropoff?.phone,
+          },
+          distance: payment.deliveryId.estimatedDistanceKm,
+          fare: payment.deliveryId.fare,
+          completedAt: payment.deliveryId.completedAt,
+        } : null,
+        customer: payment.customerId ? {
+          _id: payment.customerId._id,
+          name: payment.customerId.name,
+          phone: payment.customerId.phone,
+          email: payment.customerId.email,
+          avatarUrl: payment.customerId.avatarUrl,
+          rating: payment.customerId.rating,
+        } : null,
+        company: payment.companyId ? {
+          _id: payment.companyId._id,
+          name: payment.companyId.name,
+          logo: payment.companyId.logo,
+          contactPhone: payment.companyId.contactPhone,
+          address: payment.companyId.address,
+        } : null,
+        timeline,
+        relatedPayments: relatedPayments.map(p => ({
+          _id: p._id,
+          amount: p.amount,
+          paymentMethod: p.paymentMethod,
+          paidAt: p.paidAt,
+          deliveryReference: p.deliveryId?.referenceId || 'N/A',
+        })),
+        actions: getDriverPaymentActions(isCash, settledToDriver),
+        support: {
+          contactEmail: process.env.SUPPORT_EMAIL || 'support@riderr.com',
+          contactPhone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
+          cashSettlementWindow: 'Within 24 hours of delivery completion',
+        },
+      },
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('❌ Get driver payment details error:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment ID format',
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get payment details',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Helper function to determine available actions for driver payment
+ */
+function getDriverPaymentActions(isCash, settledToDriver) {
+  const actions = [];
+  
+  if (isCash) {
+    if (!settledToDriver) {
+      actions.push(
+        { label: 'Request Settlement', action: 'request_settlement', icon: '📲' },
+        { label: 'Contact Company', action: 'contact_company', icon: '🏢' },
+        { label: 'View Delivery Details', action: 'view_delivery', icon: '📋' }
+      );
+    } else {
+      actions.push(
+        { label: 'Download Receipt', action: 'download_receipt', icon: '📄' },
+        { label: 'View Settlement Details', action: 'view_settlement', icon: '💰' },
+        { label: 'Report Issue', action: 'report_issue', icon: '⚠️' }
+      );
+    }
+  } else {
+    actions.push(
+      { label: 'View Escrow Status', action: 'view_escrow', icon: '🔒' },
+      { label: 'Contact Company', action: 'contact_company', icon: '🏢' },
+      { label: 'Download Payment Proof', action: 'download_proof', icon: '📄' }
+    );
+  }
+  
+  return actions;
+}
+
+/**
+ * @desc    Driver requests settlement for cash payment
+ * @route   POST /api/payments/driver-payments/:paymentId/request-settlement
+ * @access  Private (Driver)
+ */
+export const requestCashSettlement = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    const { paymentId } = req.params;
+    const { settlementMethod, notes } = req.body;
+
+    if (driverUser.role !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only drivers can request settlement',
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver profile not found',
+      });
+    }
+
+    const payment = await Payment.findOne({
+      _id: paymentId,
+      driverId: driver._id,
+      paymentMethod: 'cash',
+      status: 'successful',
+    });
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cash payment not found or not eligible for settlement',
+      });
+    }
+
+    // Check if already settled
+    if (payment.metadata?.isSettledToDriver) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment has already been settled',
+      });
+    }
+
+    // Update payment metadata with settlement request
+    payment.metadata = {
+      ...payment.metadata,
+      settlementRequested: true,
+      settlementRequestedAt: new Date(),
+      settlementMethod: settlementMethod || 'cash',
+      settlementNotes: notes || '',
+    };
+
+    // Add to audit log
+    payment.auditLog.push({
+      action: 'settlement_requested',
+      timestamp: new Date(),
+      details: { 
+        settlementMethod,
+        notes,
+        requestedBy: driverUser._id 
+      },
+    });
+
+    await payment.save();
+
+    // Notify company about settlement request
+    if (payment.companyId) {
+      const company = await Company.findById(payment.companyId);
+      if (company) {
+        // Find company owner/user to notify
+        const companyUser = await User.findOne({ 
+          $or: [
+            { _id: company.ownerId },
+            { email: company.email }
+          ] 
+        });
+
+        if (companyUser) {
+          await sendNotification({
+            userId: companyUser._id,
+            title: '💰 Settlement Request',
+            message: `Driver ${driverUser.name} has requested settlement for cash payment of ₦${payment.amount.toLocaleString()}`,
+            data: {
+              type: 'cash_settlement_request',
+              paymentId: payment._id,
+              driverId: driver._id,
+              driverName: driverUser.name,
+              amount: payment.amount,
+              deliveryId: payment.deliveryId,
+            },
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Settlement request submitted successfully',
+      data: {
+        paymentId: payment._id,
+        amount: payment.amount,
+        settlementMethod: settlementMethod || 'cash',
+        requestedAt: new Date(),
+        nextSteps: [
+          'Company will review your request',
+          'Settlement typically processed within 24 hours',
+          'You will be notified when payment is settled',
+          'Contact support if no response within 48 hours',
+        ],
+      },
+    });
+  } catch (error) {
+    console.error('❌ Request cash settlement error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to request settlement',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Mark cash payment as settled to driver (for company use)
+ * @route   POST /api/payments/driver-payments/:paymentId/mark-settled
+ * @access  Private (Company)
+ */
+export const markCashPaymentAsSettled = async (req, res) => {
+  try {
+    const companyUser = req.user;
+    
+    if (companyUser.role !== 'company') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only companies can mark payments as settled',
+      });
+    }
+
+    const company = await Company.findOne({ ownerId: companyUser._id });
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found',
+      });
+    }
+
+    const { paymentId } = req.params;
+    const { settlementMethod, settlementNotes } = req.body;
+
+    const payment = await Payment.findOne({
+      _id: paymentId,
+      companyId: company._id,
+      paymentMethod: 'cash',
+      status: 'successful',
+    }).populate('driverId', 'userId');
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cash payment not found or not associated with your company',
+      });
+    }
+
+    // Check if already settled
+    if (payment.metadata?.isSettledToDriver) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment has already been settled',
+      });
+    }
+
+    // Update payment as settled
+    payment.metadata = {
+      ...payment.metadata,
+      isSettledToDriver: true,
+      settledToDriverAt: new Date(),
+      settledBy: companyUser._id,
+      settlementMethod: settlementMethod || 'cash',
+      settlementNotes: settlementNotes || '',
+    };
+
+    // Add to audit log
+    payment.auditLog.push({
+      action: 'settled_to_driver',
+      timestamp: new Date(),
+      details: { 
+        settledBy: companyUser._id,
+        settlementMethod: settlementMethod || 'cash',
+        notes: settlementNotes,
+      },
+    });
+
+    await payment.save();
+
+    // Notify driver
+    if (payment.driverId?.userId) {
+      await sendNotification({
+        userId: payment.driverId.userId,
+        title: '💰 Payment Settled!',
+        message: `Your cash payment of ₦${payment.amount.toLocaleString()} has been settled by ${company.name}`,
+        data: {
+          type: 'cash_payment_settled',
+          paymentId: payment._id,
+          amount: payment.amount,
+          companyName: company.name,
+          settlementMethod: settlementMethod || 'cash',
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment marked as settled successfully',
+      data: {
+        paymentId: payment._id,
+        amount: payment.amount,
+        driverId: payment.driverId,
+        settledAt: new Date(),
+        settlementMethod: settlementMethod || 'cash',
+      },
+    });
+  } catch (error) {
+    console.error('❌ Mark cash payment as settled error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark payment as settled',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * @desc    Get driver earnings summary
+ * @route   GET /api/payments/driver-earnings
+ * @access  Private (Driver)
+ */
+export const getDriverEarningsSummary = async (req, res) => {
+  try {
+    const driverUser = req.user;
+    
+    if (driverUser.role !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only drivers can view earnings summary',
+      });
+    }
+
+    const driver = await Driver.findOne({ userId: driverUser._id });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver profile not found',
+      });
+    }
+
+    const { period = 'month' } = req.query;
+
+    // Calculate date ranges
+    const now = new Date();
+    let startDate;
+    
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.setHours(0, 0, 0, 0));
+        break;
+      case 'week':
+        startDate = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'month':
+        startDate = new Date(now.setMonth(now.getMonth() - 1));
+        break;
+      case 'year':
+        startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+        break;
+      default:
+        startDate = new Date(now.setMonth(now.getMonth() - 1));
+    }
+
+    // Get earnings data
+    const earningsData = await Payment.aggregate([
+      {
+        $match: {
+          driverId: driver._id,
+          status: 'successful',
+          paidAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalEarnings: { $sum: '$amount' },
+          totalDeliveries: { $sum: 1 },
+          cashEarnings: {
+            $sum: {
+              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+          cashDeliveries: {
+            $sum: {
+              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, 1, 0]
+            }
+          },
+          onlineEarnings: {
+            $sum: {
+              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+          onlineDeliveries: {
+            $sum: {
+              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, 1, 0]
+            }
+          },
+          pendingCashSettlements: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$paymentMethod', 'cash'] },
+                    { $ne: ['$metadata.isSettledToDriver', true] }
+                  ]
+                },
+                '$amount',
+                0
+              ]
+            }
+          },
+          pendingCashCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$paymentMethod', 'cash'] },
+                    { $ne: ['$metadata.isSettledToDriver', true] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+        }
+      }
+    ]);
+
+    // Get daily earnings for chart
+    const dailyEarnings = await Payment.aggregate([
+      {
+        $match: {
+          driverId: driver._id,
+          status: 'successful',
+          paidAt: { 
+            $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
+          }
+        }
+      },
+      {
+        $group: {
+          _id: { 
+            $dateToString: { 
+              format: "%Y-%m-%d", 
+              date: "$paidAt" 
+            } 
+          },
+          earnings: { $sum: '$amount' },
+          deliveries: { $sum: 1 },
+          cashEarnings: {
+            $sum: {
+              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+          onlineEarnings: {
+            $sum: {
+              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
+            }
+          },
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    // Get top earning days
+    const topEarningDays = await Payment.aggregate([
+      {
+        $match: {
+          driverId: driver._id,
+          status: 'successful',
+          paidAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: { 
+            $dateToString: { 
+              format: "%Y-%m-%d", 
+              date: "$paidAt" 
+            } 
+          },
+          earnings: { $sum: '$amount' },
+          deliveries: { $sum: 1 },
+        }
+      },
+      { $sort: { earnings: -1 } },
+      { $limit: 5 }
+    ]);
+
+    const result = earningsData[0] || {
+      totalEarnings: 0,
+      totalDeliveries: 0,
+      cashEarnings: 0,
+      cashDeliveries: 0,
+      onlineEarnings: 0,
+      onlineDeliveries: 0,
+      pendingCashSettlements: 0,
+      pendingCashCount: 0,
+    };
+
+    res.status(200).json({
+      success: true,
+      message: 'Earnings summary retrieved successfully',
+      data: {
+        summary: {
+          ...result,
+          averageEarningsPerDelivery: result.totalDeliveries > 0 
+            ? result.totalEarnings / result.totalDeliveries 
+            : 0,
+          settlementRate: result.cashDeliveries > 0
+            ? ((result.cashDeliveries - result.pendingCashCount) / result.cashDeliveries) * 100
+            : 100,
+        },
+        dailyEarnings,
+        topEarningDays,
+        period,
+        currency: 'NGN',
+        driverInfo: {
+          name: driverUser.name,
+          phone: driverUser.phone,
+          rating: driver.rating || 0,
+          totalDeliveries: driver.totalDeliveries || 0,
+          acceptanceRate: driver.totalRequests ? 
+            Math.round((driver.acceptedRequests / driver.totalRequests) * 100) : 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get driver earnings summary error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get earnings summary',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }

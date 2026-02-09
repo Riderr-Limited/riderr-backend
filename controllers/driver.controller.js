@@ -3096,6 +3096,7 @@ export const rejectDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
+    const { reason } = req.body;
 
     if (driverUser.role !== "driver") {
       return res.status(403).json({
@@ -3112,19 +3113,51 @@ export const rejectDelivery = async (req, res) => {
       });
     }
 
+    // ✅ FIX: Store rejection in the delivery document
+    const delivery = await Delivery.findByIdAndUpdate(
+      deliveryId,
+      {
+        $push: {
+          rejectedByDrivers: {
+            driverId: driver._id,
+            rejectedAt: new Date(),
+            reason: reason || "No reason provided",
+            driverName: driverUser.name,
+            driverPhone: driverUser.phone,
+          }
+        }
+      },
+      { new: true }
+    );
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found",
+      });
+    }
+
     // Update driver stats
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     await driver.save();
 
+    console.log(`⏭️ Driver ${driver._id} rejected delivery ${deliveryId}: ${reason || 'No reason'}`);
+
     res.status(200).json({
       success: true,
       message: "Delivery request rejected",
+      data: {
+        deliveryId,
+        rejectedAt: new Date(),
+        reason: reason || "No reason provided",
+      }
     });
   } catch (error) {
     console.error("❌ Reject delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to reject delivery",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

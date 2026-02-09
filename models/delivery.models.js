@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import crypto from "crypto";
 
 const deliverySchema = new mongoose.Schema({
   // Reference ID
@@ -9,35 +10,35 @@ const deliverySchema = new mongoose.Schema({
     index: true,
   },
 
- // ✅  driver 
-driverDetails: {
-  driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  name: String,
-  phone: String,
-  avatarUrl: String,
-  rating: { type: Number, default: 0 },
-  vehicle: {
-    type: { type: String },  
-    make: String,
-    model: String,
-    plateNumber: String,
+  // ✅ driver 
+  driverDetails: {
+    driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    name: String,
+    phone: String,
+    avatarUrl: String,
+    rating: { type: Number, default: 0 },
+    vehicle: {
+      type: { type: String },  
+      make: String,
+      model: String,
+      plateNumber: String,
+    },
+    currentLocation: {
+      lat: Number,
+      lng: Number,
+      updatedAt: Date
+    }
   },
-  currentLocation: {
-    lat: Number,
-    lng: Number,
-    updatedAt: Date
-  }
-},
-companyDetails: {
-  companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
-  name: String,
-  logo: String,
-  contactPhone: String,
-  address: String,
-  email: String,
-  rating: { type: Number, default: 0 }
-},  
+  companyDetails: {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+    name: String,
+    logo: String,
+    contactPhone: String,
+    address: String,
+    email: String,
+    rating: { type: Number, default: 0 }
+  },  
 
   // Main relationships
   customerId: {
@@ -150,6 +151,25 @@ companyDetails: {
     default: "created",
   },
 
+  // ✅ NEW: Track driver rejections
+  rejectedByDrivers: [
+    {
+      driverId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Driver",
+        required: true
+      },
+      rejectedAt: {
+        type: Date,
+        default: Date.now
+      },
+      reason: {
+        type: String,
+        default: "No reason provided"
+      }
+    }
+  ],
+
   // Timestamps
   assignedAt: Date,
   pickedUpAt: Date,
@@ -188,16 +208,10 @@ deliverySchema.index({ driverId: 1, status: 1 });
 deliverySchema.index({ companyId: 1, status: 1 });
 deliverySchema.index({ status: 1 });
 deliverySchema.index({ createdAt: -1 });
+// ✅ NEW: Index for rejection filtering
+deliverySchema.index({ 'rejectedByDrivers.driverId': 1 });
 
-// Update timestamps before saving
-deliverySchema.pre("save", function (next) {
-  this.updatedAt = new Date();
-});
-
-const Delivery = mongoose.model("Delivery", deliverySchema);
-
-import crypto from "crypto";
-
+// Generate reference ID before saving
 deliverySchema.pre("save", function (next) {
   if (!this.referenceId) {
     this.referenceId = `RID-${Date.now()}-${crypto
@@ -205,7 +219,9 @@ deliverySchema.pre("save", function (next) {
       .toString("hex")
       .toUpperCase()}`;
   }
-  next();
-});
+  this.updatedAt = new Date();
+ });
+
+const Delivery = mongoose.model("Delivery", deliverySchema);
 
 export default Delivery;
