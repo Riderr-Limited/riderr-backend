@@ -11,6 +11,7 @@ import notificationRoutes from "./notification.routes.js";
 import chatRoutes from "./chat.routes.js";
 import voiceCallRoutes from "./voiceCall.routes.js";
 import supportTicketRoutes from "./supportTicket.routes.js";
+import adminChatRoutes from "./adminChat.routes.js";
 
 const router = express.Router();
 
@@ -60,6 +61,9 @@ router.use("/notifications", notificationRoutes);
 router.use("/chat", chatRoutes);
 router.use("/voice-call", voiceCallRoutes);
 router.use("/v1/support", supportTicketRoutes);
+
+// Admin chat routes
+router.use("/admin-chat", adminChatRoutes);
 
 // ============ 404 HANDLER (MUST BE LAST) ============
 /**
