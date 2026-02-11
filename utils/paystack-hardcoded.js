@@ -2,8 +2,8 @@
 import axios from 'axios';
 
 // ===== HARDCODED CONFIGURATION =====
-const PAYSTACK_SECRET_KEY = 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac';
-const PAYSTACK_PUBLIC_KEY = 'pk_test_5240eb0402f627e4bdc37a9971c35a20ed27a0f0';
+const PAYSTACK_SECRET_KEY = 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
+const PAYSTACK_PUBLIC_KEY = 'pk_live_3b52907c8d7a45ff0d023758e4a810bec5e2fc8a';
 const FRONTEND_URL = 'http://localhost:3000';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;

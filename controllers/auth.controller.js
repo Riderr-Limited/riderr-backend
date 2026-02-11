@@ -475,7 +475,7 @@ export const signUp = async (req, res) => {
             {
               userId: newUser._id,
               companyId,
- \              vehicleType,
+              vehicleType,
               plateNumber,
               vehicleColor,
               approvalStatus: "pending",
