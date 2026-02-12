@@ -1,23 +1,55 @@
-// utils/paystack.js - FORCE LIVE MODE
+// utils/paystack.js - FIXED VERSION WITH PROPER KEY HANDLING
 import axios from 'axios';
 
-// ===== FORCE LIVE MODE FOR TESTING =====
-const IS_PRODUCTION = true; // ✅ FORCE PRODUCTION MODE
-// OR
-// process.env.NODE_ENV = 'production'; // Uncomment to force
+// ===== ENVIRONMENT-BASED CONFIGURATION =====
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-// Live Keys ONLY
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY_LIVE || 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
-const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY_LIVE || 'pk_live_3b52907c8d7a45ff0d023758e4a810bec5e2fc8a';
+// 🔴 FORCE LIVE MODE - Set to true to use live keys even in development
+// Set this via environment variable: FORCE_LIVE_MODE=true
+const FORCE_LIVE_MODE = true
 
-// URLs - MUST use HTTPS (Paystack requirement for live)
-const BACKEND_URL = process.env.BACKEND_URL || 'https://riderr-backend.onrender.com';
+// Live Keys (for production and when forced)
+const LIVE_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
+const LIVE_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || 'pk_live_3b52907c8d7a45ff0d023758e4a810bec5e2fc8a';
+
+// Test Keys (for development/testing)
+const TEST_SECRET_KEY = process.env.PAYSTACK_TEST_SECRET_KEY || 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac';
+const TEST_PUBLIC_KEY = process.env.PAYSTACK_TEST_PUBLIC_KEY || 'pk_test_5240eb0402f627e4bdc37a9971c35a20ed27a0f0';
+
+// ✅ ALWAYS USE LIVE KEYS
+const PAYSTACK_SECRET_KEY = LIVE_SECRET_KEY;
+const PAYSTACK_PUBLIC_KEY = LIVE_PUBLIC_KEY;
+const USE_LIVE_KEYS = true; 
+
+// URLs
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://riderr.ng';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://api.riderrapp.com';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
-console.log('🔴🔴🔴 LIVE MODE FORCED - REAL MONEY 🔴🔴🔴');
-console.log('Environment: PRODUCTION (LIVE KEYS)');
-console.log('Secret Key:', PAYSTACK_SECRET_KEY.substring(0, 10) + '...');
-console.log('⚠️  WARNING: This will charge REAL bank cards!');
+// ✅ Log configuration (without exposing full keys)
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('🔧 Paystack Configuration:');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('Environment:', IS_PRODUCTION ? '🔴 PRODUCTION' : '🟡 DEVELOPMENT');
+console.log('Force Live Mode:', FORCE_LIVE_MODE ? '✅ ENABLED' : '❌ DISABLED');
+console.log('Using Keys:', USE_LIVE_KEYS ? '🔴 LIVE KEYS' : '🟡 TEST KEYS');
+console.log('Secret Key:', PAYSTACK_SECRET_KEY.substring(0, 15) + '...' + PAYSTACK_SECRET_KEY.slice(-4));
+console.log('Public Key:', PAYSTACK_PUBLIC_KEY.substring(0, 15) + '...' + PAYSTACK_PUBLIC_KEY.slice(-4));
+console.log('Callback URL:', MOBILE_CALLBACK_URL);
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+// ✅ Validate keys
+if (!PAYSTACK_SECRET_KEY || PAYSTACK_SECRET_KEY.length < 20) {
+  console.error('❌ ERROR: Invalid or missing Paystack secret key!');
+  console.error('Current key:', PAYSTACK_SECRET_KEY?.substring(0, 15) || 'NONE');
+  throw new Error('Invalid Paystack secret key');
+}
+
+if (!PAYSTACK_SECRET_KEY.startsWith('sk_')) {
+  console.error('❌ ERROR: Paystack secret key must start with "sk_"');
+  console.error('Current key starts with:', PAYSTACK_SECRET_KEY.substring(0, 5));
+  throw new Error('Invalid Paystack secret key format');
+}
 
 // Create axios instance
 const paystackAxios = axios.create({
@@ -31,8 +63,9 @@ const paystackAxios = axios.create({
 
 // Add request interceptor for logging
 paystackAxios.interceptors.request.use((config) => {
-  if (!IS_PRODUCTION) {
+  if (!IS_PRODUCTION || FORCE_LIVE_MODE) {
     console.log('📤 Paystack Request:', config.method?.toUpperCase(), config.url);
+    console.log('   Auth:', config.headers.Authorization.substring(0, 30) + '...');
   }
   return config;
 }, (error) => {
@@ -42,12 +75,19 @@ paystackAxios.interceptors.request.use((config) => {
 
 // Add response interceptor for logging
 paystackAxios.interceptors.response.use((response) => {
-  if (!IS_PRODUCTION) {
+  if (!IS_PRODUCTION || FORCE_LIVE_MODE) {
     console.log('📥 Paystack Response:', response.status, response.config.url);
+    console.log('   Status:', response.data.status);
   }
   return response;
 }, (error) => {
   console.error('❌ Response Error:', error.response?.status, error.response?.data);
+  
+  // Log more details about the error
+  if (error.response?.data) {
+    console.error('   Error Details:', JSON.stringify(error.response.data, null, 2));
+  }
+  
   return Promise.reject(error);
 });
 
@@ -60,7 +100,7 @@ export const initializePayment = async (paymentData) => {
     console.log('💰 Initializing payment...');
     console.log('Email:', paymentData.email);
     console.log('Amount:', paymentData.amount);
-    console.log('Environment:', IS_PRODUCTION ? 'LIVE' : 'TEST');
+    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
     
     // Convert to kobo (Paystack uses kobo, not naira)
     const amountInKobo = Math.round(paymentData.amount * 100);
@@ -72,7 +112,10 @@ export const initializePayment = async (paymentData) => {
       currency: 'NGN',
       metadata: {
         ...paymentData.metadata,
-       },
+        environment: USE_LIVE_KEYS ? 'live' : 'test',
+        isProduction: IS_PRODUCTION,
+        forceLiveMode: FORCE_LIVE_MODE,
+      },
       reference: paymentData.reference || `RIDERR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       channels: paymentData.channels || ['card', 'bank', 'ussd', 'qr'], // All supported channels
     };
@@ -96,11 +139,16 @@ export const initializePayment = async (paymentData) => {
       console.log('Platform Fee:', payload.transaction_charge / 100, 'NGN');
     }
     
+    console.log('📤 Sending request to Paystack...');
+    
     // Make request to Paystack
     const response = await paystackAxios.post('/transaction/initialize', payload);
 
     if (response.data.status === true) {
       console.log('✅ Payment initialized successfully');
+      console.log('   Reference:', response.data.data.reference);
+      console.log('   Access Code:', response.data.data.access_code);
+      
       return {
         success: true,
         message: 'Payment initialized successfully',
@@ -119,12 +167,22 @@ export const initializePayment = async (paymentData) => {
       message: error.message,
       status: error.response?.status,
       data: error.response?.data,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method,
+        authHeader: error.config?.headers?.Authorization?.substring(0, 30) + '...',
+      }
     });
     
     return {
       success: false,
       message: error.response?.data?.message || 'Payment initialization failed',
       error: error.response?.data || error.message,
+      keyInfo: {
+        usingLiveKeys: USE_LIVE_KEYS,
+        keyPrefix: PAYSTACK_SECRET_KEY.substring(0, 10),
+        keyLength: PAYSTACK_SECRET_KEY.length,
+      }
     };
   }
 };
@@ -135,6 +193,7 @@ export const initializePayment = async (paymentData) => {
 export const verifyPayment = async (reference) => {
   try {
     console.log('🔍 Verifying payment:', reference);
+    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
     
     const response = await paystackAxios.get(`/transaction/verify/${reference}`);
     
@@ -181,6 +240,10 @@ export const verifyPayment = async (reference) => {
 export const chargeCardViaPaystack = async (chargeData) => {
   try {
     console.log('💳 Charging card directly...');
+    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
+    console.log('Email:', chargeData.email);
+    console.log('Amount:', chargeData.amount, 'NGN');
+    console.log('Card ending:', chargeData.card.number.slice(-4));
     
     const payload = {
       email: chargeData.email,
@@ -191,14 +254,19 @@ export const chargeCardViaPaystack = async (chargeData) => {
         expiry_month: chargeData.card.expiry_month,
         expiry_year: chargeData.card.expiry_year,
       },
-      metadata: chargeData.metadata || {},
+      metadata: {
+        ...chargeData.metadata,
+        environment: USE_LIVE_KEYS ? 'live' : 'test',
+      },
     };
 
     // Add PIN if provided (for Nigerian cards)
     if (chargeData.card.pin) {
       payload.pin = chargeData.card.pin;
+      console.log('🔐 PIN provided for Nigerian card');
     }
 
+    console.log('📤 Sending charge request to Paystack...');
     const response = await paystackAxios.post('/transaction/charge', payload);
 
     if (response.data.status === true) {
@@ -249,7 +317,11 @@ export const chargeCardViaPaystack = async (chargeData) => {
       error: response.data,
     };
   } catch (error) {
-    console.error('❌ Card charge error:', error.response?.data || error.message);
+    console.error('❌ Card charge error:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    });
     
     return {
       success: false,
@@ -265,6 +337,7 @@ export const chargeCardViaPaystack = async (chargeData) => {
 export const submitOtpToPaystack = async (otpData) => {
   try {
     console.log('🔐 Submitting OTP...');
+    console.log('Reference:', otpData.reference);
     
     const response = await paystackAxios.post('/transaction/submit_otp', {
       otp: otpData.otp,
@@ -313,6 +386,7 @@ export const submitOtpToPaystack = async (otpData) => {
 export const createDedicatedVirtualAccount = async (accountData) => {
   try {
     console.log('🏦 Creating dedicated virtual account...');
+    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
     
     const response = await paystackAxios.post('/dedicated_account', {
       email: accountData.email,
@@ -377,7 +451,7 @@ export const createSubaccount = async (companyData) => {
       metadata: {
         companyId: companyData.companyId,
         platform: 'riderr',
-        environment: IS_PRODUCTION ? 'production' : 'development',
+        environment: USE_LIVE_KEYS ? 'live' : 'test',
       },
     });
 
@@ -534,6 +608,13 @@ export const getPublicKey = () => {
 };
 
 /**
+ * Check if using live keys
+ */
+export const isUsingLiveKeys = () => {
+  return USE_LIVE_KEYS;
+};
+
+/**
  * Check if in production mode
  */
 export const isProduction = () => {
@@ -553,4 +634,5 @@ export default {
   resolveAccountNumber,
   getPublicKey,
   isProduction,
+  isUsingLiveKeys,
 };

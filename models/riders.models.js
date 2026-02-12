@@ -17,20 +17,9 @@ const DriverSchema = new mongoose.Schema(
       index: true
     },
 
-    // Personal Information (additional to User model)
-    licenseNumber: {
-      type: String,
-      required: [true, "License number is required"],
-      unique: true,
-      uppercase: true,
-      trim: true
-    },
+    
 
-    licenseExpiry: {
-      type: Date,
-      required: [true, "License expiry date is required"]
-    },
-
+    
     // Vehicle Information - SIMPLIFIED
     vehicleType: {
       type: String,
@@ -323,7 +312,6 @@ DriverSchema.index({ companyId: 1, isActive: 1, isOnline: 1 });
 DriverSchema.index({ companyId: 1, approvalStatus: 1 });
 DriverSchema.index({ userId: 1 }, { unique: true });
 DriverSchema.index({ plateNumber: 1 }, { unique: true });
-DriverSchema.index({ licenseNumber: 1 }, { unique: true });
 DriverSchema.index({ isOnline: 1, isAvailable: 1, vehicleType: 1 });
 DriverSchema.index({ currentStatus: 1, location: '2dsphere' });
 
@@ -401,8 +389,7 @@ DriverSchema.pre('save', function(next) {
     this.plateNumber = this.plateNumber.toUpperCase().trim();
   }
 
-  next();
-});
+ });
 
 // ========== INSTANCE METHODS ==========
 

@@ -1108,17 +1108,6 @@ export const validateSignUpCompanyDriver = [
       return true;
     }),
   
-  body("licenseNumber")
-    .trim()
-    .notEmpty()
-    .withMessage("License number is required"),
-  
-  body("licenseExpiry")
-    .notEmpty()
-    .withMessage("License expiry date is required")
-    .isISO8601()
-    .toDate()
-    .withMessage("Please provide a valid date"),
   
   body("vehicleType")
     .notEmpty()
