@@ -140,31 +140,29 @@ const createEmailTransporter = async () => {
 // Send verification email
 const sendVerificationEmail = async (email, code, name, phone = null) => {
   try {
-    // In production, use SMS if phone is provided
-    if (process.env.NODE_ENV === "production" && phone) {
-      const smsResult = await sendSMSOTP(
-        phone,
-        code,
-        `Your Riderr verification code`,
-      );
-      if (smsResult.success) {
-        console.log(`✅ Verification SMS sent to ${phone}`);
-        return { success: true, method: "sms" };
-      } else {
-        console.error(`❌ SMS failed, falling back to email`);
-      }
-    }
-
-    // Fallback to email
+    // ✅ ALWAYS send email, optionally also send SMS
     const transporter = await createEmailTransporter();
 
     if (!transporter) {
       console.log(`📧 DEV MODE: Email verification code for ${email}: ${code}`);
+      
+      // Try SMS as fallback in production
+      if (process.env.NODE_ENV === "production" && phone) {
+        const smsResult = await sendSMSOTP(
+          phone,
+          code,
+          `Your Riderr verification code`
+        );
+        if (smsResult.success) {
+          return { success: true, method: "sms" };
+        }
+      }
+      
       return { success: true, devMode: true };
     }
 
     const mailOptions = {
-      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
+      from: "Riderr",
       to: email,
       subject: "Your Riderr Verification Code",
       html: `
@@ -202,31 +200,46 @@ const sendVerificationEmail = async (email, code, name, phone = null) => {
       `,
     };
 
+    console.log(`📧 Attempting to send email to ${email}...`);
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent to ${email}`);
+    console.log(`✅ Email sent successfully to ${email}. Message ID: ${info.messageId}`);
 
-    // Return Ethereal URL for development
-    const etherealUrl =
-      process.env.NODE_ENV === "development" &&
-      transporter.options.host === "smtp.ethereal.email"
-        ? `https://ethereal.email/message/${info.messageId}`
-        : null;
-
-    return { success: true, messageId: info.messageId, etherealUrl };
-  } catch (error) {
-    console.error("❌ Email error:", error.message);
-    console.log(`📧 FALLBACK: Email verification code for ${email}: ${code}`);
-
-    // In development, return failure so developers know emails aren't working
-    // In production, return success for security (don't reveal email issues)
-    if (process.env.NODE_ENV === "development") {
-      return {
-        success: false,
-        error: "Email sending failed in development mode",
-      };
+    // Also send SMS in production (optional dual verification)
+    if (process.env.NODE_ENV === "production" && phone) {
+      await sendSMSOTP(phone, code, `Your Riderr verification code`);
     }
 
-    return { success: true, devMode: true };
+    return { 
+      success: true, 
+      messageId: info.messageId,
+      method: "email"
+    };
+  } catch (error) {
+    console.error("❌ Email sending failed:", error);
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      command: error.command
+    });
+
+    // Try SMS as fallback in production
+    if (process.env.NODE_ENV === "production" && phone) {
+      console.log("📱 Attempting SMS fallback...");
+      const smsResult = await sendSMSOTP(
+        phone,
+        code,
+        `Your Riderr verification code`
+      );
+      if (smsResult.success) {
+        return { success: true, method: "sms" };
+      }
+    }
+
+    return { 
+      success: false, 
+      error: error.message,
+      details: error
+    };
   }
 };
 
