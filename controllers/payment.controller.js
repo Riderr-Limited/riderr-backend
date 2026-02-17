@@ -545,9 +545,16 @@ export const chargeCard = async (req, res) => {
           ...payment.metadata,
           requiresOtp: true,
           cardLast4: cardDetails.number.slice(-4),
+          // ✅ FIX: Store Paystack's OWN reference (chargeData.reference),
+          // NOT your internal RIDERR-xxx reference.
+          // Paystack requires its own reference when you call /charge/submit_otp.
           chargeReference: chargeData.reference,
         };
         await payment.save();
+        
+       console.log(`🔐 OTP required`);
+        console.log(`   Internal ref : ${reference}`);
+        console.log(`   Paystack ref : ${chargeData.reference}`);
 
         return res.status(200).json({
           success: true,
@@ -555,15 +562,25 @@ export const chargeCard = async (req, res) => {
           message: 'OTP sent to your phone number',
           data: {
             paymentId: payment._id,
-            reference: reference,
-            amount: amount,
-            displayMessage: 'Please enter the OTP sent to your phone',
+            reference: reference,           
+            amount: payment.amount,
+            displayMessage: chargeData.display_text || 'Please enter the OTP sent to your phone',
           },
         });
       }
 
       // Handle PIN requirement
       if (chargeData.status === 'send_pin') {
+        payment.status = 'processing';
+        payment.metadata = {
+          ...payment.metadata,
+          requiresPin: true,
+          cardLast4: cardDetails.number.slice(-4),
+          // ✅ Also save Paystack's reference for PIN submission
+          chargeReference: chargeData.reference,
+        };
+        await payment.save();
+
         return res.status(200).json({
           success: true,
           requiresPin: true,
@@ -571,7 +588,7 @@ export const chargeCard = async (req, res) => {
           data: {
             paymentId: payment._id,
             reference: reference,
-            amount: amount,
+            amount: payment.amount,
             displayMessage: 'Please enter your card PIN',
           },
         });
@@ -2513,6 +2530,16 @@ export const downloadSettlementReceipt = async (req, res) => {
  * @route   POST /api/payments/submit-otp
  * @access  Private (Customer)
  */
+/**
+ * @desc    Submit OTP for card charge
+ * @route   POST /api/payments/submit-otp
+ * @access  Private (Customer)
+ *
+ * FIX: Paystack's /charge/submit_otp requires the reference that PAYSTACK
+ * assigned to the charge — NOT your internal RIDERR-xxx reference.
+ * These can differ. We store Paystack's reference in metadata.chargeReference
+ * during the charge step and use that here.
+ */
 export const submitOtp = async (req, res) => {
   try {
     const customer = req.user;
@@ -2525,7 +2552,14 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // Find payment
+    if (!otp.toString().trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'OTP cannot be empty',
+      });
+    }
+
+    // Find payment by YOUR internal reference
     const payment = await Payment.findOne({
       paystackReference: reference,
       customerId: customer._id,
@@ -2545,10 +2579,31 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // Submit OTP to Paystack
+    if (!payment.metadata?.requiresOtp) {
+      return res.status(400).json({
+        success: false,
+        message: 'No OTP is pending for this payment',
+      });
+    }
+
+    // ✅ FIX: Use Paystack's own reference for OTP submission.
+    // During chargeCard, Paystack returns its own reference in chargeData.reference
+    // which we stored as metadata.chargeReference. Use that — NOT the RIDERR-xxx ref.
+    const paystackReference = payment.metadata?.chargeReference || reference;
+
+    console.log(`🔐 Submitting OTP for payment ${payment._id}`);
+    console.log(`   Internal ref : ${reference}`);
+    console.log(`   Paystack ref : ${paystackReference}`);
+
+    if (paystackReference === reference && !payment.metadata?.chargeReference) {
+      // chargeReference was never saved — this means the charge step didn't
+      // store it properly. Log a warning but still attempt with what we have.
+      console.warn('⚠️  chargeReference not found in metadata — using internal reference as fallback');
+    }
+
     const otpResult = await submitOtpToPaystack({
-      otp: otp,
-      reference: reference,
+      otp: otp.toString().trim(),
+      reference: paystackReference, // ✅ Paystack's reference
     });
 
     if (!otpResult.success) {
@@ -2559,15 +2614,21 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // Update payment as successful
+    // OTP accepted — mark payment successful
     payment.status = 'successful';
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
     payment.webhookData = otpResult.data;
-    payment.metadata.requiresOtp = false;
+    payment.metadata = {
+      ...payment.metadata,
+      requiresOtp: false,
+      otpVerifiedAt: new Date(),
+      escrowStatus: 'held',
+      escrowHeldAt: new Date(),
+    };
     await payment.save();
 
-    // Update delivery
+    // Update delivery payment status
     const delivery = await Delivery.findById(payment.deliveryId);
     if (delivery) {
       delivery.payment.status = 'paid';
@@ -2588,7 +2649,7 @@ export const submitOtp = async (req, res) => {
       },
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Payment completed successfully!',
       data: {
@@ -2596,6 +2657,7 @@ export const submitOtp = async (req, res) => {
         reference: reference,
         amount: payment.amount,
         deliveryId: payment.deliveryId,
+        paidAt: payment.paidAt,
       },
     });
   } catch (error) {
@@ -2608,8 +2670,145 @@ export const submitOtp = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Submit PIN for card charge (when Paystack returns send_pin)
+ * @route   POST /api/payments/submit-pin
+ * @access  Private (Customer)
+ */
+export const submitPin = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { reference, pin } = req.body;
 
+    if (!reference || !pin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reference and PIN are required',
+      });
+    }
 
+    const payment = await Payment.findOne({
+      paystackReference: reference,
+      customerId: customer._id,
+    });
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found',
+      });
+    }
+
+    if (payment.status === 'successful') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment already completed',
+      });
+    }
+
+    // ✅ Use Paystack's reference, not internal RIDERR-xxx reference
+    const paystackReference = payment.metadata?.chargeReference || reference;
+
+    console.log(`🔐 Submitting PIN for payment ${payment._id}`);
+    console.log(`   Paystack ref : ${paystackReference}`);
+
+    const pinResult = await submitPinToPaystack({
+      pin: pin.toString().trim(),
+      reference: paystackReference,
+    });
+
+    if (!pinResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: pinResult.message || 'Invalid PIN',
+        error: pinResult.error,
+      });
+    }
+
+    const pinData = pinResult.data;
+
+    // After PIN, Paystack may ask for OTP next
+    if (pinResult.requiresOtp || pinData?.status === 'send_otp') {
+      payment.metadata = {
+        ...payment.metadata,
+        requiresPin: false,
+        requiresOtp: true,
+        // ✅ Update chargeReference in case Paystack changed it
+        chargeReference: pinData.reference || paystackReference,
+      };
+      await payment.save();
+
+      return res.status(200).json({
+        success: true,
+        requiresOtp: true,
+        message: 'OTP sent to your phone number',
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: payment.amount,
+          displayMessage: pinData.display_text || 'Please enter the OTP sent to your phone',
+        },
+      });
+    }
+
+    // PIN accepted and payment successful immediately
+    if (pinData?.status === 'success') {
+      payment.status = 'successful';
+      payment.paidAt = new Date();
+      payment.verifiedAt = new Date();
+      payment.webhookData = pinData;
+      payment.metadata = {
+        ...payment.metadata,
+        requiresPin: false,
+        escrowStatus: 'held',
+        escrowHeldAt: new Date(),
+      };
+      await payment.save();
+
+      const delivery = await Delivery.findById(payment.deliveryId);
+      if (delivery) {
+        delivery.payment.status = 'paid';
+        delivery.payment.paidAt = new Date();
+        await delivery.save();
+      }
+
+      await sendNotification({
+        userId: customer._id,
+        title: '✅ Payment Successful',
+        message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+        data: {
+          type: 'payment_successful',
+          deliveryId: payment.deliveryId,
+          paymentId: payment._id,
+          amount: payment.amount,
+        },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Payment completed successfully!',
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: payment.amount,
+          deliveryId: payment.deliveryId,
+        },
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: `Unexpected status after PIN: ${pinData?.status}`,
+    });
+  } catch (error) {
+    console.error('❌ Submit PIN error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify PIN',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
 
 /**
  * @desc    Get driver payments and earnings
