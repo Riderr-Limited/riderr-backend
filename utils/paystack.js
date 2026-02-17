@@ -146,10 +146,6 @@ export const verifyPayment = async (reference) => {
 };
 
 
-/**
- * Charge a card directly (in-app)
- * Correct endpoint: POST /charge  (NOT /transaction/charge, NOT /payments/charge-card)
- */
 export const chargeCardViaPaystack = async (chargeData) => {
   try {
     console.log('💳 Charging card | email:', chargeData.email, '| amount:', chargeData.amount, 'NGN');
@@ -169,33 +165,72 @@ export const chargeCardViaPaystack = async (chargeData) => {
       },
     };
 
-    // PIN is sent at the top level, not inside card object
     if (chargeData.card.pin) {
       payload.pin = chargeData.card.pin;
       console.log('🔐 PIN included');
     }
 
-    // ✅ CORRECT endpoint (was wrongly set to /payments/charge-card)
     const response = await paystackAxios.post('/charge', payload);
+
+    // ✅ Log the FULL raw response so you can see exactly where reference lives
+    console.log('📦 Raw Paystack charge response:', JSON.stringify(response.data, null, 2));
 
     if (response.data.status === true) {
       const data = response.data.data;
 
+      // ✅ FIX: Paystack puts `reference` in different places depending on status.
+      // For send_otp / send_pin: it's in response.data.reference (top level)
+      // For success: it's in response.data.data.reference
+      // We capture BOTH and prefer data.reference, fall back to top-level reference.
+      const paystackReference = data?.reference || response.data.reference;
+
+      console.log('🔑 Paystack reference captured:', paystackReference);
+      console.log('   data.reference        :', data?.reference);
+      console.log('   response.data.reference:', response.data.reference);
+
       if (data.status === 'send_otp') {
-        return { success: true, requiresOtp: true, message: 'OTP sent to your phone', data };
-      }
-      if (data.status === 'send_pin') {
-        return { success: true, requiresPin: true, message: 'Card PIN required', data };
-      }
-      if (data.status === 'success') {
-        return { success: true, requiresOtp: false, message: 'Payment successful', data };
+        return {
+          success: true,
+          requiresOtp: true,
+          message: 'OTP sent to your phone',
+          // ✅ Attach paystackReference explicitly so the controller can save it
+          paystackReference,
+          data,
+        };
       }
 
-      // Unexpected status
-      return { success: false, message: data.gateway_response || `Unexpected status: ${data.status}`, error: data };
+      if (data.status === 'send_pin') {
+        return {
+          success: true,
+          requiresPin: true,
+          message: 'Card PIN required',
+          paystackReference,
+          data,
+        };
+      }
+
+      if (data.status === 'success') {
+        return {
+          success: true,
+          requiresOtp: false,
+          message: 'Payment successful',
+          paystackReference,
+          data,
+        };
+      }
+
+      return {
+        success: false,
+        message: data.gateway_response || `Unexpected status: ${data.status}`,
+        error: data,
+      };
     }
 
-    return { success: false, message: response.data.message || 'Card charge failed', error: response.data };
+    return {
+      success: false,
+      message: response.data.message || 'Card charge failed',
+      error: response.data,
+    };
   } catch (error) {
     return {
       success: false,
@@ -204,7 +239,6 @@ export const chargeCardViaPaystack = async (chargeData) => {
     };
   }
 };
-
 
 /**
  * Submit OTP for a pending charge

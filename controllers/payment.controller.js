@@ -540,24 +540,33 @@ export const chargeCard = async (req, res) => {
 
       // Handle OTP requirement
        
-        
-        
+        if (chargeData.status === 'send_otp') {
+        // ✅ FIX: Use chargeResult.paystackReference, not chargeData.reference.
+        // chargeData is response.data.data — reference may not be in there.
+        // We now return it explicitly from chargeCardViaPaystack.
+        const paystackRef = chargeResult.paystackReference;
 
-    if (chargeData.status === 'send_otp') {
+        console.log('🔐 OTP required');
+        console.log('   Internal ref  :', reference);
+        console.log('   Paystack ref  :', paystackRef);
+
+        if (!paystackRef) {
+          // Safety net: if we still can't get Paystack's reference, log the
+          // full chargeResult so you can see what came back
+          console.error('❌ CRITICAL: paystackReference is undefined. Full chargeResult:');
+          console.error(JSON.stringify(chargeResult, null, 2));
+        }
+
         payment.status = 'processing';
         payment.metadata = {
           ...payment.metadata,
           requiresOtp: true,
           requiresPin: false,
           cardLast4: cardDetails.number.slice(-4),
-          chargeReference: chargeData.reference, // Paystack's own reference
+          chargeReference: paystackRef || reference, // fallback to internal ref
         };
-        // ✅ Required for Mixed schema fields — without this Mongoose
-        // won't detect the change and won't save the new metadata values
         payment.markModified('metadata');
         await payment.save();
-
-        console.log(`🔐 OTP required — Paystack ref: ${chargeData.reference}`);
 
         return res.status(200).json({
           success: true,
@@ -574,15 +583,18 @@ export const chargeCard = async (req, res) => {
 
       // Handle PIN requirement
       if (chargeData.status === 'send_pin') {
+        const paystackRef = chargeResult.paystackReference;
+
+        console.log('🔐 PIN required | Paystack ref:', paystackRef);
+
         payment.status = 'processing';
         payment.metadata = {
           ...payment.metadata,
           requiresPin: true,
           requiresOtp: false,
           cardLast4: cardDetails.number.slice(-4),
-          chargeReference: chargeData.reference,
+          chargeReference: paystackRef || reference,
         };
-        // ✅ Required for Mixed schema fields
         payment.markModified('metadata');
         await payment.save();
 
@@ -599,6 +611,63 @@ export const chargeCard = async (req, res) => {
         });
       }
 
+      // Payment successful immediately (no OTP/PIN needed)
+      if (chargeData.status === 'success') {
+        payment.status = 'successful';
+        payment.paidAt = new Date();
+        payment.verifiedAt = new Date();
+        payment.webhookData = chargeData;
+        payment.metadata = {
+          ...payment.metadata,
+          cardLast4: cardDetails.number.slice(-4),
+          cardType: chargeData.authorization?.card_type,
+          bank: chargeData.authorization?.bank,
+          escrowStatus: 'held',
+          escrowHeldAt: new Date(),
+        };
+        payment.markModified('metadata');
+        await payment.save();
+
+        const delivery = await Delivery.findById(payment.deliveryId);
+        if (delivery) {
+          delivery.payment.status = 'paid';
+          delivery.payment.paidAt = new Date();
+          await delivery.save();
+        }
+
+        await sendNotification({
+          userId: customer._id,
+          title: '✅ Payment Successful',
+          message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+          data: {
+            type: 'payment_successful',
+            deliveryId: payment.deliveryId,
+            paymentId: payment._id,
+            amount: payment.amount,
+          },
+        });
+
+        return res.status(200).json({
+          success: true,
+          requiresOtp: false,
+          message: 'Payment successful!',
+          data: {
+            paymentId: payment._id,
+            reference: reference,
+            amount: payment.amount,
+            deliveryId: payment.deliveryId,
+          },
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: `Unexpected payment status: ${chargeData.status}`,
+      });
+
+        
+
+    
 
       // Payment successful
       if (chargeData.status === 'success') {
@@ -2576,14 +2645,27 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // ✅ Use Paystack's reference for OTP submission, not your RIDERR-xxx ref
-    const paystackReference = payment.metadata?.chargeReference || reference;
+     const paystackReference = payment.metadata?.chargeReference;
 
-    console.log(`🔐 Submitting OTP`);
-    console.log(`   Internal ref : ${reference}`);
-    console.log(`   Paystack ref : ${paystackReference}`);
-    console.log(`   requiresOtp  : ${payment.metadata?.requiresOtp}`);
-    console.log(`   chargeRef    : ${payment.metadata?.chargeReference}`);
+    console.log('🔐 Submitting OTP to Paystack');
+    console.log('   Internal ref  :', reference);
+    console.log('   chargeReference from metadata:', paystackReference);
+    console.log('   Full metadata :', JSON.stringify(payment.metadata, null, 2));
+
+    if (!paystackReference) {
+      console.error('❌ chargeReference missing from payment metadata!');
+      console.error('   This means it was not saved during chargeCard step.');
+      console.error('   Payment status:', payment.status);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment session expired or invalid. Please start a new payment.',
+        debug: process.env.NODE_ENV !== 'production' ? {
+          hint: 'chargeReference was not saved to metadata during charge step',
+          paymentStatus: payment.status,
+          metadataKeys: Object.keys(payment.metadata || {}),
+        } : undefined,
+      });
+    }
 
     const otpResult = await submitOtpToPaystack({
       otp: otp.toString().trim(),
