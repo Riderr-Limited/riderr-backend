@@ -29,6 +29,8 @@ const corsOptions = {
       "https://api.riderrr.vercel.app",
       "https://api.riderr.ng/api",
       "https://riderr-backend.onrender.com/api",
+                "https://riderr-backend.onrender.com",
+
       // Add your actual deployed backend URL
       process.env.FRONTEND_URL,
       process.env.CLIENT_URL

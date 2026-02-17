@@ -99,10 +99,11 @@ const startServer = async () => {
       cors: {
         origin: [
           "http://localhost:3000",
-          "http://localhost:3001",
+          "http://localhost:3001", 
           "https://riderr.ng",
           "https://www.riderr.ng",
           "https://riderrr.vercel.app",
+          "https://riderr-backend.onrender.com",
           process.env.FRONTEND_URL,
           process.env.CLIENT_URL,
         ].filter(Boolean),
