@@ -1,231 +1,142 @@
-// utils/paystack.js - FIXED VERSION WITH PROPER KEY HANDLING
+// utils/paystack.js - FIXED: Correct Paystack API endpoints
 import axios from 'axios';
 
-// ===== ENVIRONMENT-BASED CONFIGURATION =====
+// ===== ENVIRONMENT CONFIGURATION =====
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-// 🔴 FORCE LIVE MODE - Set to true to use live keys even in development
-// Set this via environment variable: FORCE_LIVE_MODE=true
-const FORCE_LIVE_MODE = true
-
-// Live Keys (for production and when forced)
+// Keys — env vars take priority, hardcoded values are fallback
 const LIVE_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
 const LIVE_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || 'pk_live_3b52907c8d7a45ff0d023758e4a810bec5e2fc8a';
-
-// Test Keys (for development/testing)
 const TEST_SECRET_KEY = process.env.PAYSTACK_TEST_SECRET_KEY || 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac';
 const TEST_PUBLIC_KEY = process.env.PAYSTACK_TEST_PUBLIC_KEY || 'pk_test_5240eb0402f627e4bdc37a9971c35a20ed27a0f0';
 
-// ✅ ALWAYS USE LIVE KEYS
+// Always use live keys
 const PAYSTACK_SECRET_KEY = LIVE_SECRET_KEY;
 const PAYSTACK_PUBLIC_KEY = LIVE_PUBLIC_KEY;
-const USE_LIVE_KEYS = true; 
+const USE_LIVE_KEYS = true;
 
-// URLs
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://riderr.ng';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://riderr-backend.onrender.com/api';
+// ✅ FIX: BACKEND_URL must NOT include /api — it's appended in MOBILE_CALLBACK_URL
+const BACKEND_URL = process.env.BACKEND_URL || 'https://riderr-backend.onrender.com';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
-// ✅ Log configuration (without exposing full keys)
+// Log config on startup
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 console.log('🔧 Paystack Configuration:');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('Environment:', IS_PRODUCTION ? '🔴 PRODUCTION' : '🟡 DEVELOPMENT');
-console.log('Force Live Mode:', FORCE_LIVE_MODE ? '✅ ENABLED' : '❌ DISABLED');
-console.log('Using Keys:', USE_LIVE_KEYS ? '🔴 LIVE KEYS' : '🟡 TEST KEYS');
-console.log('Secret Key:', PAYSTACK_SECRET_KEY.substring(0, 15) + '...' + PAYSTACK_SECRET_KEY.slice(-4));
-console.log('Public Key:', PAYSTACK_PUBLIC_KEY.substring(0, 15) + '...' + PAYSTACK_PUBLIC_KEY.slice(-4));
-console.log('Callback URL:', MOBILE_CALLBACK_URL);
+console.log('Environment    :', IS_PRODUCTION ? '🔴 PRODUCTION' : '🟡 DEVELOPMENT');
+console.log('Using Keys     :', USE_LIVE_KEYS ? '🔴 LIVE KEYS' : '🟡 TEST KEYS');
+console.log('Secret Key     :', PAYSTACK_SECRET_KEY.substring(0, 15) + '...' + PAYSTACK_SECRET_KEY.slice(-4));
+console.log('Public Key     :', PAYSTACK_PUBLIC_KEY.substring(0, 15) + '...' + PAYSTACK_PUBLIC_KEY.slice(-4));
+console.log('Callback URL   :', MOBILE_CALLBACK_URL);
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-// ✅ Validate keys
+// Validate key format
 if (!PAYSTACK_SECRET_KEY || PAYSTACK_SECRET_KEY.length < 20) {
-  console.error('❌ ERROR: Invalid or missing Paystack secret key!');
-  console.error('Current key:', PAYSTACK_SECRET_KEY?.substring(0, 15) || 'NONE');
-  throw new Error('Invalid Paystack secret key');
+  throw new Error('❌ PAYSTACK_SECRET_KEY is missing or too short');
 }
-
 if (!PAYSTACK_SECRET_KEY.startsWith('sk_')) {
-  console.error('❌ ERROR: Paystack secret key must start with "sk_"');
-  console.error('Current key starts with:', PAYSTACK_SECRET_KEY.substring(0, 5));
-  throw new Error('Invalid Paystack secret key format');
+  throw new Error('❌ PAYSTACK_SECRET_KEY must start with "sk_"');
 }
 
-// Create axios instance
+// Axios instance pointed at Paystack's real API
 const paystackAxios = axios.create({
   baseURL: 'https://api.paystack.co',
   headers: {
-    'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+    Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
     'Content-Type': 'application/json',
   },
   timeout: 30000,
 });
 
-// Add request interceptor for logging
-paystackAxios.interceptors.request.use((config) => {
-  if (!IS_PRODUCTION || FORCE_LIVE_MODE) {
-    console.log('📤 Paystack Request:', config.method?.toUpperCase(), config.url);
-    console.log('   Auth:', config.headers.Authorization.substring(0, 30) + '...');
+// Request logger
+paystackAxios.interceptors.request.use(
+  (config) => {
+    console.log(`📤 Paystack → ${config.method?.toUpperCase()} ${config.url}`);
+    console.log('   Auth prefix:', config.headers.Authorization.substring(0, 25) + '...');
+    return config;
+  },
+  (error) => {
+    console.error('❌ Paystack request setup error:', error.message);
+    return Promise.reject(error);
   }
-  return config;
-}, (error) => {
-  console.error('❌ Request Error:', error);
-  return Promise.reject(error);
-});
+);
 
-// Add response interceptor for logging
-paystackAxios.interceptors.response.use((response) => {
-  if (!IS_PRODUCTION || FORCE_LIVE_MODE) {
-    console.log('📥 Paystack Response:', response.status, response.config.url);
-    console.log('   Status:', response.data.status);
+// Response logger
+paystackAxios.interceptors.response.use(
+  (response) => {
+    console.log(`📥 Paystack ← ${response.status} ${response.config.url} | status: ${response.data.status}`);
+    return response;
+  },
+  (error) => {
+    console.error(`❌ Paystack error: ${error.response?.status} ${error.config?.url}`);
+    if (error.response?.data) {
+      console.error('   Details:', JSON.stringify(error.response.data, null, 2));
+    }
+    return Promise.reject(error);
   }
-  return response;
-}, (error) => {
-  console.error('❌ Response Error:', error.response?.status, error.response?.data);
-  
-  // Log more details about the error
-  if (error.response?.data) {
-    console.error('   Error Details:', JSON.stringify(error.response.data, null, 2));
-  }
-  
-  return Promise.reject(error);
-});
+);
+
 
 /**
- * Initialize payment with Paystack
- * Supports: Card, Bank Transfer, USSD, QR
+ * Initialize a payment transaction
+ * Correct endpoint: POST /transaction/initialize
  */
 export const initializePayment = async (paymentData) => {
   try {
-    console.log('💰 Initializing payment...');
-    console.log('Email:', paymentData.email);
-    console.log('Amount:', paymentData.amount);
-    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
-    
-    // Convert to kobo (Paystack uses kobo, not naira)
     const amountInKobo = Math.round(paymentData.amount * 100);
-    
-    // Build payload
+
     const payload = {
       email: paymentData.email,
       amount: amountInKobo,
       currency: 'NGN',
+      reference: paymentData.reference || `RIDERR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      callback_url: paymentData.callback_url || MOBILE_CALLBACK_URL,
+      channels: paymentData.channels || ['card', 'bank', 'ussd', 'qr'],
       metadata: {
         ...paymentData.metadata,
         environment: USE_LIVE_KEYS ? 'live' : 'test',
-        isProduction: IS_PRODUCTION,
-        forceLiveMode: FORCE_LIVE_MODE,
       },
-      reference: paymentData.reference || `RIDERR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      channels: paymentData.channels || ['card', 'bank', 'ussd', 'qr'], // All supported channels
     };
 
-    // Set callback URL
-    payload.callback_url = paymentData.callback_url || MOBILE_CALLBACK_URL;
-
-    // Add split payment (escrow) if subaccount provided
     if (paymentData.subaccount) {
       payload.subaccount = paymentData.subaccount;
-      
-      // Platform fee (10%)
+      payload.bearer = paymentData.bearer || 'account';
       if (paymentData.transaction_charge) {
         payload.transaction_charge = Math.round(paymentData.transaction_charge * 100);
       }
-      
-      // Who pays Paystack fees
-      payload.bearer = paymentData.bearer || 'account'; // Company pays fees
-      
-      console.log('🏦 ESCROW MODE: Split payment enabled');
-      console.log('Platform Fee:', payload.transaction_charge / 100, 'NGN');
     }
-    
-    console.log('📤 Sending request to Paystack...');
-    
-    // Make request to Paystack
+
+    // ✅ CORRECT endpoint
     const response = await paystackAxios.post('/transaction/initialize', payload);
 
     if (response.data.status === true) {
-      console.log('✅ Payment initialized successfully');
-      console.log('   Reference:', response.data.data.reference);
-      console.log('   Access Code:', response.data.data.access_code);
-      
-      return {
-        success: true,
-        message: 'Payment initialized successfully',
-        data: response.data.data,
-      };
-    } else {
-      console.error('❌ Paystack initialization failed:', response.data.message);
-      return {
-        success: false,
-        message: response.data.message || 'Failed to initialize payment',
-        error: response.data,
-      };
+      return { success: true, message: 'Payment initialized', data: response.data.data };
     }
+    return { success: false, message: response.data.message || 'Initialization failed', error: response.data };
   } catch (error) {
-    console.error('❌ Payment initialization error:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data,
-      config: {
-        url: error.config?.url,
-        method: error.config?.method,
-        authHeader: error.config?.headers?.Authorization?.substring(0, 30) + '...',
-      }
-    });
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Payment initialization failed',
       error: error.response?.data || error.message,
-      keyInfo: {
-        usingLiveKeys: USE_LIVE_KEYS,
-        keyPrefix: PAYSTACK_SECRET_KEY.substring(0, 10),
-        keyLength: PAYSTACK_SECRET_KEY.length,
-      }
     };
   }
 };
 
+
 /**
- * Verify payment with Paystack
+ * Verify a payment by reference
+ * Correct endpoint: GET /transaction/verify/:reference
  */
 export const verifyPayment = async (reference) => {
   try {
-    console.log('🔍 Verifying payment:', reference);
-    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
-    
+    // ✅ CORRECT endpoint (was wrongly set to /payments/verify/:reference)
     const response = await paystackAxios.get(`/transaction/verify/${reference}`);
-    
+
     if (response.data.status === true) {
-      const data = response.data.data;
-      
-      // Log split payment details
-      if (data.subaccount) {
-        console.log('💰 Split Payment Detected:');
-        console.log('Total Amount:', data.amount / 100, 'NGN');
-        console.log('Company Amount:', data.subaccount?.share / 100, 'NGN');
-        console.log('Platform Fee:', (data.amount - data.subaccount?.share) / 100, 'NGN');
-      }
-      
-      console.log('✅ Payment verified:', data.status);
-      
-      return {
-        success: true,
-        message: 'Payment verified successfully',
-        data: data,
-      };
-    } else {
-      console.error('❌ Verification failed:', response.data.message);
-      return {
-        success: false,
-        message: response.data.message || 'Payment verification failed',
-        error: response.data,
-      };
+      return { success: true, message: 'Payment verified', data: response.data.data };
     }
+    return { success: false, message: response.data.message || 'Verification failed', error: response.data };
   } catch (error) {
-    console.error('❌ Verification error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Payment verification failed',
@@ -234,20 +145,18 @@ export const verifyPayment = async (reference) => {
   }
 };
 
+
 /**
- * Charge card directly (for in-app payments)
+ * Charge a card directly (in-app)
+ * Correct endpoint: POST /charge  (NOT /transaction/charge, NOT /payments/charge-card)
  */
 export const chargeCardViaPaystack = async (chargeData) => {
   try {
-    console.log('💳 Charging card directly...');
-    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
-    console.log('Email:', chargeData.email);
-    console.log('Amount:', chargeData.amount, 'NGN');
-    console.log('Card ending:', chargeData.card.number.slice(-4));
-    
+    console.log('💳 Charging card | email:', chargeData.email, '| amount:', chargeData.amount, 'NGN');
+
     const payload = {
       email: chargeData.email,
-      amount: Math.round(chargeData.amount * 100), // Convert to kobo
+      amount: Math.round(chargeData.amount * 100), // kobo
       card: {
         number: chargeData.card.number,
         cvv: chargeData.card.cvv,
@@ -260,69 +169,34 @@ export const chargeCardViaPaystack = async (chargeData) => {
       },
     };
 
-    // Add PIN if provided (for Nigerian cards)
+    // PIN is sent at the top level, not inside card object
     if (chargeData.card.pin) {
       payload.pin = chargeData.card.pin;
-      console.log('🔐 PIN provided for Nigerian card');
+      console.log('🔐 PIN included');
     }
 
-    console.log('📤 Sending charge request to Paystack...');
-    const response = await paystackAxios.post('/transaction/charge', payload);
+    // ✅ CORRECT endpoint (was wrongly set to /payments/charge-card)
+    const response = await paystackAxios.post('/charge', payload);
 
     if (response.data.status === true) {
       const data = response.data.data;
-      
-      // Handle different charge statuses
+
       if (data.status === 'send_otp') {
-        console.log('🔐 OTP required');
-        return {
-          success: true,
-          requiresOtp: true,
-          message: 'OTP sent to your phone',
-          data: data,
-        };
+        return { success: true, requiresOtp: true, message: 'OTP sent to your phone', data };
       }
-      
       if (data.status === 'send_pin') {
-        console.log('🔐 PIN required');
-        return {
-          success: true,
-          requiresPin: true,
-          message: 'Card PIN required',
-          data: data,
-        };
+        return { success: true, requiresPin: true, message: 'Card PIN required', data };
       }
-      
       if (data.status === 'success') {
-        console.log('✅ Card charged successfully');
-        return {
-          success: true,
-          requiresOtp: false,
-          message: 'Payment successful',
-          data: data,
-        };
+        return { success: true, requiresOtp: false, message: 'Payment successful', data };
       }
-      
-      console.warn('⚠️ Unexpected charge status:', data.status);
-      return {
-        success: false,
-        message: data.gateway_response || 'Payment failed',
-        error: data,
-      };
+
+      // Unexpected status
+      return { success: false, message: data.gateway_response || `Unexpected status: ${data.status}`, error: data };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'Card charge failed',
-      error: response.data,
-    };
+
+    return { success: false, message: response.data.message || 'Card charge failed', error: response.data };
   } catch (error) {
-    console.error('❌ Card charge error:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data,
-    });
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Card charge failed',
@@ -331,47 +205,29 @@ export const chargeCardViaPaystack = async (chargeData) => {
   }
 };
 
+
 /**
- * Submit OTP for pending charge
+ * Submit OTP for a pending charge
+ * Correct endpoint: POST /charge/submit_otp
  */
 export const submitOtpToPaystack = async (otpData) => {
   try {
-    console.log('🔐 Submitting OTP...');
-    console.log('Reference:', otpData.reference);
-    
-    const response = await paystackAxios.post('/transaction/submit_otp', {
+    // ✅ CORRECT endpoint (was /transaction/submit_otp)
+    const response = await paystackAxios.post('/charge/submit_otp', {
       otp: otpData.otp,
       reference: otpData.reference,
     });
 
     if (response.data.status === true) {
       const data = response.data.data;
-      
       if (data.status === 'success') {
-        console.log('✅ OTP verified, payment successful');
-        return {
-          success: true,
-          message: 'Payment successful',
-          data: data,
-        };
+        return { success: true, message: 'Payment successful', data };
       }
-      
-      console.error('❌ OTP verification failed:', data.gateway_response);
-      return {
-        success: false,
-        message: data.gateway_response || 'Invalid OTP',
-        error: data,
-      };
+      return { success: false, message: data.gateway_response || 'Invalid OTP', error: data };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'OTP submission failed',
-      error: response.data,
-    };
+
+    return { success: false, message: response.data.message || 'OTP submission failed', error: response.data };
   } catch (error) {
-    console.error('❌ OTP submission error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Invalid OTP',
@@ -380,27 +236,57 @@ export const submitOtpToPaystack = async (otpData) => {
   }
 };
 
+
 /**
- * Create dedicated virtual account for bank transfer
+ * Submit PIN for a pending charge
+ * Correct endpoint: POST /charge/submit_pin
+ */
+export const submitPinToPaystack = async (pinData) => {
+  try {
+    const response = await paystackAxios.post('/charge/submit_pin', {
+      pin: pinData.pin,
+      reference: pinData.reference,
+    });
+
+    if (response.data.status === true) {
+      const data = response.data.data;
+      if (data.status === 'send_otp') {
+        return { success: true, requiresOtp: true, message: 'OTP sent to your phone', data };
+      }
+      if (data.status === 'success') {
+        return { success: true, message: 'Payment successful', data };
+      }
+      return { success: false, message: data.gateway_response || `Status: ${data.status}`, error: data };
+    }
+
+    return { success: false, message: response.data.message || 'PIN submission failed', error: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      message: error.response?.data?.message || 'PIN submission failed',
+      error: error.response?.data || error.message,
+    };
+  }
+};
+
+
+/**
+ * Create a dedicated virtual account for bank transfers
+ * Correct endpoint: POST /dedicated_account
  */
 export const createDedicatedVirtualAccount = async (accountData) => {
   try {
-    console.log('🏦 Creating dedicated virtual account...');
-    console.log('Using:', USE_LIVE_KEYS ? 'LIVE KEYS 🔴' : 'TEST KEYS 🟡');
-    
     const response = await paystackAxios.post('/dedicated_account', {
       email: accountData.email,
       first_name: accountData.first_name,
       last_name: accountData.last_name,
       phone: accountData.phone,
-      preferred_bank: accountData.preferred_bank || 'wema-bank', // or 'titan-paystack'
+      preferred_bank: accountData.preferred_bank || 'wema-bank',
       metadata: accountData.metadata || {},
     });
 
     if (response.data.status === true) {
       const data = response.data.data;
-      console.log('✅ Virtual account created:', data.account_number);
-      
       return {
         success: true,
         message: 'Virtual account created',
@@ -415,15 +301,9 @@ export const createDedicatedVirtualAccount = async (accountData) => {
         },
       };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'Failed to create virtual account',
-      error: response.data,
-    };
+
+    return { success: false, message: response.data.message || 'Failed to create virtual account', error: response.data };
   } catch (error) {
-    console.error('❌ Virtual account creation error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Failed to create virtual account',
@@ -432,18 +312,18 @@ export const createDedicatedVirtualAccount = async (accountData) => {
   }
 };
 
+
 /**
- * Create subaccount for company (for escrow payments)
+ * Create a subaccount for a company
+ * Correct endpoint: POST /subaccount
  */
 export const createSubaccount = async (companyData) => {
   try {
-    console.log('🏦 Creating subaccount for:', companyData.businessName);
-    
     const response = await paystackAxios.post('/subaccount', {
       business_name: companyData.businessName,
       settlement_bank: companyData.bankCode,
       account_number: companyData.accountNumber,
-      percentage_charge: 10, // Platform takes 10%
+      percentage_charge: 10,
       description: `Riderr Logistics - ${companyData.businessName}`,
       primary_contact_email: companyData.email,
       primary_contact_name: companyData.ownerName,
@@ -457,8 +337,6 @@ export const createSubaccount = async (companyData) => {
 
     if (response.data.status === true) {
       const data = response.data.data;
-      console.log('✅ Subaccount created:', data.subaccount_code);
-      
       return {
         success: true,
         message: 'Subaccount created successfully',
@@ -472,15 +350,9 @@ export const createSubaccount = async (companyData) => {
         },
       };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'Failed to create subaccount',
-      error: response.data,
-    };
+
+    return { success: false, message: response.data.message || 'Failed to create subaccount', error: response.data };
   } catch (error) {
-    console.error('❌ Subaccount creation error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Subaccount creation failed',
@@ -489,13 +361,13 @@ export const createSubaccount = async (companyData) => {
   }
 };
 
+
 /**
- * Update subaccount
+ * Update a subaccount
+ * Correct endpoint: PUT /subaccount/:code
  */
 export const updateSubaccount = async (subaccountCode, updateData) => {
   try {
-    console.log('📝 Updating subaccount:', subaccountCode);
-    
     const response = await paystackAxios.put(`/subaccount/${subaccountCode}`, {
       business_name: updateData.businessName,
       settlement_bank: updateData.bankCode,
@@ -506,22 +378,10 @@ export const updateSubaccount = async (subaccountCode, updateData) => {
     });
 
     if (response.data.status === true) {
-      console.log('✅ Subaccount updated');
-      return {
-        success: true,
-        message: 'Subaccount updated successfully',
-        data: response.data.data,
-      };
+      return { success: true, message: 'Subaccount updated', data: response.data.data };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'Failed to update subaccount',
-      error: response.data,
-    };
+    return { success: false, message: response.data.message || 'Failed to update subaccount', error: response.data };
   } catch (error) {
-    console.error('❌ Subaccount update error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Subaccount update failed',
@@ -530,27 +390,19 @@ export const updateSubaccount = async (subaccountCode, updateData) => {
   }
 };
 
+
 /**
  * Get list of Nigerian banks
+ * Correct endpoint: GET /bank?currency=NGN
  */
 export const getBankList = async () => {
   try {
     const response = await paystackAxios.get('/bank?currency=NGN');
-    
     if (response.data.status === true) {
-      return {
-        success: true,
-        data: response.data.data,
-      };
+      return { success: true, data: response.data.data };
     }
-    
-    return {
-      success: false,
-      message: 'Failed to get bank list',
-    };
+    return { success: false, message: 'Failed to get bank list' };
   } catch (error) {
-    console.error('❌ Get banks error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: 'Failed to get bank list',
@@ -559,23 +411,18 @@ export const getBankList = async () => {
   }
 };
 
+
 /**
- * Resolve and verify bank account
+ * Resolve / verify a bank account number
+ * Correct endpoint: GET /bank/resolve
  */
 export const resolveAccountNumber = async (accountNumber, bankCode) => {
   try {
-    console.log('🔍 Resolving account:', accountNumber);
-    
     const response = await paystackAxios.get('/bank/resolve', {
-      params: {
-        account_number: accountNumber,
-        bank_code: bankCode,
-      },
+      params: { account_number: accountNumber, bank_code: bankCode },
     });
 
     if (response.data.status === true) {
-      console.log('✅ Account resolved:', response.data.data.account_name);
-      
       return {
         success: true,
         data: {
@@ -584,14 +431,8 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
         },
       };
     }
-    
-    return {
-      success: false,
-      message: response.data.message || 'Account resolution failed',
-    };
+    return { success: false, message: response.data.message || 'Account resolution failed' };
   } catch (error) {
-    console.error('❌ Account resolution error:', error.response?.data || error.message);
-    
     return {
       success: false,
       message: error.response?.data?.message || 'Account resolution failed',
@@ -600,33 +441,18 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
   }
 };
 
-/**
- * Get public key for frontend
- */
-export const getPublicKey = () => {
-  return PAYSTACK_PUBLIC_KEY;
-};
 
-/**
- * Check if using live keys
- */
-export const isUsingLiveKeys = () => {
-  return USE_LIVE_KEYS;
-};
+// Helpers
+export const getPublicKey = () => PAYSTACK_PUBLIC_KEY;
+export const isUsingLiveKeys = () => USE_LIVE_KEYS;
+export const isProduction = () => IS_PRODUCTION;
 
-/**
- * Check if in production mode
- */
-export const isProduction = () => {
-  return IS_PRODUCTION;
-};
-
-// Export all functions
 export default {
   initializePayment,
   verifyPayment,
   chargeCardViaPaystack,
   submitOtpToPaystack,
+  submitPinToPaystack,
   createDedicatedVirtualAccount,
   createSubaccount,
   updateSubaccount,

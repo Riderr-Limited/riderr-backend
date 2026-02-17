@@ -1,4 +1,4 @@
-// routes/payment.routes.js
+// routes/payment.routes.js - FIXED: Route ordering (dynamic /:id must be LAST)
 import express from 'express';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import {
@@ -11,10 +11,13 @@ import {
   checkPaymentStatus,
   completeAndSettlePayment,
   getCompanyPayments,
-   chargeCard, 
-  submitOtp, 
-  initiateBankTransfer, 
-   getDriverPayments,
+  getCompanySettlementDetails,
+  downloadSettlementReceipt,
+  chargeCard,
+  submitOtp,
+  initiateBankTransfer,
+  verifyBankTransferManually,
+  getDriverPayments,
   getDriverPaymentDetails,
   requestCashSettlement,
   markCashPaymentAsSettled,
@@ -23,38 +26,50 @@ import {
 
 const router = express.Router();
 
-// ============ WEBHOOK ROUTES (Public - must be first) ============
+// ============================================================
+// 1. WEBHOOK (public, no auth — must be before everything)
+// ============================================================
 router.post('/webhook', handlePaystackWebhook);
 
-// ============ MOBILE-SPECIFIC ROUTES ============
-router.get('/mobile-callback', mobilePaymentCallback);  
+// ============================================================
+// 2. PUBLIC CALLBACKS
+// ============================================================
+router.get('/mobile-callback', mobilePaymentCallback);
 
-
-// ============ IN-APP PAYMENT ROUTES ✅ NEW ============
-router.post('/charge-card', authenticate, chargeCard);
-router.post('/submit-otp', authenticate, submitOtp);
+// ============================================================
+// 3. CUSTOMER ROUTES
+// ============================================================
+router.post('/initialize',           authenticate, initializeDeliveryPayment);
+router.post('/charge-card',          authenticate, chargeCard);
+router.post('/submit-otp',           authenticate, submitOtp);
 router.post('/initiate-bank-transfer', authenticate, initiateBankTransfer);
+router.post('/verify-bank-transfer', authenticate, verifyBankTransferManually); // kept from controller
 
+router.get('/verify/:reference',     authenticate, verifyDeliveryPayment);
+router.get('/status/:reference',     authenticate, checkPaymentStatus);
+router.get('/my-payments',           authenticate, getMyPayments);
 
-// ============ CUSTOMER PAYMENT ROUTES ============
-router.post('/initialize', authenticate, initializeDeliveryPayment);
-router.get('/verify/:reference', authenticate, verifyDeliveryPayment);
-router.get('/my-payments', authenticate, getMyPayments);
-router.get('/status/:reference', authenticate, checkPaymentStatus);
+// ============================================================
+// 4. COMPANY ROUTES
+// ============================================================
+router.get('/company-payments',                              authenticate, getCompanyPayments);
+router.get('/company-settlements/:paymentId',               authenticate, getCompanySettlementDetails);
+router.get('/company-settlements/:paymentId/receipt',       authenticate, downloadSettlementReceipt);
+router.post('/complete-and-settle/:deliveryId',             authenticate, completeAndSettlePayment);
 
-// ============ COMPANY ROUTES (Must come before /:paymentId) ============
-router.get('/company-payments', authenticate, getCompanyPayments);
-router.post('/complete-and-settle/:deliveryId', authenticate, completeAndSettlePayment);
+// ============================================================
+// 5. DRIVER ROUTES
+// ============================================================
+router.get('/driver-payments',                                        authenticate, getDriverPayments);
+router.get('/driver-earnings',                                        authenticate, getDriverEarningsSummary);
+router.get('/driver-payments/:paymentId',                             authenticate, getDriverPaymentDetails);
+router.post('/driver-payments/:paymentId/request-settlement',        authenticate, requestCashSettlement);
+router.post('/driver-payments/:paymentId/mark-settled',              authenticate, markCashPaymentAsSettled);
 
-// ============ DYNAMIC ROUTES (Must be last) ============
+// ============================================================
+// 6. DYNAMIC ROUTE — /:paymentId must ALWAYS be last
+//    (otherwise it swallows the named routes above)
+// ============================================================
 router.get('/:paymentId', authenticate, getPaymentDetails);
-
-// Driver Payment Routes
-router.get('/driver-payments', authenticate, getDriverPayments);
-router.get('/driver-payments/:paymentId', authenticate, getDriverPaymentDetails);
-router.post('/driver-payments/:paymentId/request-settlement', authenticate, requestCashSettlement);
-router.post('/driver-payments/:paymentId/mark-settled', authenticate, markCashPaymentAsSettled);
-router.get('/driver-earnings', authenticate, getDriverEarningsSummary);
-
 
 export default router;
