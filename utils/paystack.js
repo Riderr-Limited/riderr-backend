@@ -23,7 +23,7 @@ const USE_LIVE_KEYS = true;
 
 // URLs
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://riderr.ng';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://api.riderrapp.com';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://riderr-backend.onrender.com/api';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
 // ✅ Log configuration (without exposing full keys)
