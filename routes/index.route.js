@@ -12,6 +12,7 @@ import chatRoutes from "./chat.routes.js";
 import voiceCallRoutes from "./voiceCall.routes.js";
 import supportTicketRoutes from "./supportTicket.routes.js";
 import adminChatRoutes from "./adminChat.routes.js";
+import contactRoutes from "./contact.routes.js";
 
 const router = express.Router();
 
@@ -64,6 +65,9 @@ router.use("/v1/support", supportTicketRoutes);
 
 // Admin chat routes
 router.use("/admin-chat", adminChatRoutes);
+
+// Contact form routes
+router.use("/contact", contactRoutes);
 
 // ============ 404 HANDLER (MUST BE LAST) ============
 /**
