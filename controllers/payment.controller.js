@@ -539,22 +539,25 @@ export const chargeCard = async (req, res) => {
       const chargeData = chargeResult.data;
 
       // Handle OTP requirement
-      if (chargeData.status === 'send_otp') {
+       
+        
+        
+
+    if (chargeData.status === 'send_otp') {
         payment.status = 'processing';
         payment.metadata = {
           ...payment.metadata,
           requiresOtp: true,
+          requiresPin: false,
           cardLast4: cardDetails.number.slice(-4),
-          // ✅ FIX: Store Paystack's OWN reference (chargeData.reference),
-          // NOT your internal RIDERR-xxx reference.
-          // Paystack requires its own reference when you call /charge/submit_otp.
-          chargeReference: chargeData.reference,
+          chargeReference: chargeData.reference, // Paystack's own reference
         };
+        // ✅ Required for Mixed schema fields — without this Mongoose
+        // won't detect the change and won't save the new metadata values
+        payment.markModified('metadata');
         await payment.save();
-        
-       console.log(`🔐 OTP required`);
-        console.log(`   Internal ref : ${reference}`);
-        console.log(`   Paystack ref : ${chargeData.reference}`);
+
+        console.log(`🔐 OTP required — Paystack ref: ${chargeData.reference}`);
 
         return res.status(200).json({
           success: true,
@@ -562,7 +565,7 @@ export const chargeCard = async (req, res) => {
           message: 'OTP sent to your phone number',
           data: {
             paymentId: payment._id,
-            reference: reference,           
+            reference: reference,
             amount: payment.amount,
             displayMessage: chargeData.display_text || 'Please enter the OTP sent to your phone',
           },
@@ -575,10 +578,12 @@ export const chargeCard = async (req, res) => {
         payment.metadata = {
           ...payment.metadata,
           requiresPin: true,
+          requiresOtp: false,
           cardLast4: cardDetails.number.slice(-4),
-          // ✅ Also save Paystack's reference for PIN submission
           chargeReference: chargeData.reference,
         };
+        // ✅ Required for Mixed schema fields
+        payment.markModified('metadata');
         await payment.save();
 
         return res.status(200).json({
@@ -593,6 +598,7 @@ export const chargeCard = async (req, res) => {
           },
         });
       }
+
 
       // Payment successful
       if (chargeData.status === 'success') {
@@ -2524,21 +2530,10 @@ export const downloadSettlementReceipt = async (req, res) => {
 
 
 
-
 /**
  * @desc    Submit OTP for card charge
  * @route   POST /api/payments/submit-otp
  * @access  Private (Customer)
- */
-/**
- * @desc    Submit OTP for card charge
- * @route   POST /api/payments/submit-otp
- * @access  Private (Customer)
- *
- * FIX: Paystack's /charge/submit_otp requires the reference that PAYSTACK
- * assigned to the charge — NOT your internal RIDERR-xxx reference.
- * These can differ. We store Paystack's reference in metadata.chargeReference
- * during the charge step and use that here.
  */
 export const submitOtp = async (req, res) => {
   try {
@@ -2552,14 +2547,6 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    if (!otp.toString().trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'OTP cannot be empty',
-      });
-    }
-
-    // Find payment by YOUR internal reference
     const payment = await Payment.findOne({
       paystackReference: reference,
       customerId: customer._id,
@@ -2579,31 +2566,28 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    if (!payment.metadata?.requiresOtp) {
+    // ✅ FIXED: Don't check requiresOtp flag (it was being silently dropped
+    // by the old strict schema). Instead check payment is in 'processing'
+    // state and that we have a chargeReference saved.
+    if (payment.status !== 'processing') {
       return res.status(400).json({
         success: false,
-        message: 'No OTP is pending for this payment',
+        message: `Payment is not awaiting OTP. Current status: ${payment.status}`,
       });
     }
 
-    // ✅ FIX: Use Paystack's own reference for OTP submission.
-    // During chargeCard, Paystack returns its own reference in chargeData.reference
-    // which we stored as metadata.chargeReference. Use that — NOT the RIDERR-xxx ref.
+    // ✅ Use Paystack's reference for OTP submission, not your RIDERR-xxx ref
     const paystackReference = payment.metadata?.chargeReference || reference;
 
-    console.log(`🔐 Submitting OTP for payment ${payment._id}`);
+    console.log(`🔐 Submitting OTP`);
     console.log(`   Internal ref : ${reference}`);
     console.log(`   Paystack ref : ${paystackReference}`);
-
-    if (paystackReference === reference && !payment.metadata?.chargeReference) {
-      // chargeReference was never saved — this means the charge step didn't
-      // store it properly. Log a warning but still attempt with what we have.
-      console.warn('⚠️  chargeReference not found in metadata — using internal reference as fallback');
-    }
+    console.log(`   requiresOtp  : ${payment.metadata?.requiresOtp}`);
+    console.log(`   chargeRef    : ${payment.metadata?.chargeReference}`);
 
     const otpResult = await submitOtpToPaystack({
       otp: otp.toString().trim(),
-      reference: paystackReference, // ✅ Paystack's reference
+      reference: paystackReference,
     });
 
     if (!otpResult.success) {
@@ -2614,7 +2598,7 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // OTP accepted — mark payment successful
+    // ✅ OTP accepted — mark payment successful
     payment.status = 'successful';
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
@@ -2626,9 +2610,11 @@ export const submitOtp = async (req, res) => {
       escrowStatus: 'held',
       escrowHeldAt: new Date(),
     };
+    // ✅ Required for Mixed schema fields
+    payment.markModified('metadata');
     await payment.save();
 
-    // Update delivery payment status
+    // Update delivery
     const delivery = await Delivery.findById(payment.deliveryId);
     if (delivery) {
       delivery.payment.status = 'paid';
@@ -2636,7 +2622,6 @@ export const submitOtp = async (req, res) => {
       await delivery.save();
     }
 
-    // Notify customer
     await sendNotification({
       userId: customer._id,
       title: '✅ Payment Successful',
