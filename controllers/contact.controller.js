@@ -17,18 +17,19 @@ export const submitContactForm = async (req, res) => {
       ipAddress: req.ip
     });
 
-    // Send email notification
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-      }
-    });
+    // Try to send email notification (don't fail if email fails)
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.EMAIL_HOST,
+        port: process.env.EMAIL_PORT,
+        secure: false,
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASSWORD
+        }
+      });
 
-    const emailContent = `
+      const emailContent = `
 New Contact Form Submission
 
 Name: ${name}
@@ -43,13 +44,17 @@ Submitted at: ${new Date().toLocaleString()}
 IP Address: ${req.ip}
     `.trim();
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to: ['contact@riderr.ng', 'usmanmasudaliyu@riderr.ng'],
-      subject: `Contact Form: ${subject}`,
-      text: emailContent,
-      replyTo: email
-    });
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM,
+        to: ['contact@riderr.ng', 'usmanmasudaliyu@riderr.ng'],
+        subject: `Contact Form: ${subject}`,
+        text: emailContent,
+        replyTo: email
+      });
+    } catch (emailError) {
+      console.error('Email notification failed:', emailError.message);
+      // Continue anyway - message is saved
+    }
 
     res.status(201).json({
       success: true,
