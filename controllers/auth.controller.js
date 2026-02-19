@@ -122,17 +122,23 @@ const createEmailTransporter = async () => {
 
     // Use configured SMTP for production
     return nodemailer.createTransport({
+      service: 'gmail',
       host: process.env.EMAIL_HOST || "smtp.gmail.com",
       port: parseInt(process.env.EMAIL_PORT) || 587,
       secure: false,
       auth: {
-        user: process.env.EMAIL_USER || "test@example.com",
-        pass: process.env.EMAIL_PASSWORD || "testpassword",
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD,
       },
-      tls: { rejectUnauthorized: false },
+      tls: { 
+        rejectUnauthorized: false 
+      },
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      socketTimeout: 30000,
     });
   } catch (error) {
-    console.log("📧 Email transporter not configured, running in dev mode");
+    console.log("📧 Email transporter error:", error.message);
     return null;
   }
 };
