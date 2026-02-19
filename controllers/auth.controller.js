@@ -120,6 +120,15 @@ const createEmailTransporter = async () => {
       });
     }
 
+    // Log config for debugging
+    console.log('📧 Email Config:', {
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      user: process.env.EMAIL_USER,
+      hasPassword: !!process.env.EMAIL_PASSWORD,
+      env: process.env.NODE_ENV
+    });
+
     // Use configured SMTP for production
     return nodemailer.createTransport({
       service: 'gmail',
@@ -138,7 +147,7 @@ const createEmailTransporter = async () => {
       socketTimeout: 30000,
     });
   } catch (error) {
-    console.log("📧 Email transporter error:", error.message);
+    console.error("❌ Email transporter creation error:", error);
     return null;
   }
 };
