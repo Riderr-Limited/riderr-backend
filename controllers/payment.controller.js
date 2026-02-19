@@ -10,8 +10,10 @@ import {
   createSubaccount,   
   chargeCardViaPaystack,  
   submitOtpToPaystack,         
-  createDedicatedVirtualAccount 
-} from '../utils/paystack.js'; // ✅ Updated import
+  createDedicatedVirtualAccount,
+  createTransferRecipient,  
+  initiateTransfer   
+} from '../utils/paystack.js';  
 import { sendNotification } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
@@ -1153,7 +1155,7 @@ export const completeAndSettlePayment = async (req, res) => {
     const { deliveryId } = req.params;
     const { review, verified } = req.body;
 
-    console.log(`📦 [STEP 5] Customer ${customer._id} verifying delivery ${deliveryId}`);
+    console.log(`📦 [SETTLEMENT] Customer ${customer._id} verifying delivery ${deliveryId}`);
 
     if (!verified) {
       await session.abortTransaction();
@@ -1164,6 +1166,7 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
+    // Find delivery
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       customerId: customer._id,
@@ -1190,6 +1193,7 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
+    // Find payment
     const payment = await Payment.findOne({
       deliveryId: delivery._id,
       status: 'successful',
@@ -1204,22 +1208,27 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // ✅ Check if already settled using escrowDetails
+    // Check if already settled
     if (payment.escrowDetails?.settledToCompany) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
         message: 'Payment has already been settled',
+        data: {
+          settledAt: payment.escrowDetails.settlementDate,
+          transferId: payment.escrowDetails.paystackTransferId,
+        },
       });
     }
 
-    // ✅ UPDATE: Store customer verification in metadata
+    // Store customer verification
     payment.metadata = {
       ...payment.metadata,
       customerVerifiedAt: new Date(),
       customerVerified: true,
     };
+    payment.markModified('metadata');
 
     // Set company ID if not set
     if (!payment.companyId && delivery.companyId) {
@@ -1235,28 +1244,41 @@ export const completeAndSettlePayment = async (req, res) => {
     delivery.payment.status = 'completed';
     await delivery.save({ session });
 
-    // ✅ SETTLEMENT LOGIC
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTOMATIC SETTLEMENT - This is where money moves!
+    // ═══════════════════════════════════════════════════════════════════
+    console.log('💸 [SETTLEMENT] Initiating automatic transfer to company...');
+    
     const settlementResult = await settlePaymentToCompany(payment, delivery.companyId);
 
     if (settlementResult.success) {
-      // ✅ Use the schema method or update escrowDetails directly
+      // ✅ Transfer successful - update payment record
       payment.escrowDetails.settledToCompany = true;
       payment.escrowDetails.settlementDate = new Date();
       payment.escrowDetails.paystackTransferId = settlementResult.transferId;
       
-      // Also add to audit log
+      payment.metadata = {
+        ...payment.metadata,
+        settlementStatus: settlementResult.status, // 'success', 'pending', 'failed'
+        settlementReference: settlementResult.transferReference,
+        settledAt: settlementResult.settledAt,
+      };
+      payment.markModified('metadata');
+      
+      // Add to audit log
       payment.auditLog.push({
         action: 'settled_to_company',
         timestamp: new Date(),
         details: { 
           transferId: settlementResult.transferId,
-          amount: payment.companyAmount 
+          amount: payment.companyAmount,
+          status: settlementResult.status,
         },
       });
       
       await payment.save({ session });
 
-      // Update company earnings
+      // Update company stats
       if (delivery.companyId) {
         const company = await Company.findById(delivery.companyId._id).session(session);
         if (company) {
@@ -1276,70 +1298,122 @@ export const completeAndSettlePayment = async (req, res) => {
           await driver.save({ session });
         }
       }
-    }
 
-    await session.commitTransaction();
-    session.endSession();
+      await session.commitTransaction();
+      session.endSession();
 
-    console.log(`✅ [COMPLETE] Delivery verified and payment settled - Delivery: ${deliveryId}`);
+      console.log(`✅ [SETTLEMENT COMPLETE] Transfer successful!`);
+      console.log(`   Transfer ID: ${settlementResult.transferId}`);
+      console.log(`   Amount: ₦${payment.companyAmount.toLocaleString()}`);
+      console.log(`   Status: ${settlementResult.status}`);
 
-    // Notifications (with error handling)
-    try {
-      if (delivery.companyId) {
-        const company = await Company.findById(delivery.companyId._id);
-        // Check your Company schema for the correct field (userId, ownerId, owner, etc.)
-        // For now, let's skip the populate and just notify based on company
-        if (company) {
+      // Notify company
+      try {
+        if (delivery.companyId) {
           await sendNotification({
-            userId: company.userId || company.ownerId || company.owner, // Adjust based on your schema
+            userId: delivery.companyId.userId || delivery.companyId.ownerId || delivery.companyId.owner,
             title: '💰 Payment Received',
-            message: `₦${payment.companyAmount.toLocaleString()} credited to your account for delivery #${delivery.referenceId}`,
+            message: `₦${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
             data: {
               type: 'payment_settled',
               deliveryId: delivery._id,
               paymentId: payment._id,
               amount: payment.companyAmount,
-              platformFee: payment.platformFee,
+              transferId: settlementResult.transferId,
             },
           });
         }
+      } catch (notificationError) {
+        console.error('⚠️ Notification error (non-critical):', notificationError);
       }
 
-      if (delivery.driverId) {
-        const driver = await Driver.findById(delivery.driverId._id).populate('userId');
-        if (driver && driver.userId) {
-          await sendNotification({
-            userId: driver.userId._id,
-            title: '✅ Delivery Completed & Payment Settled',
-            message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
-            data: {
-              type: 'delivery_completed',
-              deliveryId: delivery._id,
-            },
-          });
+      // Notify driver
+      try {
+        if (delivery.driverId) {
+          const driver = await Driver.findById(delivery.driverId._id).populate('userId');
+          if (driver && driver.userId) {
+            await sendNotification({
+              userId: driver.userId._id,
+              title: '✅ Delivery Completed & Payment Settled',
+              message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
+              data: {
+                type: 'delivery_completed',
+                deliveryId: delivery._id,
+              },
+            });
+          }
         }
+      } catch (notificationError) {
+        console.error('⚠️ Notification error (non-critical):', notificationError);
       }
-    } catch (notificationError) {
-      console.error('⚠️ Notification error (non-critical):', notificationError);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Delivery verified and payment settled successfully!',
+        data: {
+          deliveryId: delivery._id,
+          paymentId: payment._id,
+          status: 'completed',
+          review: review,
+          settlement: {
+            success: true,
+            companyReceived: `₦${payment.companyAmount.toLocaleString()}`,
+            platformFee: `₦${payment.platformFee.toLocaleString()}`,
+            settledAt: payment.escrowDetails.settlementDate,
+            transferId: settlementResult.transferId,
+            transferStatus: settlementResult.status,
+            settled: payment.escrowDetails.settledToCompany,
+          },
+        },
+      });
+
+    } else {
+      // ❌ Transfer failed - rollback and notify
+      await session.abortTransaction();
+      session.endSession();
+
+      console.error('❌ [SETTLEMENT FAILED]', settlementResult.error);
+      
+      // Update payment with failure info (don't mark as settled)
+      payment.metadata = {
+        ...payment.metadata,
+        settlementAttempted: true,
+        settlementFailedAt: new Date(),
+        settlementError: settlementResult.error,
+        requiresManualSettlement: true,
+      };
+      payment.markModified('metadata');
+      
+      payment.auditLog.push({
+        action: 'settlement_failed',
+        timestamp: new Date(),
+        details: { 
+          error: settlementResult.error,
+          amount: payment.companyAmount,
+        },
+      });
+      
+      await payment.save();
+
+      return res.status(500).json({
+        success: false,
+        message: 'Delivery verified but automatic settlement failed',
+        error: settlementResult.error,
+        data: {
+          deliveryId: delivery._id,
+          paymentId: payment._id,
+          deliveryStatus: 'completed',
+          review: review,
+          settlement: {
+            success: false,
+            error: settlementResult.error,
+            companyAmount: payment.companyAmount,
+            requiresAction: 'Contact support to complete manual settlement',
+          },
+        },
+      });
     }
 
-    res.status(200).json({
-      success: true,
-      message: 'Delivery verified and payment settled successfully!',
-      data: {
-        deliveryId: delivery._id,
-        paymentId: payment._id,
-        status: 'completed',
-        review: review,
-        settlement: {
-          companyReceived: `₦${payment.companyAmount.toLocaleString()}`,
-          platformFee: `₦${payment.platformFee.toLocaleString()}`,
-          settledAt: payment.escrowDetails.settlementDate,
-          transferId: settlementResult.transferId,
-          settled: payment.escrowDetails.settledToCompany,
-        },
-      },
-    });
   } catch (error) {
     if (session.inTransaction()) {
       await session.abortTransaction();
@@ -1354,34 +1428,134 @@ export const completeAndSettlePayment = async (req, res) => {
     });
   }
 };
-/**
- * Helper function to settle payment to company
- * NOTE: Replace this with actual Paystack Transfer API integration
- */
+
+
 async function settlePaymentToCompany(payment, company) {
   try {
-    console.log(`💸 Settling ₦${payment.companyAmount} to company ${company._id}`);
+    console.log(`💸 [SETTLEMENT] Starting settlement for payment ${payment._id}`);
+    console.log(`   Amount: ₦${payment.companyAmount.toLocaleString()}`);
+    console.log(`   Company: ${company.name}`);
 
-    // In production, use Paystack Transfer API:
-    // const transferResult = await paystackTransfer({
-    //   source: 'balance',
-    //   amount: payment.companyAmount * 100, // Kobo
-    //   recipient: company.paystackRecipientCode,
-    //   reason: `Settlement for delivery ${payment.deliveryId}`,
-    //   reference: `SETTLE-${payment.paystackReference}`,
-    // });
 
-    // For now, simulate successful settlement
-    const transferId = `TRF-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 1: Validate company has account number (that's all we need!)
+    // ═══════════════════════════════════════════════════════════════════
+    if (!company.bankAccount?.accountNumber) {
+      console.error('❌ Company account number not configured');
+      return {
+        success: false,
+        error: 'Company account number not configured',
+        requiresAction: 'company_add_account_number',
+      };
+    }
+
+    if (!company.bankAccount?.accountName) {
+      console.error('❌ Company account name not configured');
+      return {
+        success: false,
+        error: 'Company account name not configured',
+        requiresAction: 'company_add_account_name',
+      };
+    }
+
+
+if (!company.bankAccount?.bankCode) {
+  return {
+    success: false,
+    error: 'Company bank code not configured. Company must update bank details with their bank code.',
+    requiresAction: 'company_add_bank_code',
+  };
+}
+
+    console.log(`✅ Account found: ${company.bankAccount.accountNumber}`);
+    console.log(`   Name: ${company.bankAccount.accountName}`);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 2: Create recipient (Paystack auto-detects bank from account)
+    // ═══════════════════════════════════════════════════════════════════
+    if (!company.paystackRecipientCode) {
+      console.log('📝 Creating Paystack recipient (bank auto-detected)...');
+      
+      const recipientResult = await createTransferRecipient({
+        accountName: company.bankAccount.accountName,
+        accountNumber: company.bankAccount.accountNumber,
+        bankCode: company.bankAccount.bankCode,
+        companyId: company._id.toString(),
+       });
+
+      if (!recipientResult.success) {
+        console.error('❌ Failed to create recipient:', recipientResult.message);
+        console.error('❌ Transfer failed:', transferResult.message);
+  console.error('❌ Full transfer error:', JSON.stringify(transferResult.error, null, 2));
+        return {
+          success: false,
+          error: recipientResult.message,
+          paystackError: recipientResult.error,
+          
+        };
+      }
+
+      // Save recipient code AND the bank info Paystack detected
+      company.paystackRecipientCode = recipientResult.data.recipientCode;
+      
+      // Update bank details with what Paystack detected
+      company.bankAccount.bankName = recipientResult.data.bankName;
+      company.bankAccount.bankCode = recipientResult.data.bankCode;
+      company.bankAccount.verified = true;
+      company.bankAccount.verifiedAt = new Date();
+      
+      await company.save();
+      
+      console.log(`✅ Recipient created: ${recipientResult.data.recipientCode}`);
+      console.log(`   Bank detected by Paystack: ${recipientResult.data.bankName}`);
+    } else {
+      console.log(`✅ Using existing recipient: ${company.paystackRecipientCode}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 3: Initiate transfer
+    // ═══════════════════════════════════════════════════════════════════
+    const transferReference = `SETTLE-${payment.paystackReference}`;
     
-    console.log(`✅ Settlement successful - Transfer ID: ${transferId}`);
+    console.log(`💰 Initiating transfer of ₦${payment.companyAmount.toLocaleString()}...`);
+
+    const transferResult = await initiateTransfer({
+      amount: payment.companyAmount,
+      recipientCode: company.paystackRecipientCode,
+      reference: transferReference,
+      reason: `Settlement for delivery ${payment.deliveryId}`,
+    });
+
+    if (!transferResult.success) {
+      console.error('❌ Transfer failed:', transferResult.message);
+      
+      // If "Recipient not found", clear recipient code so it recreates next time
+      if (transferResult.message?.includes('Recipient not found')) {
+        console.log('🔄 Clearing invalid recipient code...');
+        company.paystackRecipientCode = null;
+        await company.save();
+      }
+      
+      return {
+        success: false,
+        error: transferResult.message,
+        paystackError: transferResult.error,
+      };
+    }
+
+    console.log(`✅ Transfer successful!`);
+    console.log(`   Transfer Code: ${transferResult.data.transferCode}`);
+    console.log(`   Status: ${transferResult.data.status}`);
     
     return {
       success: true,
-      transferId: transferId,
+      transferId: transferResult.data.transferCode,
+      transferReference: transferResult.data.reference,
       amount: payment.companyAmount,
       settledAt: new Date(),
+      status: transferResult.data.status,
     };
+
   } catch (error) {
     console.error('❌ Settlement error:', error);
     return {
@@ -1390,6 +1564,9 @@ async function settlePaymentToCompany(payment, company) {
     };
   }
 }
+
+
+
 
 /**
  * @desc    Mobile payment callback handler
@@ -2157,9 +2334,10 @@ export const getCompanySettlementDetails = async (req, res) => {
     // Get settlement transaction details
     const settlementDetails = {
       transferId: payment.metadata?.settlementTransferId,
-      settledAt: payment.metadata?.settledAt,
-      bankDetails: payment.metadata?.bankDetails || company.bankDetails,
-      status: payment.metadata?.escrowStatus || 'pending',
+     status: payment.escrowDetails?.settledToCompany ? 'settled' : 'held',
+settledAt: payment.escrowDetails?.settlementDate,
+transferId: payment.escrowDetails?.paystackTransferId,
+transferStatus: payment.metadata?.settlementStatus,
       estimatedArrival: getEstimatedArrival(payment.metadata?.escrowStatus, payment.metadata?.settledAt),
       transferReference: payment.metadata?.transferReference || `TRF-${payment.paystackReference}`,
       bankName: company.bankDetails?.bankName,
@@ -3905,3 +4083,210 @@ export const getDriverEarningsSummary = async (req, res) => {
     });
   }
 };
+
+/**
+ * @desc    Get list of Nigerian banks (for bank selection dropdown)
+ * @route   GET /api/payments/banks
+ * @access  Public
+ */
+export const getNigerianBanks = async (req, res) => {
+  try {
+    console.log('🏦 Fetching Nigerian banks from Paystack...');
+    
+    const result = await getBankList();
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch bank list',
+        error: result.message,
+      });
+    }
+
+    // Format for frontend dropdown
+    const banks = result.data.map(bank => ({
+      code: bank.code,
+      name: bank.name,
+      slug: bank.slug,
+      country: bank.country,
+      currency: bank.currency,
+      type: bank.type,
+    }));
+
+    console.log(`✅ Fetched ${banks.length} Nigerian banks`);
+
+    res.status(200).json({
+      success: true,
+      data: banks,
+      message: `${banks.length} banks available`,
+    });
+  } catch (error) {
+    console.error('❌ Get banks error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch banks',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+ 
+/**
+ * @desc    Setup company bank account (simplified - no bank code needed)
+ * @route   POST /api/payments/company/setup-bank-account
+ * @access  Private (Company)
+ */
+export const setupCompanyBankAccount = async (req, res) => {
+  try {
+    const companyUser = req.user;
+    
+    if (companyUser.role !== 'company_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only companies can setup bank accounts',
+      });
+    }
+
+    const { accountNumber, accountName, bankCode } = req.body;
+
+    if (!accountNumber || !accountName  || !bankCode ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number and account name are required',
+        required: {
+          accountNumber: 'Your 10-digit bank account number',
+          accountName: 'Account holder name (as registered with bank)',
+          bankCode: "code"
+        },
+      });
+    }
+
+    // Validate account number format (10 digits)
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number must be exactly 10 digits',
+      });
+    }
+
+    const company = await Company.findById(companyUser.companyId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found',
+      });
+    }
+
+    console.log('🏦 Setting up bank account (no bank code needed)');
+    console.log('   Account:', accountNumber);
+    console.log('   Name:', accountName);
+
+    // Save account details
+    company.bankAccount = {
+      accountNumber: accountNumber,
+      accountName: accountName,
+      bankCode: bankCode,
+      verified: false, // Will be verified when first transfer is made
+    };
+
+    // Clear existing recipient code (will be created fresh)
+    company.paystackRecipientCode = null;
+
+    await company.save();
+
+    console.log('✅ Bank account saved');
+
+    res.status(200).json({
+      success: true,
+      message: 'Bank account setup successfully',
+      data: {
+        accountNumber: accountNumber,
+        accountName: accountName,
+        bankCode: bankCode,
+        verified: false,
+        note: 'Bank will be auto-detected when first settlement is made',
+        nextSteps: [
+          'Bank account is saved',
+          'Bank name will be detected automatically by Paystack',
+          'First settlement will verify the account',
+          'Future settlements will use this account',
+        ],
+      },
+    });
+  } catch (error) {
+    console.error('❌ Setup bank account error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to setup bank account',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Helper to ensure company has bank code before settlement
+ * This auto-resolves bank code if missing
+ */
+async function ensureCompanyBankCode(company) {
+  try {
+    // If bank code already exists, return it
+    if (company.bankAccount?.bankCode) {
+      return {
+        success: true,
+        bankCode: company.bankAccount.bankCode,
+        bankName: company.bankAccount.bankName,
+      };
+    }
+
+    // If no bank account at all, error
+    if (!company.bankAccount?.accountNumber || !company.bankAccount?.bankName) {
+      return {
+        success: false,
+        error: 'Company bank account not configured',
+      };
+    }
+
+    console.log('🔍 Auto-resolving bank code for:', company.bankAccount.bankName);
+
+    // Fetch bank list
+    const banksResult = await getBankList();
+    if (!banksResult.success) {
+      return {
+        success: false,
+        error: 'Failed to fetch bank list',
+      };
+    }
+
+    // Find bank by name
+    const bank = banksResult.data.find(b => 
+      b.name.toLowerCase().includes(company.bankAccount.bankName.toLowerCase()) ||
+      company.bankAccount.bankName.toLowerCase().includes(b.name.toLowerCase())
+    );
+
+    if (!bank) {
+      return {
+        success: false,
+        error: `Bank "${company.bankAccount.bankName}" not found in Paystack`,
+        hint: 'Company should update bank details via /api/payments/company/setup-bank-account',
+      };
+    }
+
+    // Save resolved bank code
+    company.bankAccount.bankCode = bank.code;
+    company.bankAccount.bankName = bank.name; // Use Paystack's official name
+    await company.save();
+
+    console.log(`✅ Bank code auto-resolved: ${bank.code} (${bank.name})`);
+
+    return {
+      success: true,
+      bankCode: bank.code,
+      bankName: bank.name,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}

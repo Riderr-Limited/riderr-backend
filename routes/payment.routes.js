@@ -15,6 +15,7 @@ import {
   downloadSettlementReceipt,
   chargeCard,
   submitOtp,
+  submitPin,
   initiateBankTransfer,
   verifyBankTransferManually,
   getDriverPayments,
@@ -22,6 +23,8 @@ import {
   requestCashSettlement,
   markCashPaymentAsSettled,
   getDriverEarningsSummary,
+  getNigerianBanks,
+  setupCompanyBankAccount,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -42,6 +45,7 @@ router.get('/mobile-callback', mobilePaymentCallback);
 router.post('/initialize',           authenticate, initializeDeliveryPayment);
 router.post('/charge-card',          authenticate, chargeCard);
 router.post('/submit-otp',           authenticate, submitOtp);
+router.post('/submit-pin',           authenticate, submitPin);
 router.post('/initiate-bank-transfer', authenticate, initiateBankTransfer);
 router.post('/verify-bank-transfer', authenticate, verifyBankTransferManually); // kept from controller
 
@@ -71,5 +75,9 @@ router.post('/driver-payments/:paymentId/mark-settled',              authenticat
 //    (otherwise it swallows the named routes above)
 // ============================================================
 router.get('/:paymentId', authenticate, getPaymentDetails);
+router.get('/banks', getNigerianBanks); 
+router.post('/company/setup-bank-account', authenticate, setupCompanyBankAccount);
+
+
 
 export default router;

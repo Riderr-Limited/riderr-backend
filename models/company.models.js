@@ -251,12 +251,17 @@ contactPhone: {
       accountName: String,
       accountNumber: String,
       bankName: String,
+      bankCode: String,
       verified: {
         type: Boolean,
         default: false
       }
     },
-    
+    // Inside Company schema
+paystackRecipientCode: {
+  type: String,
+  index: true,
+},
     // Account status
     isActive: {
       type: Boolean,

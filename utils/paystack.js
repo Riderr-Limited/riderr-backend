@@ -475,7 +475,112 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
   }
 };
 
+export const createTransferRecipient = async (recipientData) => {
+  try {
+    console.log('📝 Creating transfer recipient (no bank code needed)');
+    console.log('   Account:', recipientData.accountNumber);
+    console.log('   Name:', recipientData.accountName);
 
+    // In paystack.js createTransferRecipient
+const response = await paystackAxios.post('/transferrecipient', {
+  type: 'nuban',
+  name: recipientData.accountName,
+  account_number: recipientData.accountNumber,
+  bank_code: recipientData.bankCode,  // ← required
+  currency: 'NGN',
+});
+
+    if (response.data.status === true) {
+      return {
+        success: true,
+        data: {
+          recipientCode: response.data.data.recipient_code,
+          accountNumber: response.data.data.details.account_number,
+          accountName: response.data.data.details.account_name,
+          bankName: response.data.data.details.bank_name, // Paystack tells us the bank!
+          bankCode: response.data.data.details.bank_code, // Paystack also returns code
+        },
+      };
+    }
+
+    return { 
+      success: false, 
+      message: response.data.message || 'Failed to create recipient',
+      error: response.data 
+    };
+  } catch (error) {
+    console.error('❌ Paystack recipient error:', error.response?.data);
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Recipient creation failed',
+      error: error.response?.data || error.message,
+    };
+  }
+};
+
+
+export const resolveBankFromAccount = async (accountNumber) => {
+  const banksResult = await getBankList();
+  
+  for (const bank of banksResult.data) {
+    try {
+      const response = await paystackAxios.get('/bank/resolve', {
+        params: { account_number: accountNumber, bank_code: bankCode },
+      });
+      
+      if (response.data.status === true) {
+        return {
+          success: true,
+          bankCode: bankCode,
+          bankName: bank.name,
+          accountName: response.data.data.account_name,
+        };
+      }
+    } catch { continue; }
+  }
+  
+  return { success: false, error: 'Account not found' };
+};
+
+/**
+ * Initiate a transfer to a recipient
+ * Correct endpoint: POST /transfer
+ */
+export const initiateTransfer = async (transferData) => {
+  try {
+    const response = await paystackAxios.post('/transfer', {
+      source: 'balance',
+      amount: Math.round(transferData.amount * 100), // kobo
+      recipient: transferData.recipientCode,
+      reason: transferData.reason || 'Settlement',
+      reference: transferData.reference,
+    });
+
+    if (response.data.status === true) {
+      return {
+        success: true,
+        data: {
+          transferCode: response.data.data.transfer_code,
+          reference: response.data.data.reference,
+          amount: response.data.data.amount / 100,
+          status: response.data.data.status,
+        },
+      };
+    }
+
+    return {
+      success: false,
+      message: response.data.message || 'Transfer initiation failed',
+      error: response.data,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Transfer failed',
+      error: error.response?.data || error.message,
+    };
+  }
+};
 // Helpers
 export const getPublicKey = () => PAYSTACK_PUBLIC_KEY;
 export const isUsingLiveKeys = () => USE_LIVE_KEYS;
@@ -495,4 +600,6 @@ export default {
   getPublicKey,
   isProduction,
   isUsingLiveKeys,
+  initiateTransfer,
+  createTransferRecipient
 };
