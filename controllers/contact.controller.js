@@ -20,13 +20,20 @@ export const submitContactForm = async (req, res) => {
     // Try to send email notification (don't fail if email fails)
     try {
       const transporter = nodemailer.createTransport({
+        service: 'gmail',
         host: process.env.EMAIL_HOST,
         port: process.env.EMAIL_PORT,
         secure: false,
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASSWORD
-        }
+        },
+        tls: { 
+          rejectUnauthorized: false 
+        },
+        connectionTimeout: 30000,
+        greetingTimeout: 30000,
+        socketTimeout: 30000,
       });
 
       const emailContent = `

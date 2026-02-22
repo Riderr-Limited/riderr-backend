@@ -7,14 +7,20 @@ export const sendVerificationEmail = async (email, name, token) => {
 
     if (process.env.NODE_ENV === "production") {
       transporter = nodemailer.createTransport({
+        service: 'gmail',
         host: process.env.EMAIL_HOST,
         port: Number(process.env.EMAIL_PORT),
-        secure: Number(process.env.EMAIL_PORT) === 465,
+        secure: false,
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASSWORD,
         },
-        connectionTimeout: 10000,
+        tls: { 
+          rejectUnauthorized: false 
+        },
+        connectionTimeout: 30000,
+        greetingTimeout: 30000,
+        socketTimeout: 30000,
       });
     } else {
       const testAccount = await nodemailer.createTestAccount();
