@@ -82,7 +82,22 @@ const paymentSchema = new mongoose.Schema(
     // Transaction Details
     paidAt: Date,
     verifiedAt: Date,
-
+    
+    refund: {
+    status: {
+      type: String,
+      enum: ['none', 'pending', 'refunded', 'failed'],
+      default: 'none',
+    },
+    refundId: String, // Paystack refund ID
+    amount: Number,
+    refundedAt: Date,
+    requestedAt: Date,
+    reason: String,
+    error: String,
+    paystackResponse: mongoose.Schema.Types.Mixed,
+  },
+  
     // Split Payment Details (ESCROW)
     companyAmount: {
       type: Number,

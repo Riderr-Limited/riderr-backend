@@ -1807,10 +1807,10 @@ export const checkPaymentStatus = async (req, res) => {
  * @route   POST /api/payments/webhook
  * @access  Public (Paystack)
  */
-export const handlePaystackWebhook = async (req, res) => {
+ export const handlePaystackWebhook = async (req, res) => {
   try {
     const hash = crypto
-      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY || 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac')
+      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
       .update(JSON.stringify(req.body))
       .digest('hex');
 
@@ -1822,7 +1822,7 @@ export const handlePaystackWebhook = async (req, res) => {
     }
 
     const event = req.body;
-    console.log('📨 Paystack webhook received:', event.event);
+    console.log('📨 Paystack webhook:', event.event);
 
     if (event.event === 'charge.success') {
       const reference = event.data.reference;
@@ -1838,14 +1838,36 @@ export const handlePaystackWebhook = async (req, res) => {
           escrowStatus: 'held',
           escrowHeldAt: new Date(),
         };
+        payment.markModified('metadata');
         
         await payment.save();
 
+        // Update delivery
         const delivery = await Delivery.findById(payment.deliveryId);
         if (delivery) {
           delivery.payment.status = 'paid';
           delivery.payment.paidAt = new Date();
+          delivery.waitingForPayment = false; // ✅ Clear waiting flag
           await delivery.save();
+          
+          // ✅ NEW: Notify driver that payment is complete
+          if (delivery.driverId) {
+            const driver = await Driver.findById(delivery.driverId).populate('userId');
+            if (driver && driver.userId) {
+              await sendNotification({
+                userId: driver.userId._id,
+                title: '✅ Payment Confirmed!',
+                message: `Customer completed payment for delivery #${delivery.referenceId}. You can now start the delivery!`,
+                data: {
+                  type: 'payment_confirmed',
+                  deliveryId: delivery._id,
+                  paymentId: payment._id,
+                  amount: payment.amount,
+                  canStartDelivery: true,
+                },
+              });
+            }
+          }
         }
 
         console.log('✅ Payment updated via webhook:', reference);
@@ -1861,6 +1883,7 @@ export const handlePaystackWebhook = async (req, res) => {
     });
   }
 };
+
 
 /**
  * @desc    Get payment details
@@ -4290,3 +4313,131 @@ async function ensureCompanyBankCode(company) {
     };
   }
 }
+
+/**
+ * @desc    Refund payment to customer
+ * @route   POST /api/payments/refund/:paymentId
+ * @access  Private (Internal use - called from cancelDelivery)
+ */
+export const refundPayment = async (paymentId, reason = 'Delivery cancelled') => {
+  try {
+    console.log(`💸 [REFUND] Initiating refund for payment ${paymentId}`);
+
+    const payment = await Payment.findById(paymentId);
+    
+    if (!payment) {
+      console.error('❌ Payment not found for refund');
+      return {
+        success: false,
+        error: 'Payment not found',
+      };
+    }
+
+    // Check if already refunded
+    if (payment.refund?.status === 'refunded') {
+      console.log('⚠️ Payment already refunded');
+      return {
+        success: true,
+        alreadyRefunded: true,
+        refundId: payment.refund.refundId,
+        refundedAt: payment.refund.refundedAt,
+      };
+    }
+
+    // Check if payment can be refunded
+    if (payment.status !== 'successful') {
+      console.log(`⚠️ Payment status ${payment.status} - no refund needed`);
+      return {
+        success: true,
+        noRefundNeeded: true,
+        reason: 'Payment was not successful',
+      };
+    }
+
+    // Check payment method
+    if (payment.paymentMethod === 'cash') {
+      console.log('💵 Cash payment - no refund needed');
+      return {
+        success: true,
+        noRefundNeeded: true,
+        reason: 'Cash payment - no refund needed',
+      };
+    }
+
+    // ✅ Initiate Paystack refund
+    try {
+      const response = await paystackAxios.post('/refund', {
+        transaction: payment.paystackReference,
+        amount: Math.round(payment.amount * 100), // Convert to kobo
+        currency: 'NGN',
+        customer_note: reason,
+        merchant_note: `Refund for delivery cancellation - ${reason}`,
+      });
+
+      if (response.data.status === true) {
+        // Update payment with refund details
+        payment.refund = {
+          status: 'refunded',
+          refundId: response.data.data.id || response.data.data.transaction?.id,
+          amount: payment.amount,
+          refundedAt: new Date(),
+          reason: reason,
+          paystackResponse: response.data.data,
+        };
+
+        payment.status = 'refunded';
+        
+        // Add to audit log
+        payment.auditLog.push({
+          action: 'refunded',
+          timestamp: new Date(),
+          details: {
+            refundId: payment.refund.refundId,
+            amount: payment.amount,
+            reason: reason,
+          },
+        });
+
+        payment.markModified('refund');
+        await payment.save();
+
+        console.log(`✅ Refund successful - Refund ID: ${payment.refund.refundId}`);
+
+        return {
+          success: true,
+          refundId: payment.refund.refundId,
+          amount: payment.amount,
+          refundedAt: payment.refund.refundedAt,
+        };
+      } else {
+        throw new Error(response.data.message || 'Refund failed');
+      }
+    } catch (refundError) {
+      console.error('❌ Paystack refund error:', refundError.response?.data || refundError.message);
+
+      // Mark as refund pending
+      payment.refund = {
+        status: 'pending',
+        amount: payment.amount,
+        requestedAt: new Date(),
+        reason: reason,
+        error: refundError.response?.data?.message || refundError.message,
+      };
+      payment.markModified('refund');
+      await payment.save();
+
+      return {
+        success: false,
+        error: refundError.response?.data?.message || 'Refund initiation failed',
+        refundPending: true,
+        requiresManualRefund: true,
+      };
+    }
+  } catch (error) {
+    console.error('❌ Refund error:', error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};

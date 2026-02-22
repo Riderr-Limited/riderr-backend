@@ -74,7 +74,10 @@ const deliverySchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-
+  waitingForPayment: {
+    type: Boolean,
+    default: false,
+  },
   // Pickup location
   pickup: {
     address: String,
