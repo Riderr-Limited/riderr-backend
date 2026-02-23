@@ -24,6 +24,9 @@ import {
   cancelDelivery,
   rateDelivery,
   getDeliveryUpdates,
+// new routes
+   cancelDeliveryWithRefund,
+  getCustomerNearbyDrivers,
 } from '../controllers/delivery.controller.js';
 import { updateDriverLocation } from '../controllers/driver.controller.js';
 
@@ -37,7 +40,10 @@ router.get('/nearby-drivers', protect, authorize('customer'), getNearbyDrivers);
 router.get('/my', protect, authorize('customer'), getMyDeliveries);
 router.get('/customer/active', protect, authorize('customer'), getCustomerActiveDelivery);
 router.post('/calculate-fare', protect, authorize('customer'), calculateDeliveryFare);
-router.get('/nearby-available-drivers', protect, authorize('customer'), getNearbyAvailableDrivers);
+router.get('/nearby-drivers', protect, authorize('customer'), getCustomerNearbyDrivers)
+router.post('/:deliveryId/cancel', authorize('customer'), cancelDeliveryWithRefund);
+//router.get('/nearby-available-drivers', protect, authorize('customer'), getNearbyAvailableDrivers);
+
 
 // ============ DRIVER ROUTES ============
 router.get('/driver/nearby', protect, authorize('driver'), getNearbyDeliveryRequests);

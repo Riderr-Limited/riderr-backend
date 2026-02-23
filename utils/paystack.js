@@ -518,6 +518,55 @@ const response = await paystackAxios.post('/transferrecipient', {
   }
 };
 
+/**
+ * Initiate a refund via Paystack
+ * Correct endpoint: POST /refund
+ */
+export const initiateRefund = async (refundData) => {
+  try {
+    console.log('💸 Initiating refund via Paystack');
+    console.log('   Transaction:', refundData.transaction);
+    console.log('   Amount:', refundData.amount);
+
+    const response = await paystackAxios.post('/refund', {
+      transaction: refundData.transaction, // Transaction reference or ID
+      amount: refundData.amount ? Math.round(refundData.amount * 100) : undefined, // Optional: partial refund in kobo
+      currency: 'NGN',
+      customer_note: refundData.customer_note || 'Delivery cancelled - Refund processed',
+      merchant_note: refundData.merchant_note || `Refund for delivery ${refundData.deliveryId}`,
+    });
+
+    if (response.data.status === true) {
+      return {
+        success: true,
+        message: 'Refund initiated successfully',
+        data: {
+          refundId: response.data.data.id,
+          transaction: response.data.data.transaction,
+          amount: response.data.data.amount / 100,
+          currency: response.data.data.currency,
+          status: response.data.data.status,
+          refundedAt: response.data.data.refunded_at,
+          expectedAt: response.data.data.expected_at,
+        },
+      };
+    }
+
+    return {
+      success: false,
+      message: response.data.message || 'Refund initiation failed',
+      error: response.data,
+    };
+  } catch (error) {
+    console.error('❌ Paystack refund error:', error.response?.data);
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Refund failed',
+      error: error.response?.data || error.message,
+    };
+  }
+};
+
 
 export const resolveBankFromAccount = async (accountNumber) => {
   const banksResult = await getBankList();

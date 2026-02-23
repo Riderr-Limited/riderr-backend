@@ -1,594 +1,80 @@
+ // ═══════════════════════════════════════════════════════════════════════════
+// DELIVERY CANCELLATION WITH REFUND & NEARBY DRIVERS
 // ═══════════════════════════════════════════════════════════════════════════
-// IMPLEMENTATION: Driver Accept Before Payment + Cancellation with Refund
+// This file contains:
+// 1. Enhanced cancel delivery with automatic refund
+// 2. Customer fetch nearby drivers at specific location
+// 3. Refund processing via Paystack Refund API
 // ═══════════════════════════════════════════════════════════════════════════
-// This implements:
-// 1. Driver can accept delivery BEFORE customer pays
-// 2. Driver CANNOT start delivery until payment is confirmed
-// 3. Customer/Driver can cancel delivery at any time
-// 4. Automatic refund if payment was made
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART 1: UPDATE acceptDelivery - Allow acceptance WITHOUT payment
-// ═══════════════════════════════════════════════════════════════════════════
-
-// In delivery.controller.js - REPLACE acceptDelivery function:
-
-export const acceptDelivery = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const driverUser = req.user;
-    const { deliveryId } = req.params;
-
-    console.log(`🚗 [ACCEPT] Driver ${driverUser._id} accepting delivery ${deliveryId}`);
-
-    if (driverUser.role !== "driver") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: "Only drivers can accept deliveries",
-      });
-    }
-
-    const driver = await Driver.findOne({ userId: driverUser._id })
-      .populate('userId', 'name phone avatarUrl rating')
-      .populate('companyId', 'name logo contactPhone address email rating paystackSubaccountCode')
-      .session(session);
-      
-    if (!driver) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Your driver profile wasn't found",
-      });
-    }
-
-    // Check driver availability
-    if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {
-      await session.abortTransaction();
-      session.endSession();
-      
-      let specificMessage = "You cannot accept new deliveries right now";
-      
-      if (!driver.isOnline) {
-        specificMessage = "You need to be online to accept deliveries";
-      } else if (driver.currentDeliveryId) {
-        specificMessage = "You already have an active delivery";
-      } else if (!driver.isAvailable) {
-        specificMessage = "You're currently unavailable";
-      }
-      
-      return res.status(400).json({
-        success: false,
-        message: specificMessage,
-      });
-    }
-
-    const delivery = await Delivery.findById(deliveryId).session(session);
-    if (!delivery) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Delivery request not found",
-      });
-    }
-
-    // Check if delivery is available
-    if (delivery.status !== "created" || delivery.driverId) {
-      await session.abortTransaction();
-      session.endSession();
-      
-      let specificMessage = "This delivery is no longer available";
-      
-      if (delivery.driverId) {
-        specificMessage = "Another driver has already accepted this delivery";
-      } else if (delivery.status === 'cancelled') {
-        specificMessage = "This delivery has been cancelled";
-      } else if (delivery.status !== 'created') {
-        specificMessage = "This delivery is no longer available";
-      }
-      
-      return res.status(400).json({
-        success: false,
-        message: specificMessage,
-      });
-    }
-
-    // ✅ NEW: Allow acceptance regardless of payment status
-    const isCashPayment = delivery.payment?.method === 'cash';
-    const isPaid = delivery.payment?.status === 'paid';
-
-    console.log(`💳 Payment Status: ${delivery.payment?.status}, Method: ${delivery.payment?.method}`);
-    console.log(`✅ ACCEPTING delivery - Payment can happen later`);
-
-    // Calculate distance to pickup
-    let driverToPickupDistance = 5;
-    if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-      driverToPickupDistance = calculateDistance(
-        driver.currentLocation.lat,
-        driver.currentLocation.lng,
-        delivery.pickup.lat,
-        delivery.pickup.lng
-      );
-    }
-
-    // Prepare driver details
-    const driverDetails = {
-      driverId: driver._id,
-      userId: driver.userId._id,
-      name: driver.userId.name || "Driver",
-      phone: driver.userId.phone || "",
-      avatarUrl: driver.userId.avatarUrl,
-      rating: driver.userId.rating || 0,
-      vehicle: {
-        type: driver.vehicleType || "bike",
-        make: driver.vehicleMake || "",
-        model: driver.vehicleModel || "",
-        plateNumber: driver.plateNumber || "",
-      },
-    };
-
-    if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-      driverDetails.currentLocation = {
-        lat: driver.currentLocation.lat,
-        lng: driver.currentLocation.lng,
-        updatedAt: driver.currentLocation.updatedAt || new Date(),
-      };
-    }
-
-    const companyDetails = driver.companyId ? {
-      companyId: driver.companyId._id,
-      name: driver.companyId.name || "Company",
-      logo: driver.companyId.logo,
-      contactPhone: driver.companyId.contactPhone || "",
-      address: driver.companyId.address || "",
-      email: driver.companyId.email || "",
-      rating: driver.companyId.rating || 0,
-    } : null;
-
-    // Update delivery - mark as assigned
-    delivery.driverId = driver._id;
-    delivery.companyId = companyDetails?.companyId || null;
-    delivery.status = "assigned";
-    delivery.assignedAt = new Date();
-    delivery.estimatedPickupTime = new Date(Date.now() + driverToPickupDistance * 3 * 60000);
-    delivery.driverDetails = driverDetails;
-    if (companyDetails) {
-      delivery.companyDetails = companyDetails;
-    }
-
-    // ✅ NEW: Set waitingForPayment flag if not paid
-    if (!isPaid && !isCashPayment) {
-      delivery.waitingForPayment = true;
-    }
-
-    // Update driver
-    driver.currentDeliveryId = delivery._id;
-    driver.isAvailable = false;
-    driver.totalRequests = (driver.totalRequests || 0) + 1;
-    driver.acceptedRequests = (driver.acceptedRequests || 0) + 1;
-
-    await delivery.save({ session });
-    await driver.save({ session });
-
-    // If payment exists, link driver and company
-    let payment = null;
-    if (!isCashPayment) {
-      try {
-        payment = await Payment.findOne({
-          deliveryId: delivery._id,
-        }).session(session);
-
-        if (payment) {
-          payment.driverId = driver._id;
-          payment.companyId = driver.companyId?._id || driver.companyId;
-          
-          if (driver.companyId && driver.companyId.paystackSubaccountCode) {
-            payment.metadata = {
-              ...payment.metadata,
-              companySubaccount: driver.companyId.paystackSubaccountCode,
-              driverAssignedAt: new Date(),
-            };
-            payment.markModified('metadata');
-          }
-          
-          await payment.save({ session });
-        }
-      } catch (error) {
-        console.warn("⚠️ Payment update skipped:", error.message);
-      }
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    // Get customer for notification
-    const customer = await User.findById(delivery.customerId);
-    
-    // Send notifications
-    if (customer) {
-      let notificationMessage;
-      
-      if (isCashPayment) {
-        notificationMessage = `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. Cash payment on delivery: ₦${delivery.fare.totalFare.toLocaleString()}`;
-      } else if (isPaid) {
-        notificationMessage = `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. Payment secured!`;
-      } else {
-        notificationMessage = `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} is waiting! Please complete payment to start delivery`;
-      }
-      
-      await sendNotification({
-        userId: customer._id,
-        title: !isPaid && !isCashPayment ? '⏳ Driver Waiting for Payment' : '🚗 Driver Assigned!',
-        message: notificationMessage,
-        data: {
-          type: 'driver_assigned',
-          deliveryId: delivery._id,
-          driverId: driver._id,
-          driverName: driver.userId.name,
-          companyName: driver.companyId?.name,
-          paymentMethod: delivery.payment.method,
-          paymentRequired: !isPaid && !isCashPayment,
-          isCashPayment: isCashPayment,
-        },
-      });
-    }
-
-    let driverMessage;
-    if (isCashPayment) {
-      driverMessage = `You've accepted a cash delivery. Collect ₦${delivery.fare.totalFare.toLocaleString()} upon delivery`;
-    } else if (isPaid) {
-      driverMessage = `You've accepted a delivery. Payment secured. Head to pickup!`;
-    } else {
-      driverMessage = `You've accepted the delivery! Waiting for customer to complete payment before you can start`;
-    }
-
-    await sendNotification({
-      userId: driverUser._id,
-      title: '✅ Delivery Accepted',
-      message: driverMessage,
-      data: {
-        type: 'delivery_accepted',
-        deliveryId: delivery._id,
-        paymentMethod: delivery.payment.method,
-        paymentStatus: delivery.payment.status,
-        waitingForPayment: !isPaid && !isCashPayment,
-      },
-    });
-
-    const updatedDelivery = await Delivery.findById(delivery._id)
-      .populate("customerId", "name phone avatarUrl rating")
-      .lean();
-    
-    const deliveryWithDetails = await populateDriverAndCompanyDetails(updatedDelivery);
-
-    res.status(200).json({
-      success: true,
-      message: !isPaid && !isCashPayment 
-        ? "Delivery accepted! You'll be notified once customer completes payment"
-        : isCashPayment
-        ? "Delivery accepted! Remember to collect cash payment upon delivery"
-        : "Delivery accepted! Payment secured. Head to pickup location",
-      data: {
-        delivery: deliveryWithDetails,
-        driver: deliveryWithDetails.driverDetails,
-        company: deliveryWithDetails.companyDetails,
-        payment: {
-          method: delivery.payment.method,
-          status: delivery.payment.status,
-          amount: delivery.fare.totalFare,
-          waitingForPayment: !isPaid && !isCashPayment,
-          message: !isPaid && !isCashPayment 
-            ? 'Waiting for customer to complete payment'
-            : isCashPayment 
-            ? 'Cash to be collected upon delivery'
-            : 'Payment secured',
-          canStartDelivery: isPaid || isCashPayment,
-        },
-      },
-    });
-  } catch (error) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-    session.endSession();
-    
-    console.error("❌ Accept delivery error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to accept delivery",
-    });
-  }
-};
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PART 2: UPDATE startDelivery - Block if payment not confirmed
+// PART 1: Add Refund Function to utils/paystack.js
 // ═══════════════════════════════════════════════════════════════════════════
-
-// In delivery.controller.js - REPLACE startDelivery function:
-
-export const startDelivery = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const driverUser = req.user;
-    const { deliveryId } = req.params;
-
-    console.log(`📦 [START] Driver ${driverUser._id} starting delivery ${deliveryId}`);
-
-    if (driverUser.role !== "driver") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: "Only drivers can start deliveries",
-      });
-    }
-
-    const driver = await Driver.findOne({ userId: driverUser._id }).session(session);
-    if (!driver) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Driver profile not found",
-      });
-    }
-
-    const delivery = await Delivery.findOne({
-      _id: deliveryId,
-      driverId: driver._id,
-    }).session(session);
-
-    if (!delivery) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found or not assigned to you",
-      });
-    }
-
-    if (delivery.status !== "assigned") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot start delivery from status: ${delivery.status}`,
-      });
-    }
-
-    // ✅ NEW: Check payment status before allowing start
-    const isCashPayment = delivery.payment?.method === 'cash';
-    const isPaid = delivery.payment?.status === 'paid';
-
-    console.log(`💳 Payment check: Method=${delivery.payment?.method}, Status=${delivery.payment?.status}`);
-
-    // For non-cash payments, MUST be paid before starting
-    if (!isCashPayment && !isPaid) {
-      await session.abortTransaction();
-      session.endSession();
-      
-      const paymentMethodName = delivery.payment?.method === 'card' ? 'card' : 'online';
-      
-      return res.status(403).json({
-        success: false,
-        message: `Cannot start delivery - customer hasn't completed ${paymentMethodName} payment yet`,
-        data: {
-          paymentStatus: delivery.payment?.status || 'pending',
-          paymentMethod: delivery.payment?.method,
-          requiresPayment: true,
-          waitingForCustomer: true,
-          nextAction: 'Wait for customer to complete payment',
-        },
-      });
-    }
-
-    // ✅ VERIFIED: Payment is confirmed or it's cash - allow start
-    delivery.status = "picked_up";
-    delivery.pickedUpAt = new Date();
-    delivery.waitingForPayment = false; // Clear flag
-
-    await delivery.save({ session });
-
-    const customer = await User.findById(delivery.customerId);
-    if (customer) {
-      await sendNotification({
-        userId: customer._id,
-        title: '📦 Package Picked Up',
-        message: `Driver has picked up your package and is heading to the destination${!isCashPayment ? '. Payment is secured' : ''}.`,
-        data: {
-          type: 'package_picked_up',
-          deliveryId: delivery._id,
-        },
-      });
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    console.log(`✅ Delivery started - Payment ${isPaid ? 'secured' : 'cash on delivery'}`);
-
-    res.status(200).json({
-      success: true,
-      message: "Delivery started successfully",
-      data: {
-        delivery: {
-          _id: delivery._id,
-          status: delivery.status,
-          pickedUpAt: delivery.pickedUpAt,
-          nextStep: "Proceed to dropoff location",
-        },
-        payment: {
-          status: isPaid ? 'secured' : 'cash_on_delivery',
-          message: isPaid 
-            ? 'Payment held until customer confirms delivery'
-            : `Collect ₦${delivery.fare.totalFare.toLocaleString()} cash upon delivery`,
-          isCash: isCashPayment,
-        },
-      },
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("❌ Start delivery error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to start delivery",
-    });
-  }
-};
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART 3: NEW - Refund Payment Function
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Add this NEW function to payment.controller.js:
 
 /**
- * @desc    Refund payment to customer
- * @route   POST /api/payments/refund/:paymentId
- * @access  Private (Internal use - called from cancelDelivery)
+ * Initiate a refund via Paystack
+ * Correct endpoint: POST /refund
  */
-export const refundPayment = async (paymentId, reason = 'Delivery cancelled') => {
+export const initiateRefund = async (refundData) => {
   try {
-    console.log(`💸 [REFUND] Initiating refund for payment ${paymentId}`);
+    console.log('💸 Initiating refund via Paystack');
+    console.log('   Transaction:', refundData.transaction);
+    console.log('   Amount:', refundData.amount);
 
-    const payment = await Payment.findById(paymentId);
-    
-    if (!payment) {
-      console.error('❌ Payment not found for refund');
-      return {
-        success: false,
-        error: 'Payment not found',
-      };
-    }
+    const response = await paystackAxios.post('/refund', {
+      transaction: refundData.transaction, // Transaction reference or ID
+      amount: refundData.amount ? Math.round(refundData.amount * 100) : undefined, // Optional: partial refund in kobo
+      currency: 'NGN',
+      customer_note: refundData.customer_note || 'Delivery cancelled - Refund processed',
+      merchant_note: refundData.merchant_note || `Refund for delivery ${refundData.deliveryId}`,
+    });
 
-    // Check if already refunded
-    if (payment.refund?.status === 'refunded') {
-      console.log('⚠️ Payment already refunded');
+    if (response.data.status === true) {
       return {
         success: true,
-        alreadyRefunded: true,
-        refundId: payment.refund.refundId,
-        refundedAt: payment.refund.refundedAt,
+        message: 'Refund initiated successfully',
+        data: {
+          refundId: response.data.data.id,
+          transaction: response.data.data.transaction,
+          amount: response.data.data.amount / 100,
+          currency: response.data.data.currency,
+          status: response.data.data.status,
+          refundedAt: response.data.data.refunded_at,
+          expectedAt: response.data.data.expected_at,
+        },
       };
     }
 
-    // Check if payment can be refunded
-    if (payment.status !== 'successful') {
-      console.log(`⚠️ Payment status ${payment.status} - no refund needed`);
-      return {
-        success: true,
-        noRefundNeeded: true,
-        reason: 'Payment was not successful',
-      };
-    }
-
-    // Check payment method
-    if (payment.paymentMethod === 'cash') {
-      console.log('💵 Cash payment - no refund needed');
-      return {
-        success: true,
-        noRefundNeeded: true,
-        reason: 'Cash payment - no refund needed',
-      };
-    }
-
-    // ✅ Initiate Paystack refund
-    try {
-      const response = await paystackAxios.post('/refund', {
-        transaction: payment.paystackReference,
-        amount: Math.round(payment.amount * 100), // Convert to kobo
-        currency: 'NGN',
-        customer_note: reason,
-        merchant_note: `Refund for delivery cancellation - ${reason}`,
-      });
-
-      if (response.data.status === true) {
-        // Update payment with refund details
-        payment.refund = {
-          status: 'refunded',
-          refundId: response.data.data.id || response.data.data.transaction?.id,
-          amount: payment.amount,
-          refundedAt: new Date(),
-          reason: reason,
-          paystackResponse: response.data.data,
-        };
-
-        payment.status = 'refunded';
-        
-        // Add to audit log
-        payment.auditLog.push({
-          action: 'refunded',
-          timestamp: new Date(),
-          details: {
-            refundId: payment.refund.refundId,
-            amount: payment.amount,
-            reason: reason,
-          },
-        });
-
-        payment.markModified('refund');
-        await payment.save();
-
-        console.log(`✅ Refund successful - Refund ID: ${payment.refund.refundId}`);
-
-        return {
-          success: true,
-          refundId: payment.refund.refundId,
-          amount: payment.amount,
-          refundedAt: payment.refund.refundedAt,
-        };
-      } else {
-        throw new Error(response.data.message || 'Refund failed');
-      }
-    } catch (refundError) {
-      console.error('❌ Paystack refund error:', refundError.response?.data || refundError.message);
-
-      // Mark as refund pending
-      payment.refund = {
-        status: 'pending',
-        amount: payment.amount,
-        requestedAt: new Date(),
-        reason: reason,
-        error: refundError.response?.data?.message || refundError.message,
-      };
-      payment.markModified('refund');
-      await payment.save();
-
-      return {
-        success: false,
-        error: refundError.response?.data?.message || 'Refund initiation failed',
-        refundPending: true,
-        requiresManualRefund: true,
-      };
-    }
-  } catch (error) {
-    console.error('❌ Refund error:', error);
     return {
       success: false,
-      error: error.message,
+      message: response.data.message || 'Refund initiation failed',
+      error: response.data,
+    };
+  } catch (error) {
+    console.error('❌ Paystack refund error:', error.response?.data);
+    return {
+      success: false,
+      message: error.response?.data?.message || 'Refund failed',
+      error: error.response?.data || error.message,
     };
   }
 };
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PART 4: UPDATE cancelDelivery - Add automatic refund
+// PART 2: Enhanced Cancel Delivery with Automatic Refund
 // ═══════════════════════════════════════════════════════════════════════════
+// Add to controllers/delivery.controller.js
 
-// In delivery.controller.js - REPLACE cancelDelivery function:
+import { initiateRefund } from '../utils/paystack.js'; 
 
-export const cancelDelivery = async (req, res) => {
+/**
+ * @desc    Cancel delivery with automatic refund
+ * @route   POST /api/deliveries/:deliveryId/cancel
+ * @access  Private (Customer, Driver, Admin)
+ */
+export const cancelDeliveryWithRefund = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -598,86 +84,185 @@ export const cancelDelivery = async (req, res) => {
     const { reason } = req.body;
 
     if (!reason) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Cancellation reason is required",
+        message: 'Cancellation reason is required',
       });
     }
 
-    const delivery = await Delivery.findById(deliveryId).session(session);
+    console.log(`🚫 [CANCELLATION] User ${user._id} (${user.role}) cancelling delivery ${deliveryId}`);
+
+    const delivery = await Delivery.findById(deliveryId)
+      .populate('customerId', 'name email phone')
+      .session(session);
+
     if (!delivery) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: "Delivery not found",
+        message: 'Delivery not found',
       });
     }
 
-    const isCustomer = user._id.toString() === delivery.customerId.toString();
-    const isDriver = user.role === "driver" && delivery.driverId;
-    const isAdmin = user.role === "admin";
+    // Authorization check
+    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
+    const isDriver = user.role === 'driver' && delivery.driverId?.toString() === user._id.toString();
+    const isAdmin = user.role === 'admin';
 
     if (!isCustomer && !isDriver && !isAdmin) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({
         success: false,
-        message: "Not authorized to cancel this delivery",
+        message: 'Not authorized to cancel this delivery',
       });
     }
 
     // Check if delivery can be cancelled
-    const cancellableStatuses = ['created', 'assigned', 'picked_up'];
-    if (!cancellableStatuses.includes(delivery.status)) {
+    if (!['created', 'assigned', 'picked_up'].includes(delivery.status)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
         message: `Delivery cannot be cancelled from status: ${delivery.status}`,
-        data: {
-          currentStatus: delivery.status,
-          canCancel: false,
-          reason: delivery.status === 'delivered' 
-            ? 'Delivery already completed'
-            : delivery.status === 'cancelled'
-            ? 'Delivery already cancelled'
-            : 'Delivery is in final stage',
-        },
+        currentStatus: delivery.status,
+        cancellableStatuses: ['created', 'assigned', 'picked_up'],
       });
     }
 
-    // ✅ NEW: Check for payment and initiate refund
+    // ═══════════════════════════════════════════════════════════════════
+    // REFUND LOGIC
+    // ═══════════════════════════════════════════════════════════════════
     let refundResult = null;
-    let payment = null;
+    let refundInfo = null;
 
-    try {
-      payment = await Payment.findOne({
-        deliveryId: delivery._id,
-        status: 'successful',
-      }).session(session);
+    // Find payment for this delivery
+    const payment = await Payment.findOne({
+      deliveryId: delivery._id,
+      status: 'successful',
+    }).session(session);
 
-      if (payment) {
-        console.log(`💰 Found payment ${payment._id} - Initiating refund`);
-        
-        // Commit current transaction before refund
-        await session.commitTransaction();
-        
-        // Process refund (outside transaction)
-        refundResult = await refundPayment(payment._id, reason);
-        
-        // Start new transaction for delivery update
-        await session.startSession();
-        await session.startTransaction();
+    const isCashPayment = delivery.payment?.method === 'cash';
+
+    if (payment && !isCashPayment) {
+      console.log(`💰 Processing refund for payment: ${payment._id}`);
+      console.log(`   Payment method: ${payment.paymentMethod}`);
+      console.log(`   Amount: ₦${payment.amount}`);
+
+      // Calculate refund amount based on cancellation stage
+      let refundAmount = payment.amount;
+      let cancellationFee = 0;
+
+      if (delivery.status === 'picked_up') {
+        // If driver already picked up, charge 20% cancellation fee
+        cancellationFee = Math.round(payment.amount * 0.2);
+        refundAmount = payment.amount - cancellationFee;
+        console.log(`⚠️ Picked up - Applying 20% cancellation fee: ₦${cancellationFee}`);
+      } else if (delivery.status === 'assigned') {
+        // If driver assigned but not picked up, charge 10% cancellation fee
+        cancellationFee = Math.round(payment.amount * 0.1);
+        refundAmount = payment.amount - cancellationFee;
+        console.log(`⚠️ Assigned - Applying 10% cancellation fee: ₦${cancellationFee}`);
       }
-    } catch (paymentError) {
-      console.warn('⚠️ Payment refund check failed:', paymentError.message);
+      // If 'created' (no driver assigned), full refund
+
+      console.log(`💸 Refund amount: ₦${refundAmount}`);
+
+      // Initiate refund via Paystack
+      refundResult = await initiateRefund({
+        transaction: payment.paystackReference,
+        amount: refundAmount, // Partial or full refund
+        deliveryId: delivery._id,
+        customer_note: `Your delivery was cancelled. Refund of ₦${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ₦${cancellationFee.toLocaleString()}` : ''}`,
+        merchant_note: `Delivery ${delivery.referenceId} cancelled by ${user.role}. Reason: ${reason}`,
+      });
+
+      if (refundResult.success) {
+        console.log(`✅ Refund initiated successfully`);
+        console.log(`   Refund ID: ${refundResult.data.refundId}`);
+
+        // Update payment record
+        payment.status = 'refunded';
+        payment.metadata = {
+          ...payment.metadata,
+          refundStatus: 'processing',
+          refundId: refundResult.data.refundId,
+          refundAmount: refundAmount,
+          cancellationFee: cancellationFee,
+          refundInitiatedAt: new Date(),
+          refundExpectedAt: refundResult.data.expectedAt,
+          cancelledBy: user._id,
+          cancellationReason: reason,
+        };
+        payment.markModified('metadata');
+        
+        payment.auditLog.push({
+          action: 'refund_initiated',
+          timestamp: new Date(),
+          details: {
+            refundId: refundResult.data.refundId,
+            refundAmount,
+            cancellationFee,
+            reason,
+          },
+        });
+
+        await payment.save({ session });
+
+        refundInfo = {
+          refunded: true,
+          refundAmount,
+          cancellationFee,
+          refundId: refundResult.data.refundId,
+          expectedAt: refundResult.data.expectedAt,
+          message: cancellationFee > 0
+            ? `Refund of ₦${refundAmount.toLocaleString()} initiated (₦${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
+            : `Full refund of ₦${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
+        };
+      } else {
+        console.error(`❌ Refund failed:`, refundResult.message);
+        
+        // Mark for manual refund
+        payment.metadata = {
+          ...payment.metadata,
+          refundStatus: 'failed',
+          refundError: refundResult.message,
+          requiresManualRefund: true,
+          cancelledBy: user._id,
+          cancellationReason: reason,
+        };
+        payment.markModified('metadata');
+        await payment.save({ session });
+
+        refundInfo = {
+          refunded: false,
+          error: refundResult.message,
+          requiresManualProcessing: true,
+          message: 'Automatic refund failed. Our support team will process your refund manually within 24 hours.',
+          supportContact: process.env.SUPPORT_EMAIL || 'support@riderr.com',
+        };
+      }
+    } else if (isCashPayment) {
+      console.log(`💵 Cash payment - No refund needed`);
+      refundInfo = {
+        refunded: false,
+        cashPayment: true,
+        message: 'Cash payment - No refund necessary',
+      };
+    } else {
+      console.log(`⚠️ No payment found or payment not successful`);
+      refundInfo = {
+        refunded: false,
+        noPayment: true,
+        message: 'No payment to refund',
+      };
     }
 
-    // Update delivery status
-    delivery.status = "cancelled";
+    // ═══════════════════════════════════════════════════════════════════
+    // UPDATE DELIVERY
+    // ═══════════════════════════════════════════════════════════════════
+    delivery.status = 'cancelled';
     delivery.cancelledAt = new Date();
     delivery.cancelledBy = {
       userId: user._id,
@@ -685,7 +270,18 @@ export const cancelDelivery = async (req, res) => {
       reason: reason,
     };
 
-    // If driver was assigned, free them up
+    // Update payment status in delivery
+    if (refundInfo?.refunded) {
+      delivery.payment.status = 'refunded';
+    } else if (delivery.payment.status === 'paid') {
+      delivery.payment.status = 'cancelled';
+    }
+
+    await delivery.save({ session });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UPDATE DRIVER
+    // ═══════════════════════════════════════════════════════════════════
     if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId).session(session);
       if (driver) {
@@ -698,7 +294,7 @@ export const cancelDelivery = async (req, res) => {
           await sendNotification({
             userId: driverUser._id,
             title: '🚫 Delivery Cancelled',
-            message: `Delivery #${delivery.referenceId} has been cancelled. ${refundResult?.success ? 'Payment refunded to customer.' : ''}`,
+            message: `Delivery #${delivery.referenceId} has been cancelled by ${user.role === 'customer' ? 'customer' : 'admin'}. Reason: ${reason}`,
             data: {
               type: 'delivery_cancelled',
               deliveryId: delivery._id,
@@ -710,60 +306,43 @@ export const cancelDelivery = async (req, res) => {
       }
     }
 
-    // Notify other party
-    if (user.role === 'driver') {
-      const customer = await User.findById(delivery.customerId);
-      if (customer) {
-        await sendNotification({
-          userId: customer._id,
-          title: '🚫 Delivery Cancelled by Driver',
-          message: `Your delivery has been cancelled. ${refundResult?.success ? 'Full refund will be processed within 5-7 business days.' : reason}`,
-          data: {
-            type: 'delivery_cancelled',
-            deliveryId: delivery._id,
-            reason: reason,
-            refunded: refundResult?.success || false,
-          },
-        });
-      }
-    } else if (user.role === 'customer' && delivery.driverId) {
-      // Already notified driver above
+    // ═══════════════════════════════════════════════════════════════════
+    // NOTIFY CUSTOMER
+    // ═══════════════════════════════════════════════════════════════════
+    if (user.role !== 'customer') {
+      await sendNotification({
+        userId: delivery.customerId._id,
+        title: '🚫 Delivery Cancelled',
+        message: refundInfo?.refunded
+          ? `Your delivery has been cancelled. ${refundInfo.message}`
+          : `Your delivery has been cancelled. Reason: ${reason}`,
+        data: {
+          type: 'delivery_cancelled',
+          deliveryId: delivery._id,
+          reason: reason,
+          refundInfo: refundInfo,
+        },
+      });
     }
 
-    await delivery.save({ session });
+    // Commit transaction
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Delivery cancelled - Refund: ${refundResult?.success ? 'Success' : 'Not needed/Failed'}`);
+    console.log(`✅ Delivery cancelled successfully`);
 
     res.status(200).json({
       success: true,
-      message: refundResult?.success 
-        ? "Delivery cancelled and payment refunded successfully"
-        : "Delivery cancelled successfully",
+      message: 'Delivery cancelled successfully',
       data: {
         delivery: {
           _id: delivery._id,
           referenceId: delivery.referenceId,
           status: delivery.status,
           cancelledAt: delivery.cancelledAt,
-          cancelledBy: {
-            role: user.role,
-            reason: reason,
-          },
+          cancelledBy: delivery.cancelledBy,
         },
-        refund: refundResult ? {
-          refunded: refundResult.success,
-          refundId: refundResult.refundId,
-          amount: refundResult.amount,
-          refundedAt: refundResult.refundedAt,
-          message: refundResult.success 
-            ? 'Refund processed successfully. Amount will be credited within 5-7 business days'
-            : refundResult.noRefundNeeded 
-            ? 'No refund needed'
-            : 'Refund pending - please contact support',
-          requiresManualRefund: refundResult.requiresManualRefund || false,
-        } : null,
+        refund: refundInfo,
       },
     });
   } catch (error) {
@@ -772,207 +351,611 @@ export const cancelDelivery = async (req, res) => {
     }
     session.endSession();
     
-    console.error("❌ Cancel delivery error:", error);
+    console.error('❌ Cancel delivery with refund error:', error);
     res.status(500).json({
       success: false,
-      message: "Failed to cancel delivery",
+      message: 'Failed to cancel delivery',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PART 5: UPDATE Payment Schema - Add refund fields
+// PART 3: Fetch Nearby Drivers for Customer at Specific Location
 // ═══════════════════════════════════════════════════════════════════════════
 
-// In models/payments.models.js - ADD these fields to the schema:
-
-const paymentSchema = new mongoose.Schema({
-  // ... existing fields ...
-  
-  // ✅ NEW: Refund tracking
-  refund: {
-    status: {
-      type: String,
-      enum: ['none', 'pending', 'refunded', 'failed'],
-      default: 'none',
-    },
-    refundId: String, // Paystack refund ID
-    amount: Number,
-    refundedAt: Date,
-    requestedAt: Date,
-    reason: String,
-    error: String,
-    paystackResponse: mongoose.Schema.Types.Mixed,
-  },
-  
-  // ... rest of schema ...
-});
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART 6: UPDATE Delivery Schema - Add waitingForPayment flag
-// ═══════════════════════════════════════════════════════════════════════════
-
-// In models/delivery.models.js - ADD this field:
-
-const deliverySchema = new mongoose.Schema({
-  // ... existing fields ...
-  
-  // ✅ NEW: Flag to indicate driver is waiting for payment
-  waitingForPayment: {
-    type: Boolean,
-    default: false,
-  },
-  
-  // ... rest of schema ...
-});
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART 7: ADD Webhook Handler for Payment Completion
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Add to payment.controller.js - UPDATE handlePaystackWebhook:
-
-export const handlePaystackWebhook = async (req, res) => {
+/**
+ * @desc    Get nearby drivers for customer at specific pickup location
+ * @route   GET /api/deliveries/nearby-drivers?lat=X&lng=Y&radius=Z
+ * @access  Private (Customer)
+ */
+export const getCustomerNearbyDrivers = async (req, res) => {
   try {
-    const hash = crypto
-      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
-      .update(JSON.stringify(req.body))
-      .digest('hex');
+    const customer = req.user;
 
-    if (hash !== req.headers['x-paystack-signature']) {
-      return res.status(400).json({
+    if (customer.role !== 'customer') {
+      return res.status(403).json({
         success: false,
-        message: 'Invalid signature',
+        message: 'Only customers can view nearby drivers',
       });
     }
 
-    const event = req.body;
-    console.log('📨 Paystack webhook:', event.event);
+    const { lat, lng, radius = 10 } = req.query;
 
-    if (event.event === 'charge.success') {
-      const reference = event.data.reference;
-      const payment = await Payment.findOne({ paystackReference: reference });
+    if (!lat || !lng) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pickup location (lat, lng) is required',
+        example: {
+          url: '/api/deliveries/nearby-drivers?lat=6.5244&lng=3.3792&radius=10',
+          description: 'Get drivers within 10km of pickup location',
+        },
+      });
+    }
 
-      if (payment && payment.status === 'pending') {
-        payment.status = 'successful';
-        payment.paidAt = new Date();
-        payment.verifiedAt = new Date();
-        payment.webhookData = event.data;
-        payment.metadata = {
-          ...payment.metadata,
-          escrowStatus: 'held',
-          escrowHeldAt: new Date(),
-        };
-        payment.markModified('metadata');
-        
-        await payment.save();
+    const pickupLat = parseFloat(lat);
+    const pickupLng = parseFloat(lng);
+    const searchRadius = parseFloat(radius);
 
-        // Update delivery
-        const delivery = await Delivery.findById(payment.deliveryId);
-        if (delivery) {
-          delivery.payment.status = 'paid';
-          delivery.payment.paidAt = new Date();
-          delivery.waitingForPayment = false; // ✅ Clear waiting flag
-          await delivery.save();
+    if (isNaN(pickupLat) || isNaN(pickupLng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates provided',
+      });
+    }
+
+    console.log(`📍 Customer ${customer._id} searching for drivers near pickup: ${pickupLat}, ${pickupLng}`);
+    console.log(`🔍 Search radius: ${searchRadius} km`);
+
+    // Find all available drivers
+    const drivers = await Driver.find({
+      isOnline: true,
+      isAvailable: true,
+      isActive: true,
+      approvalStatus: 'approved',
+      $or: [
+        { currentDeliveryId: { $exists: false } },
+        { currentDeliveryId: null }
+      ],
+      $or: [
+        { 'location.coordinates': { $exists: true, $ne: [0, 0] } },
+        { 'currentLocation.lat': { $exists: true } },
+      ],
+    })
+      .populate('userId', 'name phone avatarUrl rating')
+      .populate('companyId', 'name logo rating contactPhone')
+      .lean();
+
+    console.log(`🚗 Total available drivers: ${drivers.length}`);
+
+    const nearbyDrivers = [];
+
+    for (const driver of drivers) {
+      let driverLat, driverLng;
+
+      // Get driver location
+      if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        driverLat = driver.currentLocation.lat;
+        driverLng = driver.currentLocation.lng;
+      } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+        driverLng = driver.location.coordinates[0];
+        driverLat = driver.location.coordinates[1];
+      } else {
+        console.log(`⏭️ Driver ${driver._id} - No location data`);
+        continue;
+      }
+
+      // Calculate distance from pickup location
+      const distanceToPickup = calculateDistance(
+        pickupLat,
+        pickupLng,
+        driverLat,
+        driverLng
+      );
+
+      console.log(`📏 Driver ${driver._id} - Distance to pickup: ${distanceToPickup.toFixed(2)} km`);
+
+      // Only include drivers within search radius
+      if (distanceToPickup <= searchRadius) {
+        const etaMinutes = Math.max(2, Math.ceil(distanceToPickup * 3));
+
+        nearbyDrivers.push({
+          _id: driver._id,
+          driverId: driver._id,
+          name: driver.userId?.name || 'Driver',
+          phone: driver.userId?.phone || '',
+          avatarUrl: driver.userId?.avatarUrl,
+          rating: driver.userId?.rating || 0,
+          totalRatings: driver.totalRatings || 0,
           
-          // ✅ NEW: Notify driver that payment is complete
-          if (delivery.driverId) {
-            const driver = await Driver.findById(delivery.driverId).populate('userId');
-            if (driver && driver.userId) {
-              await sendNotification({
-                userId: driver.userId._id,
-                title: '✅ Payment Confirmed!',
-                message: `Customer completed payment for delivery #${delivery.referenceId}. You can now start the delivery!`,
-                data: {
-                  type: 'payment_confirmed',
-                  deliveryId: delivery._id,
-                  paymentId: payment._id,
-                  amount: payment.amount,
-                  canStartDelivery: true,
-                },
-              });
-            }
-          }
-        }
-
-        console.log('✅ Payment updated via webhook:', reference);
+          company: driver.companyId ? {
+            _id: driver.companyId._id,
+            name: driver.companyId.name,
+            logo: driver.companyId.logo,
+            rating: driver.companyId.rating || 0,
+            contactPhone: driver.companyId.contactPhone || '',
+          } : null,
+          
+          vehicle: {
+            type: driver.vehicleType || 'bike',
+            make: driver.vehicleMake || '',
+            model: driver.vehicleModel || '',
+            plateNumber: driver.plateNumber || '',
+            color: driver.vehicleColor || '',
+          },
+          
+          currentLocation: {
+            lat: driverLat,
+            lng: driverLng,
+            updatedAt: driver.currentLocation?.updatedAt || new Date(),
+          },
+          
+          distanceFromPickup: parseFloat(distanceToPickup.toFixed(2)),
+          distanceText: distanceToPickup < 0.1 ? 'Very close' : `${distanceToPickup.toFixed(1)} km away`,
+          
+          eta: {
+            minutes: etaMinutes,
+            text: etaMinutes < 5 ? 'Arriving soon' : `${etaMinutes} min`,
+            formatted: `Approximately ${etaMinutes} minutes to pickup`,
+          },
+          
+          availability: {
+            isOnline: driver.isOnline,
+            isAvailable: driver.isAvailable,
+            status: 'available',
+            canAcceptDelivery: true,
+          },
+          
+          stats: {
+            totalDeliveries: driver.totalDeliveries || 0,
+            acceptanceRate: driver.totalRequests
+              ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+              : 0,
+          },
+        });
       }
     }
 
-    res.status(200).json({ success: true });
+    // Sort by distance (closest first)
+    nearbyDrivers.sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
+
+    console.log(`✅ Found ${nearbyDrivers.length} nearby drivers within ${searchRadius}km`);
+
+    // Group drivers by distance ranges for better UX
+    const groupedDrivers = {
+      veryClose: nearbyDrivers.filter(d => d.distanceFromPickup < 1), // < 1km
+      close: nearbyDrivers.filter(d => d.distanceFromPickup >= 1 && d.distanceFromPickup < 3), // 1-3km
+      nearby: nearbyDrivers.filter(d => d.distanceFromPickup >= 3 && d.distanceFromPickup < 5), // 3-5km
+      farther: nearbyDrivers.filter(d => d.distanceFromPickup >= 5), // > 5km
+    };
+
+    const response = {
+      success: true,
+      message: nearbyDrivers.length > 0
+        ? `Found ${nearbyDrivers.length} available driver${nearbyDrivers.length !== 1 ? 's' : ''} near your pickup location`
+        : 'No drivers currently available in your area',
+      data: {
+        pickupLocation: {
+          lat: pickupLat,
+          lng: pickupLng,
+        },
+        searchRadius: {
+          km: searchRadius,
+          formatted: `${searchRadius} km`,
+        },
+        drivers: nearbyDrivers,
+        grouped: {
+          veryClose: {
+            count: groupedDrivers.veryClose.length,
+            drivers: groupedDrivers.veryClose,
+            label: 'Very Close (< 1km)',
+          },
+          close: {
+            count: groupedDrivers.close.length,
+            drivers: groupedDrivers.close,
+            label: 'Close (1-3km)',
+          },
+          nearby: {
+            count: groupedDrivers.nearby.length,
+            drivers: groupedDrivers.nearby,
+            label: 'Nearby (3-5km)',
+          },
+          farther: {
+            count: groupedDrivers.farther.length,
+            drivers: groupedDrivers.farther,
+            label: 'Farther (5km+)',
+          },
+        },
+        summary: {
+          total: nearbyDrivers.length,
+          closestDriver: nearbyDrivers[0] || null,
+          averageDistance: nearbyDrivers.length > 0
+            ? parseFloat((nearbyDrivers.reduce((sum, d) => sum + d.distanceFromPickup, 0) / nearbyDrivers.length).toFixed(2))
+            : 0,
+          averageETA: nearbyDrivers.length > 0
+            ? Math.round(nearbyDrivers.reduce((sum, d) => sum + d.eta.minutes, 0) / nearbyDrivers.length)
+            : 0,
+        },
+        availability: {
+          hasDrivers: nearbyDrivers.length > 0,
+          confidence: nearbyDrivers.length >= 3 ? 'high' : nearbyDrivers.length >= 1 ? 'medium' : 'low',
+          recommendation: nearbyDrivers.length >= 3
+            ? 'Great! Multiple drivers available. Your delivery will be picked up quickly.'
+            : nearbyDrivers.length >= 1
+            ? 'Good! Drivers are available in your area.'
+            : 'Limited availability. Your request may take longer to be accepted.',
+        },
+        timestamp: new Date().toISOString(),
+        refreshInterval: 30, // Suggest refresh every 30 seconds
+      },
+    };
+
+    res.status(200).json(response);
   } catch (error) {
-    console.error('❌ Webhook error:', error);
+    console.error('❌ Get customer nearby drivers error:', error);
     res.status(500).json({
       success: false,
-      message: 'Webhook processing failed',
+      message: 'Failed to find nearby drivers',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PART 8: Add import for paystackAxios in payment.controller.js
+// PART 4: Update Routes in delivery.routes.js
 // ═══════════════════════════════════════════════════════════════════════════
 
-// At the top of payment.controller.js, add:
+// Add these new routes to your delivery.routes.js:
 
-import axios from 'axios';
+import {
+  cancelDeliveryWithRefund,
+  getCustomerNearbyDrivers,
+} from '../controllers/delivery.controller.js';
 
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
+// Replace the old cancel route with new one
+router.post('/:deliveryId/cancel', authenticate, cancelDeliveryWithRefund);
 
-const paystackAxios = axios.create({
-  baseURL: 'https://api.paystack.co',
-  headers: {
-    Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  timeout: 30000,
-});
+// Add new nearby drivers route for customers
+router.get('/nearby-drivers', authenticate, getCustomerNearbyDrivers);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SUMMARY OF CHANGES
+// PART 5: Export the refund function from paystack.js
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Add to your exports in utils/paystack.js:
+export default {
+  initializePayment,
+  verifyPayment,
+  chargeCardViaPaystack,
+  submitOtpToPaystack,
+  submitPinToPaystack,
+  createDedicatedVirtualAccount,
+  createSubaccount,
+  updateSubaccount,
+  getBankList,
+  resolveAccountNumber,
+  getPublicKey,
+  isProduction,
+  isUsingLiveKeys,
+  initiateTransfer,
+  createTransferRecipient,
+  initiateRefund, // ← Add this
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TESTING GUIDE
 // ═══════════════════════════════════════════════════════════════════════════
 
 /*
-✅ WHAT'S IMPLEMENTED:
+TEST 1: Get Nearby Drivers at Pickup Location
+──────────────────────────────────────────────
+GET /api/deliveries/nearby-drivers?lat=6.5244&lng=3.3792&radius=10
 
-1. DRIVER CAN ACCEPT BEFORE PAYMENT:
-   - acceptDelivery() now allows acceptance regardless of payment status
-   - Sets waitingForPayment flag if payment not completed
-   - Driver sees message "Waiting for customer to complete payment"
+Headers:
+{
+  "Authorization": "Bearer <CUSTOMER_TOKEN>"
+}
 
-2. DRIVER CANNOT START WITHOUT PAYMENT:
-   - startDelivery() blocks if payment not confirmed (for non-cash)
-   - Returns clear error: "Customer hasn't completed payment yet"
-   - Allows start only after payment confirmed or for cash deliveries
+Expected Response:
+{
+  "success": true,
+  "message": "Found 5 available drivers near your pickup location",
+  "data": {
+    "pickupLocation": { "lat": 6.5244, "lng": 3.3792 },
+    "searchRadius": { "km": 10, "formatted": "10 km" },
+    "drivers": [
+      {
+        "driverId": "...",
+        "name": "John Driver",
+        "rating": 4.8,
+        "vehicle": { "type": "bike", "make": "Honda", "model": "CG125" },
+        "distanceFromPickup": 0.8,
+        "distanceText": "0.8 km away",
+        "eta": {
+          "minutes": 3,
+          "text": "Arriving soon",
+          "formatted": "Approximately 3 minutes to pickup"
+        },
+        "company": { "name": "Express Logistics", "rating": 4.9 }
+      }
+    ],
+    "grouped": {
+      "veryClose": { "count": 2, "label": "Very Close (< 1km)" },
+      "close": { "count": 3, "label": "Close (1-3km)" }
+    },
+    "summary": {
+      "total": 5,
+      "closestDriver": {...},
+      "averageDistance": 2.4,
+      "averageETA": 7
+    }
+  }
+}
 
-3. AUTOMATIC REFUND ON CANCELLATION:
-   - cancelDelivery() checks for existing payment
-   - Calls refundPayment() to initiate Paystack refund
-   - Updates payment status to 'refunded'
-   - Notifies customer about refund (5-7 business days)
 
-4. PAYMENT CONFIRMATION NOTIFICATION:
-   - Webhook notifies driver when payment completes
-   - Driver can then start the delivery
-   - waitingForPayment flag cleared
+TEST 2: Cancel Delivery with Refund (No Driver Assigned)
+────────────────────────────────────────────────────────
+POST /api/deliveries/:deliveryId/cancel
 
-5. REFUND TRACKING:
-   - Payment schema tracks refund status
-   - Stores refund ID, amount, timestamp
-   - Handles failed refunds (marked for manual processing)
+Headers:
+{
+  "Authorization": "Bearer <CUSTOMER_TOKEN>",
+  "Content-Type": "application/json"
+}
 
-DEPLOYMENT STEPS:
-1. Update Delivery schema (add waitingForPayment)
-2. Update Payment schema (add refund object)
-3. Replace acceptDelivery function
-4. Replace startDelivery function
-5. Replace cancelDelivery function
-6. Add refundPayment function
-7. Update handlePaystackWebhook
-8. Test flow thoroughly
+Body:
+{
+  "reason": "Changed my mind"
+}
+
+Expected Response (Full Refund):
+{
+  "success": true,
+  "message": "Delivery cancelled successfully",
+  "data": {
+    "delivery": {
+      "_id": "...",
+      "status": "cancelled",
+      "cancelledAt": "2026-02-19T..."
+    },
+    "refund": {
+      "refunded": true,
+      "refundAmount": 460,
+      "cancellationFee": 0,
+      "refundId": "RFD_...",
+      "expectedAt": "2026-02-26T...",
+      "message": "Full refund of ₦460 initiated. Expect refund in 5-10 business days."
+    }
+  }
+}
+
+
+TEST 3: Cancel After Driver Assigned (10% Fee)
+──────────────────────────────────────────────
+POST /api/deliveries/:deliveryId/cancel
+
+Body:
+{
+  "reason": "Emergency came up"
+}
+
+Expected Response (Partial Refund):
+{
+  "success": true,
+  "message": "Delivery cancelled successfully",
+  "data": {
+    "delivery": { "status": "cancelled" },
+    "refund": {
+      "refunded": true,
+      "refundAmount": 414,
+      "cancellationFee": 46,
+      "message": "Refund of ₦414 initiated (₦46 cancellation fee deducted)"
+    }
+  }
+}
+
+
+TEST 4: Cancel After Pickup (20% Fee)
+─────────────────────────────────────
+POST /api/deliveries/:deliveryId/cancel
+
+Expected Response:
+{
+  "refund": {
+    "refunded": true,
+    "refundAmount": 368,
+    "cancellationFee": 92,
+    "message": "Refund of ₦368 initiated (₦92 cancellation fee deducted)"
+  }
+}
+
+
+TEST 5: Cancel Cash Delivery
+────────────────────────────
+POST /api/deliveries/:deliveryId/cancel
+
+Expected Response:
+{
+  "refund": {
+    "refunded": false,
+    "cashPayment": true,
+    "message": "Cash payment - No refund necessary"
+  }
+}
+*/
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFUND POLICY SUMMARY
+// ═══════════════════════════════════════════════════════════════════════════
+
+/*
+CANCELLATION FEES:
+
+1. Before Driver Assignment (status: "created")
+   - Cancellation Fee: 0%
+   - Refund: 100% (Full refund)
+   - Example: ₦460 paid → ₦460 refunded
+
+2. After Driver Assigned (status: "assigned")
+   - Cancellation Fee: 10%
+   - Refund: 90%
+   - Example: ₦460 paid → ₦414 refunded (₦46 fee)
+
+3. After Pickup (status: "picked_up")
+   - Cancellation Fee: 20%
+   - Refund: 80%
+   - Example: ₦460 paid → ₦368 refunded (₦92 fee)
+
+4. After Delivery (status: "delivered")
+   - Cannot cancel
+   - No refund
+
+5. Cash Payments
+   - No refund processing needed
+   - Cancel anytime before delivery
+
+
+REFUND TIMELINE:
+- Initiated: Immediately upon cancellation
+- Processing: Paystack processes refund
+- Expected: 5-10 business days to customer's account
+- Method: Same payment method used for original payment
+*/
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FRONTEND INTEGRATION GUIDE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/*
+1. NEARBY DRIVERS MAP VIEW
+─────────────────────────────
+// When customer selects pickup location, immediately fetch nearby drivers
+
+const fetchNearbyDrivers = async (pickupLat, pickupLng) => {
+  const response = await fetch(
+    `/api/deliveries/nearby-drivers?lat=${pickupLat}&lng=${pickupLng}&radius=10`,
+    {
+      headers: { 'Authorization': `Bearer ${token}` }
+    }
+  );
+  const data = await response.json();
+  
+  if (data.success) {
+    // Show drivers on map
+    data.data.drivers.forEach(driver => {
+      addMarkerToMap(driver.currentLocation, driver);
+    });
+    
+    // Show summary
+    console.log(`${data.data.summary.total} drivers nearby`);
+    console.log(`Closest: ${data.data.summary.closestDriver?.distanceText}`);
+  }
+};
+
+// Auto-refresh every 30 seconds
+setInterval(() => fetchNearbyDrivers(lat, lng), 30000);
+
+
+2. CANCEL WITH REFUND CONFIRMATION
+──────────────────────────────────
+const cancelDelivery = async (deliveryId, reason) => {
+  // Show warning based on delivery status
+  const delivery = await getDeliveryDetails(deliveryId);
+  
+  let warningMessage = '';
+  if (delivery.status === 'picked_up') {
+    warningMessage = 'Driver has picked up your package. A 20% cancellation fee will apply.';
+  } else if (delivery.status === 'assigned') {
+    warningMessage = 'A driver is on the way. A 10% cancellation fee will apply.';
+  } else {
+    warningMessage = 'Full refund will be processed.';
+  }
+  
+  if (confirm(`Cancel delivery? ${warningMessage}`)) {
+    const response = await fetch(`/api/deliveries/${deliveryId}/cancel`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ reason })
+    });
+    
+    const data = await response.json();
+    
+    if (data.success && data.data.refund?.refunded) {
+      alert(`Delivery cancelled! ${data.data.refund.message}`);
+    }
+  }
+};
+
+
+3. SHOW NEARBY DRIVERS COUNT BEFORE CREATING DELIVERY
+────────────────────────────────────────────────────────
+const checkDriverAvailability = async (pickupLat, pickupLng) => {
+  const response = await fetch(
+    `/api/deliveries/nearby-drivers?lat=${pickupLat}&lng=${pickupLng}`,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  );
+  const data = await response.json();
+  
+  // Show availability indicator
+  if (data.data.summary.total >= 5) {
+    showMessage('🟢 Great! Many drivers available');
+  } else if (data.data.summary.total >= 1) {
+    showMessage('🟡 Limited drivers. May take longer');
+  } else {
+    showMessage('🔴 No drivers nearby. Try different location?');
+  }
+  
+  return data.data.summary.total > 0;
+};
+*/
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUMMARY
+// ═══════════════════════════════════════════════════════════════════════════
+
+/*
+✅ FEATURES IMPLEMENTED:
+
+1. AUTOMATIC REFUNDS
+   - Full refund if cancelled before driver assignment
+   - 10% fee if cancelled after driver assigned
+   - 20% fee if cancelled after pickup
+   - No refund needed for cash payments
+   - Refunds processed via Paystack Refund API
+   - 5-10 business days refund timeline
+
+2. NEARBY DRIVERS FOR CUSTOMERS
+   - Fetch drivers near pickup location
+   - Real-time driver locations
+   - Distance calculations
+   - ETA estimates
+   - Grouped by distance ranges
+   - Company information included
+   - Driver ratings and stats
+   - Auto-refresh capability
+
+3. ENHANCED CANCELLATION
+   - Works for customers, drivers, and admins
+   - Automatic fee calculation
+   - Payment record updates
+   - Driver availability updates
+   - Push notifications
+   - Audit trail in payment logs
+
+4. INTEGRATION READY
+   - Complete API endpoints
+   - Detailed responses
+   - Error handling
+   - Frontend examples
+   - Testing guide included
 */
