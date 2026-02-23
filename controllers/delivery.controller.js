@@ -3554,9 +3554,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     }
 
     // Authorization check
-    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
-    const isDriver = user.role === 'driver' && delivery.driverId?.toString() === user._id.toString();
-    const isAdmin = user.role === 'admin';
+    //const isCustomer = user._id.toString() === delivery.customerId._id.toString();
+    //const isDriver = user.role === 'driver' && delivery.driverId?.toString() === user._id.toString();
+    //const isAdmin = user.role === 'admin';
 
     if (!isCustomer && !isDriver && !isAdmin) {
       await session.abortTransaction();
