@@ -5,13 +5,250 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
-import twilio from "twilio";
 import { validationResult } from "express-validator";
 
 /**
- * -------------------------------
+ * ============================================================================
+ * EMAIL CONFIGURATION - SIMPLE & PRODUCTION READY
+ * ============================================================================
+ */
+
+/**
+ * Create Email Transporter - Works with ANY SMTP provider
+ */
+const createEmailTransporter = () => {
+  try {
+    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+      console.error('❌ Missing: EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD');
+      return null;
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: parseInt(process.env.EMAIL_PORT) || 587,
+      secure: parseInt(process.env.EMAIL_PORT) === 465,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
+      tls: {
+        rejectUnauthorized: process.env.NODE_ENV === 'production',
+      },
+    });
+
+    console.log('✅ Email configured:', process.env.EMAIL_HOST);
+    return transporter;
+  } catch (error) {
+    console.error('❌ Email error:', error);
+    return null;
+  }
+};
+
+/**
+ * Send Verification Email
+ */
+const sendVerificationEmail = async (email, code, name, phone = null) => {
+  try {
+    const transporter = createEmailTransporter();
+
+    if (!transporter) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📧 DEV MODE - Verification code for ${email}:`);
+        console.log(`   CODE: ${code}`);
+        console.log('='.repeat(60) + '\n');
+        return { success: true, devMode: true };
+      }
+      return { success: false, error: 'Email not configured' };
+    }
+
+    const mailOptions = {
+      from: {
+        name: process.env.EMAIL_FROM_NAME || 'Riderr',
+        address: process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER,
+      },
+      to: email,
+      subject: '🔐 Your Riderr Verification Code',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #f5f5f5; }
+            .container { max-width: 600px; margin: 0 auto; background: #fff; }
+            .header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 40px; text-align: center; color: white; }
+            .header h1 { margin: 0; font-size: 32px; font-weight: 700; }
+            .content { padding: 40px 30px; }
+            .greeting { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+            .otp-box { background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.2); }
+            .otp-code { font-size: 42px; font-weight: 700; letter-spacing: 8px; color: white; margin: 0; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
+            .expiry { font-size: 14px; color: #666; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #667eea; }
+            .footer { background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #999; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>🚗 Riderr</h1>
+              <p style="margin: 10px 0 0 0;">Email Verification</p>
+            </div>
+            <div class="content">
+              <div class="greeting">Hello ${name},</div>
+              <p>Welcome to Riderr! Please verify your email with the code below:</p>
+              <div class="otp-box">
+                <p class="otp-code">${code}</p>
+              </div>
+              <div class="expiry">⏰ This code expires in 10 minutes</div>
+              <p style="color: #888; font-size: 14px; margin-top: 30px;">
+                If you didn't create a Riderr account, please ignore this email.
+              </p>
+            </div>
+            <div class="footer">
+              <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
+              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `
+Hello ${name},
+
+Welcome to Riderr! Your verification code is: ${code}
+
+This code expires in 10 minutes.
+
+If you didn't create a Riderr account, please ignore this email.
+
+© ${new Date().getFullYear()} Riderr
+      `.trim(),
+    };
+
+    console.log(`📧 Sending verification email to ${email}...`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent! Message ID: ${info.messageId}`);
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('❌ Email failed:', error.message);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`📧 EMAIL FAILED - Dev Code: ${code}`);
+      console.log('='.repeat(60) + '\n');
+    }
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send Password Reset OTP
+ */
+const sendOTPEmail = async (email, otp, name, phone = null) => {
+  try {
+    const transporter = createEmailTransporter();
+
+    if (!transporter) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📧 DEV MODE - Password reset OTP for ${email}:`);
+        console.log(`   OTP: ${otp}`);
+        console.log('='.repeat(60) + '\n');
+        return { success: true, devMode: true };
+      }
+      return { success: false, error: 'Email not configured' };
+    }
+
+    const mailOptions = {
+      from: {
+        name: process.env.EMAIL_FROM_NAME || 'Riderr',
+        address: process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER,
+      },
+      to: email,
+      subject: '🔑 Reset Your Riderr Password',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #f5f5f5; }
+            .container { max-width: 600px; margin: 0 auto; background: #fff; }
+            .header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 40px; text-align: center; color: white; }
+            .header h1 { margin: 0; font-size: 32px; font-weight: 700; }
+            .content { padding: 40px 30px; }
+            .greeting { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+            .otp-box { background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.2); }
+            .otp-code { font-size: 42px; font-weight: 700; letter-spacing: 8px; color: white; margin: 0; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
+            .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin: 20px 0; }
+            .footer { background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #999; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>🚗 Riderr</h1>
+              <p style="margin: 10px 0 0 0;">Password Reset</p>
+            </div>
+            <div class="content">
+              <div class="greeting">Hello ${name},</div>
+              <p>You requested to reset your password. Use the code below:</p>
+              <div class="otp-box">
+                <p class="otp-code">${otp}</p>
+              </div>
+              <div class="warning">
+                <strong>⚠️ Security Alert:</strong> This OTP expires in 10 minutes. If you didn't request this, please ignore this email.
+              </div>
+              <p style="color: #888; font-size: 14px; margin-top: 20px;">
+                Never share this code with anyone.
+              </p>
+            </div>
+            <div class="footer">
+              <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
+              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `
+Hello ${name},
+
+You requested to reset your password. Your OTP is: ${otp}
+
+This OTP expires in 10 minutes.
+
+If you didn't request this, please ignore this email.
+
+© ${new Date().getFullYear()} Riderr
+      `.trim(),
+    };
+
+    console.log(`📧 Sending password reset email to ${email}...`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Password reset email sent! Message ID: ${info.messageId}`);
+
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('❌ Email failed:', error.message);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`📧 EMAIL FAILED - Dev OTP: ${otp}`);
+      console.log('='.repeat(60) + '\n');
+    }
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * ============================================================================
  * UTILITY FUNCTIONS
- * -------------------------------
+ * ============================================================================
  */
 
 // Generate random verification code
@@ -19,27 +256,31 @@ const generateVerificationCode = (length = 6) => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Send SMS OTP using Twilio
-const sendSMSOTP = async (phone, otp, message) => {
-  try {
-    const client = twilio(
-      process.env.TWILIO_ACCOUNT_SID,
-      process.env.TWILIO_AUTH_TOKEN,
-    );
-
-    await client.messages.create({
-      body: `${message}: ${otp}`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: phone,
-    });
-
-    console.log(`✅ SMS OTP sent to ${phone}`);
-    return { success: true };
-  } catch (error) {
-    console.error(`❌ SMS send failed for ${phone}:`, error.message);
-    return { success: false, error: error.message };
-  }
+// Generate JWT tokens
+const generateAccessToken = (payload) => {
+  return jwt.sign(
+    payload,
+    process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "30d" },
+  );
 };
+
+const generateRefreshToken = (payload) => {
+  return jwt.sign(
+    payload,
+    process.env.JWT_REFRESH_SECRET ||
+      process.env.JWT_SECRET ||
+      "fallback-secret-key-change-in-production",
+    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" },
+  );
+};
+
+/**
+ * ============================================================================
+ * AUTH CONTROLLERS
+ * ============================================================================
+ */
+
 /**
  * @desc    Check verification status
  * @route   GET /api/auth/check-verification
@@ -84,282 +325,6 @@ export const checkVerificationStatus = async (req, res) => {
   }
 };
 
-// Generate JWT tokens
-const generateAccessToken = (payload) => {
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "30d" },
-  );
-};
-
-const generateRefreshToken = (payload) => {
-  return jwt.sign(
-    payload,
-    process.env.JWT_REFRESH_SECRET ||
-      process.env.JWT_SECRET ||
-      "fallback-secret-key-change-in-production",
-    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d" },
-  );
-};
-
-// Email transporter
-const createEmailTransporter = async () => {
-  try {
-    // Use Ethereal for development (reliable email testing)
-    if (process.env.NODE_ENV === "development") {
-      const testAccount = await nodemailer.createTestAccount();
-      return nodemailer.createTransport({
-        host: "smtp.ethereal.email",
-        port: 587,
-        secure: false,
-        auth: {
-          user: testAccount.user,
-          pass: testAccount.pass,
-        },
-      });
-    }
-
-    // Log config for debugging
-    console.log('📧 Email Config:', {
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      user: process.env.EMAIL_USER,
-      hasPassword: !!process.env.EMAIL_PASSWORD,
-      env: process.env.NODE_ENV
-    });
-
-    // Use configured SMTP for production
-    return nodemailer.createTransport({
-      service: 'gmail',
-      host: process.env.EMAIL_HOST || "smtp.gmail.com",
-      port: parseInt(process.env.EMAIL_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-      tls: { 
-        rejectUnauthorized: false 
-      },
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-      socketTimeout: 30000,
-    });
-  } catch (error) {
-    console.error("❌ Email transporter creation error:", error);
-    return null;
-  }
-};
-
-// Send verification email
-const sendVerificationEmail = async (email, code, name, phone = null) => {
-  try {
-    // ✅ ALWAYS send email, optionally also send SMS
-    const transporter = await createEmailTransporter();
-
-    if (!transporter) {
-      console.log(`📧 DEV MODE: Email verification code for ${email}: ${code}`);
-      
-      // Try SMS as fallback in production
-      if (process.env.NODE_ENV === "production" && phone) {
-        const smsResult = await sendSMSOTP(
-          phone,
-          code,
-          `Your Riderr verification code`
-        );
-        if (smsResult.success) {
-          return { success: true, method: "sms" };
-        }
-      }
-      
-      return { success: true, devMode: true };
-    }
-
-    const mailOptions = {
-      from: "Riderr",
-      to: email,
-      subject: "Your Riderr Verification Code",
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #337bff, #5a95ff); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; color: white; }
-            .content { padding: 30px; background: #f8f9fa; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0; }
-            .code { background: #337bff; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; text-align: center; }
-            .footer { margin-top: 30px; color: #999; font-size: 12px; text-align: center; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">Riderr</h1>
-              <p style="margin: 10px 0 0 0;">Email Verification</p>
-            </div>
-            <div class="content">
-              <h2>Hello ${name},</h2>
-              <p>Your email verification code is:</p>
-              <div class="code">${code}</div>
-              <p>This code expires in 10 minutes.</p>
-              <p>If you didn't request this, please ignore this email.</p>
-            </div>
-            <div class="footer">
-              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-    };
-
-    console.log(`📧 Attempting to send email to ${email}...`);
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent successfully to ${email}. Message ID: ${info.messageId}`);
-
-    // Also send SMS in production (optional dual verification)
-    if (process.env.NODE_ENV === "production" && phone) {
-      await sendSMSOTP(phone, code, `Your Riderr verification code`);
-    }
-
-    return { 
-      success: true, 
-      messageId: info.messageId,
-      method: "email"
-    };
-  } catch (error) {
-    console.error("❌ Email sending failed:", error);
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-      command: error.command
-    });
-
-    // Try SMS as fallback in production
-    if (process.env.NODE_ENV === "production" && phone) {
-      console.log("📱 Attempting SMS fallback...");
-      const smsResult = await sendSMSOTP(
-        phone,
-        code,
-        `Your Riderr verification code`
-      );
-      if (smsResult.success) {
-        return { success: true, method: "sms" };
-      }
-    }
-
-    return { 
-      success: false, 
-      error: error.message,
-      details: error
-    };
-  }
-};
-
-// Send OTP via email (for password reset)
-const sendOTPEmail = async (email, otp, name, phone = null) => {
-  try {
-    // In production, use SMS if phone is provided
-    if (process.env.NODE_ENV === "production" && phone) {
-      const smsResult = await sendSMSOTP(
-        phone,
-        otp,
-        `Your Riderr password reset OTP`,
-      );
-      if (smsResult.success) {
-        console.log(`✅ Password reset SMS sent to ${phone}`);
-        return { success: true, method: "sms" };
-      } else {
-        console.error(`❌ SMS failed, falling back to email`);
-      }
-    }
-
-    // Fallback to email
-    const transporter = await createEmailTransporter();
-
-    if (!transporter) {
-      console.log(`📧 DEV MODE: OTP for ${email}: ${otp}`);
-      return { success: true, devMode: true };
-    }
-
-    const mailOptions = {
-      from: `"Riderr" <${process.env.EMAIL_USER || "noreply@riderr.com"}>`,
-      to: email,
-      subject: "Password Reset OTP - Riderr",
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #337bff, #5a95ff); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; color: white; }
-            .content { padding: 30px; background: #f8f9fa; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0; }
-            .code { background: #337bff; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; text-align: center; }
-            .footer { margin-top: 30px; color: #999; font-size: 12px; text-align: center; }
-            .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">Riderr</h1>
-              <p style="margin: 10px 0 0 0;">Password Reset</p>
-            </div>
-            <div class="content">
-              <h2>Hello ${name},</h2>
-              <p>Your password reset OTP is:</p>
-              <div class="code">${otp}</div>
-              <div class="warning">
-                <strong>⚠️ Security Alert:</strong> This OTP expires in 10 minutes. If you didn't request this, please ignore this email and contact support immediately.
-              </div>
-              <p>For security reasons, do not share this OTP with anyone.</p>
-            </div>
-            <div class="footer">
-              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Password reset OTP sent to ${email}`);
-
-    // Return Ethereal URL for development
-    const etherealUrl =
-      process.env.NODE_ENV === "development" &&
-      transporter.options.host === "smtp.ethereal.email"
-        ? `https://ethereal.email/message/${info.messageId}`
-        : null;
-
-    return { success: true, messageId: info.messageId, etherealUrl };
-  } catch (error) {
-    console.error("❌ OTP email error:", error.message);
-    console.log(`📧 FALLBACK: Password reset OTP for ${email}: ${otp}`);
-
-    // In development, return failure so developers know emails aren't working
-    // In production, return success for security (don't reveal email issues)
-    if (process.env.NODE_ENV === "development") {
-      return {
-        success: false,
-        error: "Email sending failed in development mode",
-      };
-    }
-
-    return { success: true, devMode: true };
-  }
-};
-
-/**
- * -------------------------------
- * AUTH CONTROLLERS
- * -------------------------------
- */
-
 /**
  * @desc    Sign up a new user
  * @route   POST /api/auth/signup
@@ -374,7 +339,7 @@ export const signUp = async (req, res) => {
 
   try {
     await session.withTransaction(async () => {
-      // ✅ Validate input
+      // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         throw new Error("VALIDATION_FAILED");
@@ -384,7 +349,7 @@ export const signUp = async (req, res) => {
 
       console.log("📝 Signup request:", { name, email, role, phone });
 
-      // ✅ Check existing user
+      // Check existing user
       const existingUser = await User.findOne({
         $or: [{ email: email.toLowerCase() }, { phone }],
       }).session(session);
@@ -393,11 +358,12 @@ export const signUp = async (req, res) => {
         throw new Error("USER_EXISTS");
       }
 
-      // ✅ Generate verification code
+      // Generate verification code
       emailCode = generateVerificationCode();
       const emailExpiry = Date.now() + 10 * 60 * 1000;
       const hashedPassword = await bcrypt.hash(password, 10);
-       console.log(emailCode)
+      console.log('🔐 Generated verification code:', emailCode);
+
       if (role === "company_admin") {
         const {
           companyName,
@@ -491,10 +457,9 @@ export const signUp = async (req, res) => {
           { session },
         );
 
-        const { vehicleType, plateNumber, vehicleColor } =
-          req.body;
+        const { vehicleType, plateNumber, vehicleColor } = req.body;
 
-        if ( !vehicleType || !plateNumber || !vehicleColor ) {
+        if (!vehicleType || !plateNumber || !vehicleColor) {
           throw new Error("DRIVER_DETAILS_REQUIRED");
         }
 
@@ -530,7 +495,7 @@ export const signUp = async (req, res) => {
         );
       }
 
-      // ✅ Tokens INSIDE transaction (DB-only)
+      // Tokens INSIDE transaction (DB-only)
       const refreshToken = generateRefreshToken({ userId: newUser._id });
       newUser.refreshToken = refreshToken;
       await newUser.save({ session });
@@ -540,26 +505,23 @@ export const signUp = async (req, res) => {
 
     session.endSession();
 
-    // ✅ SEND EMAIL AFTER COMMIT (VERY IMPORTANT)
+    // SEND EMAIL AFTER COMMIT
     let emailResult = null;
     if (requiresVerification) {
       emailResult = await sendVerificationEmail(
         newUser.email,
         emailCode,
         newUser.name,
-        newUser.phone, // Add phone for SMS in production
+        newUser.phone,
       );
 
-      // In development, fail if email sending fails
-      if (process.env.NODE_ENV === "development" && !emailResult.success) {
-        return res.status(500).json({
-          success: false,
-          message: "Account created but failed to send verification email",
-        });
+      // In development, log if email fails but don't block signup
+      if (process.env.NODE_ENV === 'development' && !emailResult.success && !emailResult.devMode) {
+        console.warn('⚠️ Email sending failed, but signup completed. Check email configuration.');
       }
     }
 
-    // ✅ Generate access token AFTER commit
+    // Generate access token AFTER commit
     const accessToken = generateAccessToken({
       userId: newUser._id,
       role: newUser.role,
@@ -568,7 +530,9 @@ export const signUp = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Account created. Email verification code sent.",
+      message: emailResult?.success 
+        ? "Account created. Email verification code sent."
+        : "Account created. Check logs for verification code (email not configured).",
       data: {
         accessToken,
         refreshToken: newUser.refreshToken,
@@ -580,8 +544,11 @@ export const signUp = async (req, res) => {
           role: newUser.role,
           companyId: newUser.companyId,
         },
-        ...(emailResult?.etherealUrl && {
-          debug: { etherealUrl: emailResult.etherealUrl },
+        ...(process.env.NODE_ENV === 'development' && {
+          debug: {
+            verificationCode: emailCode,
+            emailSent: emailResult?.success || false,
+          },
         }),
       },
     });
@@ -596,14 +563,31 @@ export const signUp = async (req, res) => {
         .json({ success: false, message: "User already exists" });
     }
 
+    if (error.message === "COMPANY_EXISTS") {
+      return res
+        .status(409)
+        .json({ success: false, message: "Company already exists" });
+    }
+
+    if (error.message === "COMPANY_DETAILS_REQUIRED") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Company details required" });
+    }
+
+    if (error.message === "DRIVER_DETAILS_REQUIRED") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Driver vehicle details required" });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Signup failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
-
-
 
 /**
  * @desc    Sign up company driver (for company admins)
@@ -677,7 +661,6 @@ export const signUpCompanyDriver = async (req, res) => {
     // Generate email verification code
     const emailCode = generateVerificationCode();
     const emailExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-
     console.log("🔐 Generated email code:", emailCode);
 
     // Hash password
@@ -718,11 +701,11 @@ export const signUpCompanyDriver = async (req, res) => {
         {
           userId: newUser._id,
           companyId: req.user.companyId,
-          licenseNumber: tempLicenseNumber, // Temporary - driver can update later
+          licenseNumber: tempLicenseNumber,
           vehicleType,
           vehicleColor,
           plateNumber: plateNumber.toUpperCase().trim(),
-          licenseExpiry: defaultLicenseExpiry, // Default - driver can update later
+          licenseExpiry: defaultLicenseExpiry,
           approvalStatus: "pending",
           isOnline: false,
           isAvailable: false,
@@ -745,7 +728,10 @@ export const signUpCompanyDriver = async (req, res) => {
       { session },
     );
 
-    // Send verification email
+    await session.commitTransaction();
+    session.endSession();
+
+    // Send verification email AFTER commit
     const emailResult = await sendVerificationEmail(
       email, 
       emailCode, 
@@ -753,12 +739,11 @@ export const signUpCompanyDriver = async (req, res) => {
       phone
     );
 
-    await session.commitTransaction();
-    session.endSession();
-
     res.status(201).json({
       success: true,
-      message: "Driver account created successfully. Verification code sent to driver's email.",
+      message: emailResult?.success
+        ? "Driver account created successfully. Verification code sent to driver's email."
+        : "Driver account created. Check logs for verification code (email not configured).",
       data: {
         driverId: newUser._id,
         email: newUser.email,
@@ -772,9 +757,7 @@ export const signUpCompanyDriver = async (req, res) => {
           debug: {
             verificationCode: emailCode,
             tempLicenseNumber,
-            ...(emailResult?.etherealUrl && {
-              etherealUrl: emailResult.etherealUrl,
-            }),
+            emailSent: emailResult?.success || false,
           },
         }),
       },
@@ -791,6 +774,7 @@ export const signUpCompanyDriver = async (req, res) => {
     });
   }
 };
+
 /**
  * @desc    Sign in user
  * @route   POST /api/auth/login
@@ -880,17 +864,6 @@ export const signIn = async (req, res) => {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.lastLoginAt = new Date();
-
-    // For company admins, check company status
-    // if (user.role === "company_admin" && user.companyId) {
-    //   if (user.companyId.status !== "approved") {
-    //     return res.status(403).json({
-    //       success: false,
-    //       message: "Company not approved yet",
-    //       companyStatus: user.companyId.status
-    //     });
-    //   }
-    // }
 
     // Generate tokens
     const accessToken = generateAccessToken({
@@ -1092,7 +1065,7 @@ export const forgotPassword = async (req, res) => {
     // Generate OTP
     const otp = generateVerificationCode();
     const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-    console.log(otp)
+    console.log('🔐 Generated password reset OTP:', otp);
 
     // Save OTP to user
     user.resetPasswordToken = otp;
@@ -1101,13 +1074,9 @@ export const forgotPassword = async (req, res) => {
 
     // Send OTP email
     const emailResult = await sendOTPEmail(email, otp, user.name, user.phone);
-    console.log(emailResult)
 
-    if (!emailResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send password reset email",
-      });
+    if (!emailResult.success && !emailResult.devMode) {
+      console.error('❌ Failed to send password reset email');
     }
 
     res.status(200).json({
@@ -1116,9 +1085,7 @@ export const forgotPassword = async (req, res) => {
       ...(process.env.NODE_ENV === "development" && {
         debug: {
           otp,
-          ...(emailResult?.etherealUrl && {
-            etherealUrl: emailResult.etherealUrl,
-          }),
+          emailSent: emailResult?.success || false,
         },
       }),
     });
@@ -1288,17 +1255,26 @@ export const resendVerification = async (req, res) => {
 
     // Generate new email verification code
     const newCode = generateVerificationCode();
-   console.log(newCode);
+    console.log('🔐 Generated new verification code:', newCode);
+    
     user.emailVerificationToken = newCode;
     user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
 
     // Send verification email
-    await sendVerificationEmail(email, newCode, user.name, user.phone);
+    const emailResult = await sendVerificationEmail(email, newCode, user.name, user.phone);
 
     res.status(200).json({
       success: true,
-      message: "Verification code resent to your email",
+      message: emailResult?.success
+        ? "Verification code resent to your email"
+        : "Verification code generated. Check logs (email not configured).",
+      ...(process.env.NODE_ENV === "development" && {
+        debug: {
+          verificationCode: newCode,
+          emailSent: emailResult?.success || false,
+        },
+      }),
     });
   } catch (error) {
     console.error("❌ Resend verification error:", error);
