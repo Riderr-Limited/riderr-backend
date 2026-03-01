@@ -35,7 +35,7 @@ const createEmailTransporter = () => {
       greetingTimeout: 10000,
       socketTimeout: 10000,
       tls: {
-        rejectUnauthorized: process.env.NODE_ENV === 'production',
+        rejectUnauthorized: false
       },
     });
 
@@ -55,7 +55,7 @@ const sendVerificationEmail = async (email, code, name, phone = null) => {
     const transporter = createEmailTransporter();
 
     if (!transporter) {
-      if (process.env.NODE_ENV === 'development') {
+      if (process.env.NODE_ENV === 'production') {
         console.log(`\n${'='.repeat(60)}`);
         console.log(`📧 DEV MODE - Verification code for ${email}:`);
         console.log(`   CODE: ${code}`);
