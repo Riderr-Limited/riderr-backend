@@ -235,93 +235,7 @@ const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
   }
 };
 
-/**
- * CUSTOMER CONTROLLERS
- */
 
-export const getNearbyDrivers = async (req, res) => {
-  try {
-    const { lat, lng, radius = 10 } = req.query;
-
-    if (!lat || !lng) {
-      return res.status(400).json({
-        success: false,
-        message: "Latitude and longitude are required",
-      });
-    }
-
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
-
-    const drivers = await Driver.find({
-      isOnline: true,
-      isActive: true,
-      approvalStatus: "approved",
-      $or: [
-        { "location.coordinates": { $exists: true, $ne: [0, 0] } },
-        { "currentLocation.lat": { $exists: true } },
-      ],
-    })
-      .populate("userId", "name phone avatarUrl rating")
-      .populate("companyId", "name logo rating contactPhone");
-
-    const driversWithDistance = drivers
-      .map((driver) => {
-        let driverLat, driverLng;
-
-        if (
-          driver.location &&
-          driver.location.coordinates &&
-          driver.location.coordinates.length >= 2
-        ) {
-          driverLng = driver.location.coordinates[0];
-          driverLat = driver.location.coordinates[1];
-        } else if (
-          driver.currentLocation &&
-          driver.currentLocation.lat &&
-          driver.currentLocation.lng
-        ) {
-          driverLat = driver.currentLocation.lat;
-          driverLng = driver.currentLocation.lng;
-        } else if (driver.lat && driver.lng) {
-          driverLat = driver.lat;
-          driverLng = driver.lng;
-        } else {
-          return null;
-        }
-
-        const distance = calculateDistance(
-          latitude,
-          longitude,
-          driverLat,
-          driverLng
-        );
-
-        return {
-          ...driver.toObject(),
-          distance: parseFloat(distance.toFixed(2)),
-          distanceText: `${distance.toFixed(1)} km away`,
-          estimatedArrival: Math.ceil(distance * 3),
-        };
-      })
-      .filter(
-        (driver) => driver !== null && driver.distance <= parseFloat(radius)
-      )
-      .sort((a, b) => a.distance - b.distance);
-
-    res.status(200).json({
-      success: true,
-      message: `Found ${driversWithDistance.length} nearby drivers`,
-      data: driversWithDistance,
-    });
-  } catch (error) {
-    console.error("❌ Get nearby drivers error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to find nearby drivers",
-    });
-  }
-};
 
 /**
  * ✅ FIXED: Get customer's deliveries with complete driver and company details
@@ -3285,7 +3199,9 @@ export const confirmCashCollection = async (req, res) => {
   }
 };
 
-export const getCustomerNearbyDrivers = async (req, res) => {
+// delivery.controller.js
+
+export const getNearbyDrivers = async (req, res) => {
   try {
     const customer = req.user;
 
@@ -3301,79 +3217,167 @@ export const getCustomerNearbyDrivers = async (req, res) => {
     if (!lat || !lng) {
       return res.status(400).json({
         success: false,
-        message: 'Pickup location (lat, lng) is required',
-        example: {
-          url: '/api/deliveries/nearby-drivers?lat=6.5244&lng=3.3792&radius=10',
-          description: 'Get drivers within 10km of pickup location',
-        },
+        message: 'Latitude and longitude are required',
       });
     }
 
-    const pickupLat = parseFloat(lat);
-    const pickupLng = parseFloat(lng);
+    const searchLat = parseFloat(lat);
+    const searchLng = parseFloat(lng);
     const searchRadius = parseFloat(radius);
 
-    if (isNaN(pickupLat) || isNaN(pickupLng)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid coordinates provided',
-      });
-    }
+    console.log('\n🔍 ===== NEARBY DRIVERS SEARCH =====');
+    console.log(`📍 Search Location: ${searchLat}, ${searchLng}`);
+    console.log(`📡 Search Radius: ${searchRadius} km`);
+    console.log('=====================================\n');
 
-    console.log(`📍 Customer ${customer._id} searching for drivers near pickup: ${pickupLat}, ${pickupLng}`);
-    console.log(`🔍 Search radius: ${searchRadius} km`);
+    // ✅ STEP 1: Count total drivers
+    const totalDrivers = await Driver.countDocuments({});
+    console.log(`📊 Total drivers in database: ${totalDrivers}`);
 
-    // Find all available drivers
+    // ✅ STEP 2: Check each condition one by one
+    const onlineCount = await Driver.countDocuments({ isOnline: true });
+    console.log(`   - isOnline: true → ${onlineCount} drivers`);
+
+    const availableCount = await Driver.countDocuments({ 
+      isOnline: true,
+      isAvailable: true 
+    });
+    console.log(`   - isAvailable: true → ${availableCount} drivers`);
+
+    const activeCount = await Driver.countDocuments({ 
+      isOnline: true,
+      isAvailable: true,
+      isActive: true
+    });
+    console.log(`   - isActive: true → ${activeCount} drivers`);
+
+    const approvedCount = await Driver.countDocuments({ 
+      isOnline: true,
+      isAvailable: true,
+      isActive: true,
+      approvalStatus: 'approved'
+    });
+    console.log(`   - approvalStatus: approved → ${approvedCount} drivers`);
+
+    const noDeliveryCount = await Driver.countDocuments({ 
+      isOnline: true,
+      isAvailable: true,
+      isActive: true,
+      approvalStatus: 'approved',
+      currentDeliveryId: null
+    });
+    console.log(`   - currentDeliveryId: null → ${noDeliveryCount} drivers`);
+
+    // ✅ STEP 3: SIMPLIFIED QUERY - Remove location check from query, do it manually
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
       isActive: true,
       approvalStatus: 'approved',
-      $or: [
-        { currentDeliveryId: { $exists: false } },
-        { currentDeliveryId: null }
-      ],
-      $or: [
-        { 'location.coordinates': { $exists: true, $ne: [0, 0] } },
-        { 'currentLocation.lat': { $exists: true } },
-      ],
+      currentDeliveryId: null,
     })
-      .populate('userId', 'name phone avatarUrl rating')
+      .populate('userId', 'name phone avatarUrl rating totalRatings')
       .populate('companyId', 'name logo rating contactPhone')
       .lean();
 
-    console.log(`🚗 Total available drivers: ${drivers.length}`);
+    console.log(`\n✅ Query returned: ${drivers.length} drivers`);
+    console.log('=====================================\n');
+
+    // ✅ STEP 4: Analyze each driver's location data
+    console.log('📍 ANALYZING DRIVER LOCATIONS:\n');
 
     const nearbyDrivers = [];
 
-    for (const driver of drivers) {
-      let driverLat, driverLng;
+    for (let i = 0; i < drivers.length; i++) {
+      const driver = drivers[i];
+      
+      console.log(`\n--- Driver ${i + 1}/${drivers.length}: ${driver._id} ---`);
+      console.log(`Name: ${driver.userId?.name || 'Unknown'}`);
+      
+      // Check currentLocation
+      console.log('Current Location:');
+      console.log(`  - exists: ${!!driver.currentLocation}`);
+      if (driver.currentLocation) {
+        console.log(`  - lat: ${driver.currentLocation.lat} (type: ${typeof driver.currentLocation.lat})`);
+        console.log(`  - lng: ${driver.currentLocation.lng} (type: ${typeof driver.currentLocation.lng})`);
+        console.log(`  - valid: ${
+          typeof driver.currentLocation.lat === 'number' &&
+          typeof driver.currentLocation.lng === 'number' &&
+          driver.currentLocation.lat !== 0 &&
+          driver.currentLocation.lng !== 0
+        }`);
+      }
+      
+      // Check GeoJSON location
+      console.log('GeoJSON Location:');
+      console.log(`  - exists: ${!!driver.location}`);
+      if (driver.location) {
+        console.log(`  - coordinates: ${JSON.stringify(driver.location.coordinates)}`);
+        console.log(`  - valid: ${
+          driver.location.coordinates &&
+          Array.isArray(driver.location.coordinates) &&
+          driver.location.coordinates.length >= 2 &&
+          driver.location.coordinates[0] !== 0 &&
+          driver.location.coordinates[1] !== 0
+        }`);
+      }
 
-      // Get driver location
-      if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+      let driverLat, driverLng, locationSource;
+
+      // Try currentLocation first
+      if (driver.currentLocation?.lat && 
+          driver.currentLocation?.lng &&
+          typeof driver.currentLocation.lat === 'number' &&
+          typeof driver.currentLocation.lng === 'number' &&
+          !isNaN(driver.currentLocation.lat) &&
+          !isNaN(driver.currentLocation.lng) &&
+          driver.currentLocation.lat !== 0 &&
+          driver.currentLocation.lng !== 0) {
+        
         driverLat = driver.currentLocation.lat;
         driverLng = driver.currentLocation.lng;
-      } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
+        locationSource = 'currentLocation';
+        console.log(`✅ Using currentLocation: ${driverLat}, ${driverLng}`);
+      }
+      // Try GeoJSON
+      else if (driver.location?.coordinates && 
+               Array.isArray(driver.location.coordinates) &&
+               driver.location.coordinates.length >= 2 &&
+               typeof driver.location.coordinates[0] === 'number' &&
+               typeof driver.location.coordinates[1] === 'number' &&
+               driver.location.coordinates[0] !== 0 &&
+               driver.location.coordinates[1] !== 0) {
+        
         driverLng = driver.location.coordinates[0];
         driverLat = driver.location.coordinates[1];
-      } else {
-        console.log(`⏭️ Driver ${driver._id} - No location data`);
+        locationSource = 'geoJSON';
+        console.log(`✅ Using GeoJSON: ${driverLat}, ${driverLng}`);
+      }
+      else {
+        console.log(`❌ No valid location data - SKIPPING`);
         continue;
       }
 
-      // Calculate distance from pickup location
-      const distanceToPickup = calculateDistance(
-        pickupLat,
-        pickupLng,
+      // Validate coordinates
+      if (driverLat < -90 || driverLat > 90 || driverLng < -180 || driverLng > 180) {
+        console.log(`❌ Invalid coordinates (out of range) - SKIPPING`);
+        continue;
+      }
+
+      // Calculate distance
+      const distance = calculateDistance(
+        searchLat,
+        searchLng,
         driverLat,
         driverLng
       );
 
-      console.log(`📏 Driver ${driver._id} - Distance to pickup: ${distanceToPickup.toFixed(2)} km`);
+      console.log(`📏 Distance: ${distance.toFixed(4)} km`);
 
-      // Only include drivers within search radius
-      if (distanceToPickup <= searchRadius) {
-        const etaMinutes = Math.max(2, Math.ceil(distanceToPickup * 3));
+      if (distance <= searchRadius) {
+        console.log(`✅ WITHIN RADIUS - ADDING TO RESULTS`);
+        
+        const etaMinutes = Math.max(2, Math.ceil(distance * 3));
 
         nearbyDrivers.push({
           _id: driver._id,
@@ -3382,7 +3386,7 @@ export const getCustomerNearbyDrivers = async (req, res) => {
           phone: driver.userId?.phone || '',
           avatarUrl: driver.userId?.avatarUrl,
           rating: driver.userId?.rating || 0,
-          totalRatings: driver.totalRatings || 0,
+          totalRatings: driver.userId?.totalRatings || 0,
           
           company: driver.companyId ? {
             _id: driver.companyId._id,
@@ -3397,29 +3401,27 @@ export const getCustomerNearbyDrivers = async (req, res) => {
             make: driver.vehicleMake || '',
             model: driver.vehicleModel || '',
             plateNumber: driver.plateNumber || '',
-            color: driver.vehicleColor || '',
           },
           
           currentLocation: {
             lat: driverLat,
             lng: driverLng,
+            source: locationSource,
             updatedAt: driver.currentLocation?.updatedAt || new Date(),
           },
           
-          distanceFromPickup: parseFloat(distanceToPickup.toFixed(2)),
-          distanceText: distanceToPickup < 0.1 ? 'Very close' : `${distanceToPickup.toFixed(1)} km away`,
+          distanceFromPickup: parseFloat(distance.toFixed(2)),
+          distanceText: distance < 0.1 ? 'Very close' : `${distance.toFixed(1)} km away`,
           
           eta: {
             minutes: etaMinutes,
             text: etaMinutes < 5 ? 'Arriving soon' : `${etaMinutes} min`,
-            formatted: `Approximately ${etaMinutes} minutes to pickup`,
           },
           
           availability: {
             isOnline: driver.isOnline,
             isAvailable: driver.isAvailable,
             status: 'available',
-            canAcceptDelivery: true,
           },
           
           stats: {
@@ -3429,86 +3431,46 @@ export const getCustomerNearbyDrivers = async (req, res) => {
               : 0,
           },
         });
+      } else {
+        console.log(`❌ TOO FAR (${distance.toFixed(2)} km > ${searchRadius} km)`);
       }
     }
 
-    // Sort by distance (closest first)
     nearbyDrivers.sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
 
-    console.log(`✅ Found ${nearbyDrivers.length} nearby drivers within ${searchRadius}km`);
+    console.log(`\n✅ FINAL RESULT: ${nearbyDrivers.length} drivers within ${searchRadius}km`);
+    console.log('=====================================\n');
 
-    // Group drivers by distance ranges for better UX
     const groupedDrivers = {
-      veryClose: nearbyDrivers.filter(d => d.distanceFromPickup < 1), // < 1km
-      close: nearbyDrivers.filter(d => d.distanceFromPickup >= 1 && d.distanceFromPickup < 3), // 1-3km
-      nearby: nearbyDrivers.filter(d => d.distanceFromPickup >= 3 && d.distanceFromPickup < 5), // 3-5km
-      farther: nearbyDrivers.filter(d => d.distanceFromPickup >= 5), // > 5km
+      veryClose: nearbyDrivers.filter(d => d.distanceFromPickup < 1),
+      close: nearbyDrivers.filter(d => d.distanceFromPickup >= 1 && d.distanceFromPickup < 3),
+      nearby: nearbyDrivers.filter(d => d.distanceFromPickup >= 3 && d.distanceFromPickup < 5),
+      farther: nearbyDrivers.filter(d => d.distanceFromPickup >= 5),
     };
 
-    const response = {
+    res.status(200).json({
       success: true,
       message: nearbyDrivers.length > 0
-        ? `Found ${nearbyDrivers.length} available driver${nearbyDrivers.length !== 1 ? 's' : ''} near your pickup location`
-        : 'No drivers currently available in your area',
+        ? `Found ${nearbyDrivers.length} available drivers`
+        : 'No drivers available in your area',
       data: {
-        pickupLocation: {
-          lat: pickupLat,
-          lng: pickupLng,
-        },
-        searchRadius: {
-          km: searchRadius,
-          formatted: `${searchRadius} km`,
-        },
+        searchLocation: { lat: searchLat, lng: searchLng },
+        searchRadius: { km: searchRadius },
         drivers: nearbyDrivers,
         grouped: {
-          veryClose: {
-            count: groupedDrivers.veryClose.length,
-            drivers: groupedDrivers.veryClose,
-            label: 'Very Close (< 1km)',
-          },
-          close: {
-            count: groupedDrivers.close.length,
-            drivers: groupedDrivers.close,
-            label: 'Close (1-3km)',
-          },
-          nearby: {
-            count: groupedDrivers.nearby.length,
-            drivers: groupedDrivers.nearby,
-            label: 'Nearby (3-5km)',
-          },
-          farther: {
-            count: groupedDrivers.farther.length,
-            drivers: groupedDrivers.farther,
-            label: 'Farther (5km+)',
-          },
+          veryClose: { count: groupedDrivers.veryClose.length, drivers: groupedDrivers.veryClose },
+          close: { count: groupedDrivers.close.length, drivers: groupedDrivers.close },
+          nearby: { count: groupedDrivers.nearby.length, drivers: groupedDrivers.nearby },
+          farther: { count: groupedDrivers.farther.length, drivers: groupedDrivers.farther },
         },
         summary: {
           total: nearbyDrivers.length,
           closestDriver: nearbyDrivers[0] || null,
-          averageDistance: nearbyDrivers.length > 0
-            ? parseFloat((nearbyDrivers.reduce((sum, d) => sum + d.distanceFromPickup, 0) / nearbyDrivers.length).toFixed(2))
-            : 0,
-          averageETA: nearbyDrivers.length > 0
-            ? Math.round(nearbyDrivers.reduce((sum, d) => sum + d.eta.minutes, 0) / nearbyDrivers.length)
-            : 0,
         },
-        availability: {
-          hasDrivers: nearbyDrivers.length > 0,
-          confidence: nearbyDrivers.length >= 3 ? 'high' : nearbyDrivers.length >= 1 ? 'medium' : 'low',
-          recommendation: nearbyDrivers.length >= 3
-            ? 'Great! Multiple drivers available. Your delivery will be picked up quickly.'
-            : nearbyDrivers.length >= 1
-            ? 'Good! Drivers are available in your area.'
-            : 'Limited availability. Your request may take longer to be accepted.',
-        },
-        timestamp: new Date().toISOString(),
-        refreshInterval: 30, // Suggest refresh every 30 seconds
       },
-    };
-
-    res.status(200).json(response);
+    });
   } catch (error) {
-    console.error('❌ Get customer nearby drivers error:', error);
+    console.error('❌ Get nearby drivers error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to find nearby drivers',
@@ -3516,6 +3478,7 @@ export const getCustomerNearbyDrivers = async (req, res) => {
     });
   }
 };
+ 
 
 /**
  * @desc    Cancel delivery with automatic refund
@@ -3532,6 +3495,8 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     const { reason } = req.body;
 
     if (!reason) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: 'Cancellation reason is required',
@@ -3553,10 +3518,18 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       });
     }
 
-    // Authorization check
-    //const isCustomer = user._id.toString() === delivery.customerId._id.toString();
-    //const isDriver = user.role === 'driver' && delivery.driverId?.toString() === user._id.toString();
-    //const isAdmin = user.role === 'admin';
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTHORIZATION CHECK - FIXED
+    // ═══════════════════════════════════════════════════════════════════
+    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
+    
+    let isDriver = false;
+    if (user.role === 'driver' && delivery.driverId) {
+      const driver = await Driver.findOne({ userId: user._id }).session(session);
+      isDriver = driver && delivery.driverId.toString() === driver._id.toString();
+    }
+    
+    const isAdmin = user.role === 'admin';
 
     if (!isCustomer && !isDriver && !isAdmin) {
       await session.abortTransaction();
@@ -3618,64 +3591,68 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       console.log(`💸 Refund amount: ₦${refundAmount}`);
 
       // Initiate refund via Paystack
-      refundResult = await initiateRefund({
-        transaction: payment.paystackReference,
-        amount: refundAmount, // Partial or full refund
-        deliveryId: delivery._id,
-        customer_note: `Your delivery was cancelled. Refund of ₦${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ₦${cancellationFee.toLocaleString()}` : ''}`,
-        merchant_note: `Delivery ${delivery.referenceId} cancelled by ${user.role}. Reason: ${reason}`,
-      });
-
-      if (refundResult.success) {
-        console.log(`✅ Refund initiated successfully`);
-        console.log(`   Refund ID: ${refundResult.data.refundId}`);
-
-        // Update payment record
-        payment.status = 'refunded';
-        payment.metadata = {
-          ...payment.metadata,
-          refundStatus: 'processing',
-          refundId: refundResult.data.refundId,
-          refundAmount: refundAmount,
-          cancellationFee: cancellationFee,
-          refundInitiatedAt: new Date(),
-          refundExpectedAt: refundResult.data.expectedAt,
-          cancelledBy: user._id,
-          cancellationReason: reason,
-        };
-        payment.markModified('metadata');
-        
-        payment.auditLog.push({
-          action: 'refund_initiated',
-          timestamp: new Date(),
-          details: {
-            refundId: refundResult.data.refundId,
-            refundAmount,
-            cancellationFee,
-            reason,
-          },
+      try {
+        refundResult = await initiateRefund({
+          transaction: payment.paystackReference,
+          amount: refundAmount, // Partial or full refund
+          deliveryId: delivery._id,
+          customer_note: `Your delivery was cancelled. Refund of ₦${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ₦${cancellationFee.toLocaleString()}` : ''}`,
+          merchant_note: `Delivery ${delivery.referenceId} cancelled by ${user.role}. Reason: ${reason}`,
         });
 
-        await payment.save({ session });
+        if (refundResult.success) {
+          console.log(`✅ Refund initiated successfully`);
+          console.log(`   Refund ID: ${refundResult.data.refundId}`);
 
-        refundInfo = {
-          refunded: true,
-          refundAmount,
-          cancellationFee,
-          refundId: refundResult.data.refundId,
-          expectedAt: refundResult.data.expectedAt,
-          message: cancellationFee > 0
-            ? `Refund of ₦${refundAmount.toLocaleString()} initiated (₦${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
-            : `Full refund of ₦${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
-        };
-      } else {
-        console.error(`❌ Refund failed:`, refundResult.message);
+          // Update payment record
+          payment.status = 'refunded';
+          payment.metadata = {
+            ...payment.metadata,
+            refundStatus: 'processing',
+            refundId: refundResult.data.refundId,
+            refundAmount: refundAmount,
+            cancellationFee: cancellationFee,
+            refundInitiatedAt: new Date(),
+            refundExpectedAt: refundResult.data.expectedAt,
+            cancelledBy: user._id,
+            cancellationReason: reason,
+          };
+          payment.markModified('metadata');
+          
+          payment.auditLog.push({
+            action: 'refund_initiated',
+            timestamp: new Date(),
+            details: {
+              refundId: refundResult.data.refundId,
+              refundAmount,
+              cancellationFee,
+              reason,
+            },
+          });
+
+          await payment.save({ session });
+
+          refundInfo = {
+            refunded: true,
+            refundAmount,
+            cancellationFee,
+            refundId: refundResult.data.refundId,
+            expectedAt: refundResult.data.expectedAt,
+            message: cancellationFee > 0
+              ? `Refund of ₦${refundAmount.toLocaleString()} initiated (₦${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
+              : `Full refund of ₦${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
+          };
+        } else {
+          throw new Error(refundResult.message || 'Refund failed');
+        }
+      } catch (refundError) {
+        console.error(`❌ Refund failed:`, refundError.message);
         
         // Mark for manual refund
         payment.metadata = {
           ...payment.metadata,
           refundStatus: 'failed',
-          refundError: refundResult.message,
+          refundError: refundError.message,
           requiresManualRefund: true,
           cancelledBy: user._id,
           cancellationReason: reason,
@@ -3685,7 +3662,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
 
         refundInfo = {
           refunded: false,
-          error: refundResult.message,
+          error: refundError.message,
           requiresManualProcessing: true,
           message: 'Automatic refund failed. Our support team will process your refund manually within 24 hours.',
           supportContact: process.env.SUPPORT_EMAIL || 'support@riderr.com',
