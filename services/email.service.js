@@ -16,7 +16,7 @@ const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: parseInt(process.env.EMAIL_PORT) || 587,
-    secure: false, // Use TLS
+    secure: parseInt(process.env.EMAIL_PORT) === 465,
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD,
@@ -24,6 +24,9 @@ const createTransporter = () => {
     tls: {
       rejectUnauthorized: false,
     },
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
   });
 };
 
@@ -105,8 +108,11 @@ const sendViaResend = async (to, subject, html, text) => {
   if (!resend) return null;
 
   try {
+    const fromAddress = process.env.EMAIL_FROM_ADDRESS || 'onboarding@resend.dev';
+    const fromName = process.env.EMAIL_FROM_NAME || 'Riderr';
+    
     const { data, error } = await resend.emails.send({
-      from: 'Riderr <onboarding@resend.dev>',
+      from: `${fromName} <${fromAddress}>`,
       to: [to],
       subject,
       html,
