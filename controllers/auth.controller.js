@@ -4,73 +4,44 @@ import Driver from "../models/riders.models.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import nodemailer from "nodemailer";
+import { Resend } from 'resend';
 import { validationResult } from "express-validator";
 
 /**
  * ============================================================================
- * EMAIL CONFIGURATION - SIMPLE & PRODUCTION READY
+ * EMAIL CONFIGURATION - RESEND HTTP API (NO SMTP PORTS!)
  * ============================================================================
  */
 
-/**
- * Create Email Transporter - Works with ANY SMTP provider
- */
-const createEmailTransporter = () => {
-  try {
-    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      console.error('❌ Missing: EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD');
-      return null;
-    }
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: parseInt(process.env.EMAIL_PORT) || 587,
-      secure: parseInt(process.env.EMAIL_PORT) === 465,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
-      tls: {
-        rejectUnauthorized: false
-      },
-    });
-
-    console.log('✅ Email configured:', process.env.EMAIL_HOST);
-    return transporter;
-  } catch (error) {
-    console.error('❌ Email error:', error);
-    return null;
-  }
-};
+// Initialize Resend only if API key exists
+let resend = null;
+if (process.env.RESEND_API_KEY) {
+  resend = new Resend(process.env.RESEND_API_KEY);
+  console.log('✅ Resend initialized');
+} else {
+  console.warn('⚠️ RESEND_API_KEY not found in environment variables');
+}
 
 /**
- * Send Verification Email
+ * Send Verification Email via Resend
  */
 const sendVerificationEmail = async (email, code, name, phone = null) => {
   try {
-    const transporter = createEmailTransporter();
-
-    if (!transporter) {
-      if (process.env.NODE_ENV === 'production') {
-        console.log(`\n${'='.repeat(60)}`);
-        console.log(`📧 DEV MODE - Verification code for ${email}:`);
-        console.log(`   CODE: ${code}`);
-        console.log('='.repeat(60) + '\n');
-        return { success: true, devMode: true };
-      }
-      return { success: false, error: 'Email not configured' };
+    if (!resend || !process.env.RESEND_API_KEY) {
+      console.error('❌ RESEND_API_KEY not configured');
+      
+      console.log('\n' + '='.repeat(60));
+      console.log(`📧 DEV MODE - Verification code for ${email}:`);
+      console.log(`   CODE: ${code}`);
+      console.log('='.repeat(60) + '\n');
+      return { success: true, devMode: true };
     }
 
-    const mailOptions = {
-      from: {
-        name: process.env.EMAIL_FROM_NAME || 'Riderr',
-        address: process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER,
-      },
-      to: email,
+    console.log(`📧 Sending verification email via Resend to ${email}...`);
+
+    const { data, error } = await resend.emails.send({
+      from: `${process.env.EMAIL_FROM_NAME || 'Riderr'} <onboarding@resend.dev>`,
+      to: [email],
       subject: '🔐 Your Riderr Verification Code',
       html: `
         <!DOCTYPE html>
@@ -116,8 +87,7 @@ const sendVerificationEmail = async (email, code, name, phone = null) => {
         </body>
         </html>
       `,
-      text: `
-Hello ${name},
+      text: `Hello ${name},
 
 Welcome to Riderr! Your verification code is: ${code}
 
@@ -125,50 +95,50 @@ This code expires in 10 minutes.
 
 If you didn't create a Riderr account, please ignore this email.
 
-© ${new Date().getFullYear()} Riderr
-      `.trim(),
-    };
+© ${new Date().getFullYear()} Riderr`,
+    });
 
-    console.log(`📧 Sending verification email to ${email}...`);
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent! Message ID: ${info.messageId}`);
+    if (error) {
+      console.error('❌ Resend error:', error);
+      return { success: false, error: error.message };
+    }
 
-    return { success: true, messageId: info.messageId };
+    console.log(`✅ Email sent via Resend! ID: ${data.id}`);
+    return { success: true, messageId: data.id };
+
   } catch (error) {
     console.error('❌ Email failed:', error.message);
+    
     if (process.env.NODE_ENV === 'development') {
-      console.log(`\n${'='.repeat(60)}`);
+      console.log('\n' + '='.repeat(60));
       console.log(`📧 EMAIL FAILED - Dev Code: ${code}`);
       console.log('='.repeat(60) + '\n');
     }
+    
     return { success: false, error: error.message };
   }
 };
 
 /**
- * Send Password Reset OTP
+ * Send Password Reset OTP via Resend
  */
 const sendOTPEmail = async (email, otp, name, phone = null) => {
   try {
-    const transporter = createEmailTransporter();
-
-    if (!transporter) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`\n${'='.repeat(60)}`);
-        console.log(`📧 DEV MODE - Password reset OTP for ${email}:`);
-        console.log(`   OTP: ${otp}`);
-        console.log('='.repeat(60) + '\n');
-        return { success: true, devMode: true };
-      }
-      return { success: false, error: 'Email not configured' };
+    if (!resend || !process.env.RESEND_API_KEY) {
+      console.error('❌ RESEND_API_KEY not configured');
+      
+      console.log('\n' + '='.repeat(60));
+      console.log(`📧 DEV MODE - Password reset OTP for ${email}:`);
+      console.log(`   OTP: ${otp}`);
+      console.log('='.repeat(60) + '\n');
+      return { success: true, devMode: true };
     }
 
-    const mailOptions = {
-      from: {
-        name: process.env.EMAIL_FROM_NAME || 'Riderr',
-        address: process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER,
-      },
-      to: email,
+    console.log(`📧 Sending password reset email via Resend to ${email}...`);
+
+    const { data, error } = await resend.emails.send({
+      from: `${process.env.EMAIL_FROM_NAME || 'Riderr'} <onboarding@resend.dev>`,
+      to: [email],
       subject: '🔑 Reset Your Riderr Password',
       html: `
         <!DOCTYPE html>
@@ -216,8 +186,7 @@ const sendOTPEmail = async (email, otp, name, phone = null) => {
         </body>
         </html>
       `,
-      text: `
-Hello ${name},
+      text: `Hello ${name},
 
 You requested to reset your password. Your OTP is: ${otp}
 
@@ -225,22 +194,26 @@ This OTP expires in 10 minutes.
 
 If you didn't request this, please ignore this email.
 
-© ${new Date().getFullYear()} Riderr
-      `.trim(),
-    };
+© ${new Date().getFullYear()} Riderr`,
+    });
 
-    console.log(`📧 Sending password reset email to ${email}...`);
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Password reset email sent! Message ID: ${info.messageId}`);
+    if (error) {
+      console.error('❌ Resend error:', error);
+      return { success: false, error: error.message };
+    }
 
-    return { success: true, messageId: info.messageId };
+    console.log(`✅ Password reset email sent via Resend! ID: ${data.id}`);
+    return { success: true, messageId: data.id };
+
   } catch (error) {
     console.error('❌ Email failed:', error.message);
+    
     if (process.env.NODE_ENV === 'development') {
-      console.log(`\n${'='.repeat(60)}`);
+      console.log('\n' + '='.repeat(60));
       console.log(`📧 EMAIL FAILED - Dev OTP: ${otp}`);
       console.log('='.repeat(60) + '\n');
     }
+    
     return { success: false, error: error.message };
   }
 };

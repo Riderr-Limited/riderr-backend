@@ -1,8 +1,11 @@
 import mongoose from "mongoose";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import app from "./app.js";
 import dotenv from "dotenv";
+ dotenv.config();
+import app from "./app.js";
+
+
 import { setupDeliverySocket } from "./socket/deliverySocket.js";
 import { setupVoiceCallSocket } from "./socket/voiceCallSocket.js";
 import supportSocket from "./socket/supportSocket.js";
@@ -12,7 +15,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import express from "express"; 
 
- dotenv.config();
 
  const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
