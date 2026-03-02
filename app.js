@@ -6,6 +6,7 @@ import mongoSanitize from "express-mongo-sanitize";
 import apiRoutes from "./routes/index.route.js";
 import newDriverRoutes from "./routes/newDriver.routes.js";
 import newDeliveryRoutes from "./routes/newDelivery.routes.js";
+import testRoutes from "./routes/test.routes.js";
 
 const app = express();
 
@@ -154,6 +155,7 @@ app.post('/api/test-cors', (req, res) => {
 app.use("/api", apiRoutes);
 app.use("/api/drivers", newDriverRoutes);
 app.use("/api/deliveries", newDeliveryRoutes);
+app.use("/api/test", testRoutes); // Email testing routes
 
 /**
  * Root Route

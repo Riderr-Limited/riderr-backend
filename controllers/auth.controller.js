@@ -4,219 +4,12 @@ import Driver from "../models/riders.models.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import { Resend } from 'resend';
 import { validationResult } from "express-validator";
-
-/**
- * ============================================================================
- * EMAIL CONFIGURATION - RESEND HTTP API (NO SMTP PORTS!)
- * ============================================================================
- */
-
-// Initialize Resend only if API key exists
-let resend = null;
-if (process.env.RESEND_API_KEY) {
-  resend = new Resend(process.env.RESEND_API_KEY);
-  console.log('✅ Resend initialized');
-} else {
-  console.warn('⚠️ RESEND_API_KEY not found in environment variables');
-}
-
-/**
- * Send Verification Email via Resend
- */
-const sendVerificationEmail = async (email, code, name, phone = null) => {
-  try {
-    if (!resend || !process.env.RESEND_API_KEY) {
-      console.error('❌ RESEND_API_KEY not configured');
-      
-      console.log('\n' + '='.repeat(60));
-      console.log(`📧 DEV MODE - Verification code for ${email}:`);
-      console.log(`   CODE: ${code}`);
-      console.log('='.repeat(60) + '\n');
-      return { success: true, devMode: true };
-    }
-
-    console.log(`📧 Sending verification email via Resend to ${email}...`);
-
-    const { data, error } = await resend.emails.send({
-      from: `${process.env.EMAIL_FROM_NAME || 'Riderr'} <onboarding@resend.dev>`,
-      to: [email],
-      subject: '🔐 Your Riderr Verification Code',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #f5f5f5; }
-            .container { max-width: 600px; margin: 0 auto; background: #fff; }
-            .header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 40px; text-align: center; color: white; }
-            .header h1 { margin: 0; font-size: 32px; font-weight: 700; }
-            .content { padding: 40px 30px; }
-            .greeting { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
-            .otp-box { background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.2); }
-            .otp-code { font-size: 42px; font-weight: 700; letter-spacing: 8px; color: white; margin: 0; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
-            .expiry { font-size: 14px; color: #666; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #667eea; }
-            .footer { background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #999; border-top: 1px solid #eee; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>🚗 Riderr</h1>
-              <p style="margin: 10px 0 0 0;">Email Verification</p>
-            </div>
-            <div class="content">
-              <div class="greeting">Hello ${name},</div>
-              <p>Welcome to Riderr! Please verify your email with the code below:</p>
-              <div class="otp-box">
-                <p class="otp-code">${code}</p>
-              </div>
-              <div class="expiry">⏰ This code expires in 10 minutes</div>
-              <p style="color: #888; font-size: 14px; margin-top: 30px;">
-                If you didn't create a Riderr account, please ignore this email.
-              </p>
-            </div>
-            <div class="footer">
-              <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
-              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-      text: `Hello ${name},
-
-Welcome to Riderr! Your verification code is: ${code}
-
-This code expires in 10 minutes.
-
-If you didn't create a Riderr account, please ignore this email.
-
-© ${new Date().getFullYear()} Riderr`,
-    });
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log(`✅ Email sent via Resend! ID: ${data.id}`);
-    return { success: true, messageId: data.id };
-
-  } catch (error) {
-    console.error('❌ Email failed:', error.message);
-    
-    if (process.env.NODE_ENV === 'development') {
-      console.log('\n' + '='.repeat(60));
-      console.log(`📧 EMAIL FAILED - Dev Code: ${code}`);
-      console.log('='.repeat(60) + '\n');
-    }
-    
-    return { success: false, error: error.message };
-  }
-};
-
-/**
- * Send Password Reset OTP via Resend
- */
-const sendOTPEmail = async (email, otp, name, phone = null) => {
-  try {
-    if (!resend || !process.env.RESEND_API_KEY) {
-      console.error('❌ RESEND_API_KEY not configured');
-      
-      console.log('\n' + '='.repeat(60));
-      console.log(`📧 DEV MODE - Password reset OTP for ${email}:`);
-      console.log(`   OTP: ${otp}`);
-      console.log('='.repeat(60) + '\n');
-      return { success: true, devMode: true };
-    }
-
-    console.log(`📧 Sending password reset email via Resend to ${email}...`);
-
-    const { data, error } = await resend.emails.send({
-      from: `${process.env.EMAIL_FROM_NAME || 'Riderr'} <onboarding@resend.dev>`,
-      to: [email],
-      subject: '🔑 Reset Your Riderr Password',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #f5f5f5; }
-            .container { max-width: 600px; margin: 0 auto; background: #fff; }
-            .header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 40px; text-align: center; color: white; }
-            .header h1 { margin: 0; font-size: 32px; font-weight: 700; }
-            .content { padding: 40px 30px; }
-            .greeting { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
-            .otp-box { background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.2); }
-            .otp-code { font-size: 42px; font-weight: 700; letter-spacing: 8px; color: white; margin: 0; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
-            .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin: 20px 0; }
-            .footer { background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #999; border-top: 1px solid #eee; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>🚗 Riderr</h1>
-              <p style="margin: 10px 0 0 0;">Password Reset</p>
-            </div>
-            <div class="content">
-              <div class="greeting">Hello ${name},</div>
-              <p>You requested to reset your password. Use the code below:</p>
-              <div class="otp-box">
-                <p class="otp-code">${otp}</p>
-              </div>
-              <div class="warning">
-                <strong>⚠️ Security Alert:</strong> This OTP expires in 10 minutes. If you didn't request this, please ignore this email.
-              </div>
-              <p style="color: #888; font-size: 14px; margin-top: 20px;">
-                Never share this code with anyone.
-              </p>
-            </div>
-            <div class="footer">
-              <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
-              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-      text: `Hello ${name},
-
-You requested to reset your password. Your OTP is: ${otp}
-
-This OTP expires in 10 minutes.
-
-If you didn't request this, please ignore this email.
-
-© ${new Date().getFullYear()} Riderr`,
-    });
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log(`✅ Password reset email sent via Resend! ID: ${data.id}`);
-    return { success: true, messageId: data.id };
-
-  } catch (error) {
-    console.error('❌ Email failed:', error.message);
-    
-    if (process.env.NODE_ENV === 'development') {
-      console.log('\n' + '='.repeat(60));
-      console.log(`📧 EMAIL FAILED - Dev OTP: ${otp}`);
-      console.log('='.repeat(60) + '\n');
-    }
-    
-    return { success: false, error: error.message };
-  }
-};
+import { 
+  generateOTP, 
+  sendVerificationEmail, 
+  sendPasswordResetEmail 
+} from "../services/email.service.js";
 
 /**
  * ============================================================================
@@ -226,7 +19,7 @@ If you didn't request this, please ignore this email.
 
 // Generate random verification code
 const generateVerificationCode = (length = 6) => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return generateOTP();
 };
 
 // Generate JWT tokens
@@ -484,8 +277,7 @@ export const signUp = async (req, res) => {
       emailResult = await sendVerificationEmail(
         newUser.email,
         emailCode,
-        newUser.name,
-        newUser.phone,
+        newUser.name
       );
 
       // In development, log if email fails but don't block signup
@@ -708,8 +500,7 @@ export const signUpCompanyDriver = async (req, res) => {
     const emailResult = await sendVerificationEmail(
       email, 
       emailCode, 
-      name, 
-      phone
+      name
     );
 
     res.status(201).json({
@@ -1046,7 +837,7 @@ export const forgotPassword = async (req, res) => {
     await user.save();
 
     // Send OTP email
-    const emailResult = await sendOTPEmail(email, otp, user.name, user.phone);
+    const emailResult = await sendPasswordResetEmail(email, otp, user.name);
 
     if (!emailResult.success && !emailResult.devMode) {
       console.error('❌ Failed to send password reset email');
@@ -1235,7 +1026,7 @@ export const resendVerification = async (req, res) => {
     await user.save();
 
     // Send verification email
-    const emailResult = await sendVerificationEmail(email, newCode, user.name, user.phone);
+    const emailResult = await sendVerificationEmail(email, newCode, user.name);
 
     res.status(200).json({
       success: true,
@@ -1499,5 +1290,14 @@ export const testEndpoint = async (req, res) => {
     success: true,
     message: "Auth endpoint is working!",
     timestamp: new Date().toISOString(),
+    emailConfig: {
+      smtp: {
+        configured: !!(process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD),
+        host: process.env.EMAIL_HOST || 'Not configured',
+      },
+      resend: {
+        configured: !!process.env.RESEND_API_KEY,
+      },
+    },
   });
 };
