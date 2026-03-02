@@ -1,5 +1,5 @@
 import Contact from '../models/contact.model.js';
-import nodemailer from 'nodemailer';
+import { sendEmail } from '../services/email.service.js';
 
 export const submitContactForm = async (req, res) => {
   try {
@@ -17,26 +17,21 @@ export const submitContactForm = async (req, res) => {
       ipAddress: req.ip
     });
 
-    // Try to send email notification (don't fail if email fails)
+    // Send email notification
     try {
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        host: process.env.EMAIL_HOST,
-        port: process.env.EMAIL_PORT,
-        secure: false,
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASSWORD
-        },
-        tls: { 
-          rejectUnauthorized: false 
-        },
-        connectionTimeout: 30000,
-        greetingTimeout: 30000,
-        socketTimeout: 30000,
-      });
+      const emailHtml = `
+        <h2>New Contact Form Submission</h2>
+        <p><strong>Name:</strong> ${name}</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Subject:</strong> ${subject}</p>
+        <p><strong>Message:</strong></p>
+        <p>${message.replace(/\n/g, '<br>')}</p>
+        <hr>
+        <p><small>Submitted at: ${new Date().toLocaleString()}</small></p>
+        <p><small>IP Address: ${req.ip}</small></p>
+      `;
 
-      const emailContent = `
+      const emailText = `
 New Contact Form Submission
 
 Name: ${name}
@@ -49,18 +44,16 @@ ${message}
 ---
 Submitted at: ${new Date().toLocaleString()}
 IP Address: ${req.ip}
-    `.trim();
+      `.trim();
 
-      await transporter.sendMail({
-        from: process.env.EMAIL_FROM,
-        to: ['contact@riderr.ng', 'usmanmasudaliyu@riderr.ng'],
-        subject: `Contact Form: ${subject}`,
-        text: emailContent,
-        replyTo: email
-      });
+      await sendEmail(
+        'contact@riderr.ng',
+        `Contact Form: ${subject}`,
+        emailHtml,
+        emailText
+      );
     } catch (emailError) {
-      console.error('Email notification failed:', emailError.message);
-      // Continue anyway - message is saved
+      console.error('❌ Contact email failed:', emailError.message);
     }
 
     res.status(201).json({
