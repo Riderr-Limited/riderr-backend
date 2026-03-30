@@ -71,12 +71,16 @@ router.post('/driver-payments/:paymentId/request-settlement',        authenticat
 router.post('/driver-payments/:paymentId/mark-settled',              authenticate, markCashPaymentAsSettled);
 
 // ============================================================
-// 6. DYNAMIC ROUTE — /:paymentId must ALWAYS be last
+// 6. UTILITY ROUTES (must be before dynamic /:paymentId)
+// ============================================================
+router.get('/banks', getNigerianBanks);
+router.post('/company/setup-bank-account', authenticate, setupCompanyBankAccount);
+
+// ============================================================
+// 7. DYNAMIC ROUTE — /:paymentId must ALWAYS be last
 //    (otherwise it swallows the named routes above)
 // ============================================================
 router.get('/:paymentId', authenticate, getPaymentDetails);
-router.get('/banks', getNigerianBanks); 
-router.post('/company/setup-bank-account', authenticate, setupCompanyBankAccount);
 
 
 

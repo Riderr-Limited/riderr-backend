@@ -1,29 +1,29 @@
 // models/payments.models.js - FIXED
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const paymentSchema = new mongoose.Schema(
   {
     // Reference IDs
     deliveryId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Delivery',
+      ref: "Delivery",
       required: true,
       index: true,
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true,
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Driver',
+      ref: "Driver",
       index: true,
     },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Company',
+      ref: "Company",
       index: true,
     },
 
@@ -34,14 +34,28 @@ const paymentSchema = new mongoose.Schema(
     },
     currency: {
       type: String,
-      default: 'NGN',
+      default: "NGN",
+    },
+
+    gateway: {
+      type: String,
+      enum: ["paystack", "flutterwave"],
+      default:
+        process.env.PAYMENT_PROVIDER === "flutterwave"
+          ? "flutterwave"
+          : "paystack",
+      index: true,
+    },
+    gatewayReference: {
+      type: String,
+      index: true,
     },
 
     // Payment Type
     paymentType: {
       type: String,
-      enum: ['escrow', 'direct', 'cash'],
-      default: 'escrow',
+      enum: ["escrow", "direct", "cash"],
+      default: "escrow",
       index: true,
     },
 
@@ -57,8 +71,8 @@ const paymentSchema = new mongoose.Schema(
     // Payment Status
     status: {
       type: String,
-      enum: ['pending', 'processing', 'successful', 'failed', 'refunded'],
-      default: 'pending',
+      enum: ["pending", "processing", "successful", "failed", "refunded"],
+      default: "pending",
       index: true,
     },
 
@@ -66,38 +80,23 @@ const paymentSchema = new mongoose.Schema(
     paymentMethod: {
       type: String,
       enum: [
-        'card',
-        'bank_transfer',
-        'bank_transfer_dedicated',
-        'company_bank_transfer',
-        'manual_bank_transfer',
-        'ussd',
-        'qr',
-        'mobile_money',
-        'cash',
+        "card",
+        "bank_transfer",
+        "bank_transfer_dedicated",
+        "company_bank_transfer",
+        "manual_bank_transfer",
+        "ussd",
+        "qr",
+        "mobile_money",
+        "cash",
       ],
-      default: 'card',
+      default: "card",
     },
 
     // Transaction Details
     paidAt: Date,
     verifiedAt: Date,
-    
-    refund: {
-    status: {
-      type: String,
-      enum: ['none', 'pending', 'refunded', 'failed'],
-      default: 'none',
-    },
-    refundId: String, // Paystack refund ID
-    amount: Number,
-    refundedAt: Date,
-    requestedAt: Date,
-    reason: String,
-    error: String,
-    paystackResponse: mongoose.Schema.Types.Mixed,
-  },
-  
+
     // Split Payment Details (ESCROW)
     companyAmount: {
       type: Number,
@@ -113,8 +112,8 @@ const paymentSchema = new mongoose.Schema(
       subaccountCode: String,
       splitType: {
         type: String,
-        enum: ['subaccount', 'percentage', 'flat'],
-        default: 'subaccount',
+        enum: ["subaccount", "percentage", "flat"],
+        default: "subaccount",
       },
       platformPercentage: {
         type: Number,
@@ -140,13 +139,16 @@ const paymentSchema = new mongoose.Schema(
     refund: {
       status: {
         type: String,
-        enum: ['none', 'pending', 'processing', 'completed', 'failed'],
-        default: 'none',
+        enum: ["none", "pending", "processing", "completed", "refunded", "failed"],
+        default: "none",
       },
+      refundId: String,
       amount: Number,
+      refundedAt: Date,
+      requestedAt: Date,
       reason: String,
-      processedAt: Date,
-      paystackRefundId: String,
+      error: String,
+      paystackResponse: mongoose.Schema.Types.Mixed,
     },
 
     // Error Tracking
@@ -171,32 +173,32 @@ const paymentSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Indexes
 paymentSchema.index({ paystackReference: 1 });
 paymentSchema.index({ createdAt: -1 });
-paymentSchema.index({ 'escrowDetails.subaccountCode': 1 });
+paymentSchema.index({ "escrowDetails.subaccountCode": 1 });
 paymentSchema.index({ paymentType: 1, status: 1 });
 
 // Virtuals
-paymentSchema.virtual('formattedAmount').get(function () {
-  return `₦${this.amount.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
+paymentSchema.virtual("formattedAmount").get(function () {
+  return `₦${this.amount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
-paymentSchema.virtual('formattedCompanyAmount').get(function () {
-  return `₦${this.companyAmount.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
+paymentSchema.virtual("formattedCompanyAmount").get(function () {
+  return `₦${this.companyAmount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
-paymentSchema.virtual('formattedPlatformFee').get(function () {
-  return `₦${this.platformFee.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
+paymentSchema.virtual("formattedPlatformFee").get(function () {
+  return `₦${this.platformFee.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
 
 // Methods
 paymentSchema.methods.markAsPaid = function () {
-  this.status = 'successful';
+  this.status = "successful";
   this.paidAt = new Date();
   this.auditLog.push({
-    action: 'payment_successful',
+    action: "payment_successful",
     timestamp: new Date(),
     details: { amount: this.amount },
   });
@@ -204,10 +206,10 @@ paymentSchema.methods.markAsPaid = function () {
 };
 
 paymentSchema.methods.markAsFailed = function (reason) {
-  this.status = 'failed';
+  this.status = "failed";
   this.failureReason = reason;
   this.auditLog.push({
-    action: 'payment_failed',
+    action: "payment_failed",
     timestamp: new Date(),
     details: { reason },
   });
@@ -219,7 +221,7 @@ paymentSchema.methods.markAsSettled = function (transferId) {
   this.escrowDetails.settlementDate = new Date();
   this.escrowDetails.paystackTransferId = transferId;
   this.auditLog.push({
-    action: 'settled_to_company',
+    action: "settled_to_company",
     timestamp: new Date(),
     details: { transferId },
   });
@@ -227,8 +229,12 @@ paymentSchema.methods.markAsSettled = function (transferId) {
 };
 
 // Statics
-paymentSchema.statics.getTotalEarnings = async function (companyId, startDate, endDate) {
-  const match = { companyId, status: 'successful' };
+paymentSchema.statics.getTotalEarnings = async function (
+  companyId,
+  startDate,
+  endDate,
+) {
+  const match = { companyId, status: "successful" };
   if (startDate || endDate) {
     match.paidAt = {};
     if (startDate) match.paidAt.$gte = new Date(startDate);
@@ -239,18 +245,28 @@ paymentSchema.statics.getTotalEarnings = async function (companyId, startDate, e
     {
       $group: {
         _id: null,
-        totalAmount: { $sum: '$amount' },
-        totalCompanyAmount: { $sum: '$companyAmount' },
-        totalPlatformFee: { $sum: '$platformFee' },
+        totalAmount: { $sum: "$amount" },
+        totalCompanyAmount: { $sum: "$companyAmount" },
+        totalPlatformFee: { $sum: "$platformFee" },
         count: { $sum: 1 },
       },
     },
   ]);
-  return result[0] || { totalAmount: 0, totalCompanyAmount: 0, totalPlatformFee: 0, count: 0 };
+  return (
+    result[0] || {
+      totalAmount: 0,
+      totalCompanyAmount: 0,
+      totalPlatformFee: 0,
+      count: 0,
+    }
+  );
 };
 
-paymentSchema.statics.getPlatformEarnings = async function (startDate, endDate) {
-  const match = { status: 'successful' };
+paymentSchema.statics.getPlatformEarnings = async function (
+  startDate,
+  endDate,
+) {
+  const match = { status: "successful" };
   if (startDate || endDate) {
     match.paidAt = {};
     if (startDate) match.paidAt.$gte = new Date(startDate);
@@ -261,20 +277,22 @@ paymentSchema.statics.getPlatformEarnings = async function (startDate, endDate) 
     {
       $group: {
         _id: null,
-        totalPlatformFee: { $sum: '$platformFee' },
+        totalPlatformFee: { $sum: "$platformFee" },
         totalTransactions: { $sum: 1 },
-        totalVolume: { $sum: '$amount' },
+        totalVolume: { $sum: "$amount" },
       },
     },
   ]);
-  return result[0] || { totalPlatformFee: 0, totalTransactions: 0, totalVolume: 0 };
+  return (
+    result[0] || { totalPlatformFee: 0, totalTransactions: 0, totalVolume: 0 }
+  );
 };
 
 // ✅ FIXED: next() was commented out — this caused every payment.save()
 // to hang forever and never resolve, breaking the entire payment flow.
-paymentSchema.pre('save', function (next) {
+paymentSchema.pre("save", function (next) {
   // Auto-calculate split if amount changed and platformFee not set
-  if (this.isModified('amount') && !this.platformFee) {
+  if (this.isModified("amount") && !this.platformFee) {
     this.platformFee = Math.round((this.amount * 10) / 100);
     this.companyAmount = this.amount - this.platformFee;
   }
@@ -284,9 +302,9 @@ paymentSchema.pre('save', function (next) {
     this.escrowDetails.subaccountCode = this.metadata.companySubaccount;
   }
 
-  
+  next();
 });
 
-const Payment = mongoose.model('Payment', paymentSchema);
+const Payment = mongoose.model("Payment", paymentSchema);
 
 export default Payment;

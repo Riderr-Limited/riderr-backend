@@ -1,455 +1,617 @@
-// controllers/payment.controller.js - PRODUCTION READY
-import Payment from '../models/payments.models.js';
-import Delivery from '../models/delivery.models.js';
-import Driver from '../models/riders.models.js';
-import Company from '../models/company.models.js';
-import User from '../models/user.models.js';
-import { 
-  initializePayment, 
-  verifyPayment, 
-  createSubaccount,   
-  chargeCardViaPaystack,  
-  submitOtpToPaystack,         
+﻿// controllers/payment.controller.js - MOBILE-FIRST PAYMENT FLOW
+import Payment from "../models/payments.models.js";
+import Delivery from "../models/delivery.models.js";
+import Driver from "../models/riders.models.js";
+import Company from "../models/company.models.js";
+import User from "../models/user.models.js";
+import {
+  gatewayChargeCard,
+  gatewaySubmitOtp,
+  gatewaySubmitPin,
   createDedicatedVirtualAccount,
-  createTransferRecipient,  
-  initiateTransfer   
-} from '../utils/paystack.js';  
-import { sendNotification } from '../utils/notification.js';
-import mongoose from 'mongoose';
-import crypto from 'crypto';
+  getGatewayProvider,
+  verifyPayment,
+  initiateTransfer,
+  createTransferRecipient,
+  initiateRefund,
+  getBankList,
+  verifyWebhookSignature,
+} from "../utils/paymentGateway.js";
+import { sendNotification } from "../utils/notification.js";
+import mongoose from "mongoose";
+import crypto from "crypto";
 
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
 
 /**
- * Helper: Handle in-app bank transfer - PRODUCTION READY
+ * MOBILE-FIRST PAYMENT FLOW
+ *
+ * Single initialize endpoint handles:
+ * - Card & transfer payment methods
+ * - Inline card charging (no separate endpoints)
+ * - Consistent response format
+ * - Clear next-step instructions for mobile UX
  */
-async function handleInAppBankTransfer(req, res, { customer, delivery, amount, platformFee, companyAmount, reference }) {
+
+/**
+ * Helper: Generate bank transfer details with priority handling
+ */
+async function generateBankTransferDetails(
+  customer,
+  delivery,
+  amount,
+  reference,
+) {
   try {
-    console.log(`🏦 Handling in-app bank transfer for ${reference} (${IS_PRODUCTION ? 'LIVE' : 'TEST'})`);
+    console.log(
+      `ðŸ’³ Generating bank transfer details for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
+    );
 
     let bankDetails = null;
-    let paymentMethod = 'bank_transfer';
-    let usesDedicatedAccount = false;
+    let paymentMethod = "bank_transfer";
+    let priority = "medium";
 
-    // ✅ TRY PAYSTACK DEDICATED VIRTUAL ACCOUNT (Works in both test and live)
+    // Priority 1: Try Paystack dedicated virtual account (instant verification)
     try {
-      console.log('🔄 Attempting to create Paystack dedicated virtual account...');
-      
-      const virtualAccountResult = await createDedicatedVirtualAccount({
+      console.log("ðŸ”„ Attempting Paystack dedicated virtual account...");
+      const accountData = await createDedicatedVirtualAccount({
         email: customer.email,
-        first_name: customer.name.split(' ')[0] || customer.name,
-        last_name: customer.name.split(' ')[1] || customer.name,
+        first_name: customer.name.split(" ")[0] || customer.name,
+        last_name: customer.name.split(" ")[1] || customer.name,
         phone: customer.phone,
-        preferred_bank: 'wema-bank', // or 'titan-paystack'
+        preferred_bank: "wema-bank",
         metadata: {
           deliveryId: delivery._id.toString(),
-          customerId: customer._id.toString(),
           reference: reference,
-          amount: amount,
-          environment: IS_PRODUCTION ? 'production' : 'development',
         },
       });
 
-      if (virtualAccountResult.success && virtualAccountResult.data) {
-        const accountData = virtualAccountResult.data;
+      if (accountData && accountData.success && accountData.data) {
+        const account = accountData.data;
         bankDetails = {
-          bankName: accountData.bankName,
-          accountNumber: accountData.accountNumber,
-          accountName: accountData.accountName,
+          type: "dedicated_virtual",
+          bankName: account.bankName,
+          accountNumber: account.accountNumber,
+          accountName: account.accountName,
           reference: reference,
           amount: amount,
-          type: 'dedicated_virtual',
-          expiresAt: null, // Dedicated accounts don't expire
-          instructions: [
-            `Transfer exactly ₦${amount.toLocaleString()} to the account below`,
-            `Account is dedicated to you - no narration needed`,
-            `Payment confirmed automatically within seconds`,
-            `Works with any Nigerian bank`,
-          ],
-          dedicatedAccountId: accountData.dedicatedAccountId || accountData.customerId,
-          customerCode: accountData.customerCode,
+          formatted: `â‚¦${amount.toLocaleString()}`,
+          narration: "Not required",
+          expiresAt: null,
         };
-        usesDedicatedAccount = true;
-        paymentMethod = 'bank_transfer_dedicated';
-        console.log(`✅ Dedicated virtual account created: ${accountData.accountNumber}`);
-      } else {
-        throw new Error(virtualAccountResult.message || 'Dedicated account creation failed');
+        paymentMethod = "bank_transfer_dedicated";
+        priority = "high";
+        console.log(
+          `âœ… Dedicated virtual account created: ${account.accountNumber}`,
+        );
       }
-    } catch (virtualError) {
-      console.warn('⚠️ Dedicated virtual account failed:', virtualError.message);
-      
-      // ✅ FALLBACK: Check if company has verified bank account
-      if (delivery.companyId && delivery.companyId.bankAccount?.accountNumber) {
-        console.log('💼 Using company bank account as fallback');
-        
-        bankDetails = {
-          bankName: delivery.companyId.bankAccount.bankName || 'Company Bank',
-          accountNumber: delivery.companyId.bankAccount.accountNumber,
-          accountName: delivery.companyId.bankAccount.accountName || delivery.companyId.name,
-          reference: reference,
-          amount: amount,
-          type: 'company_account',
-          narration: `Riderr-${reference}`,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-          instructions: [
-            `Transfer exactly ₦${amount.toLocaleString()}`,
-            `Use narration/reference: ${reference}`,
-            `Keep your receipt for verification`,
-            `Payment confirmed within 5-10 minutes`,
-            `Contact support with proof if delayed`,
-          ],
-        };
-        paymentMethod = 'company_bank_transfer';
-      } else {
-        // ✅ LAST RESORT: Use platform account from environment
-        console.warn('⚠️ No company account found, using platform account');
-        
-        if (!process.env.PLATFORM_BANK_NAME || !process.env.PLATFORM_ACCOUNT_NUMBER) {
-          throw new Error(
-            'Bank transfer not available. Please use card payment or contact support to setup bank transfer.'
-          );
-        }
-        
-        bankDetails = {
-          bankName: process.env.PLATFORM_BANK_NAME,
-          accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER,
-          accountName: process.env.PLATFORM_ACCOUNT_NAME || 'RIDERR TECHNOLOGIES LTD',
-          reference: reference,
-          amount: amount,
-          type: 'platform_account',
-          narration: `Riderr-${reference}`,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-          instructions: [
-            `Transfer exactly ₦${amount.toLocaleString()}`,
-            `IMPORTANT: Use "${reference}" as narration/reference`,
-            `Keep your receipt/screenshot`,
-            `Send receipt to ${process.env.SUPPORT_WHATSAPP || 'support'} for faster verification`,
-            `Payment verified within 5-30 minutes during business hours`,
-          ],
-          requiresManualVerification: true,
-        };
-        paymentMethod = 'manual_bank_transfer';
-        
-        console.log('📧 Platform account fallback activated');
-      }
+    } catch (err) {
+      console.warn("âš ï¸ Dedicated account failed:", err.message);
     }
 
+    // Priority 2: Use company bank account
+    if (!bankDetails && delivery.companyId?.bankAccount?.accountNumber) {
+      console.log("ðŸ’¼ Using company bank account");
+      bankDetails = {
+        type: "company_account",
+        bankName: delivery.companyId.bankAccount.bankName || "Company Bank",
+        accountNumber: delivery.companyId.bankAccount.accountNumber,
+        accountName:
+          delivery.companyId.bankAccount.accountName || delivery.companyId.name,
+        reference: reference,
+        amount: amount,
+        formatted: `â‚¦${amount.toLocaleString()}`,
+        narration: `Riderr-${reference}`,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      };
+      paymentMethod = "company_bank_transfer";
+      priority = "medium";
+    }
+
+    // Priority 3: Use platform account
     if (!bankDetails) {
-      throw new Error('Unable to generate bank transfer details. Please try card payment.');
+      if (
+        !process.env.PLATFORM_BANK_NAME ||
+        !process.env.PLATFORM_ACCOUNT_NUMBER
+      ) {
+        throw new Error("Bank transfer unavailable. Please use card payment.");
+      }
+
+      console.log("ðŸ“§ Using platform fallback account");
+      bankDetails = {
+        type: "platform_account",
+        bankName: process.env.PLATFORM_BANK_NAME,
+        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER,
+        accountName:
+          process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
+        reference: reference,
+        amount: amount,
+        formatted: `â‚¦${amount.toLocaleString()}`,
+        narration: `Riderr-${reference}`,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      };
+      paymentMethod = "manual_bank_transfer";
+      priority = "low";
     }
 
-    // Create payment record
-    const payment = new Payment({
-      deliveryId: delivery._id,
-      customerId: customer._id,
-      companyId: delivery.companyId?._id,
-      amount: amount,
-      currency: 'NGN',
-      paystackReference: reference,
-      status: 'pending',
-      paymentMethod: paymentMethod,
-      companyAmount: companyAmount,
-      platformFee: platformFee,
-      paymentType: 'escrow',
-      metadata: {
-        customerEmail: customer.email,
-        customerName: customer.name,
-        bankTransferDetails: bankDetails,
-        platform: 'in-app',
-        pendingSettlement: true,
-        transferType: bankDetails.type,
-        usesDedicatedAccount: usesDedicatedAccount,
-        environment: IS_PRODUCTION ? 'production' : 'development',
-        requiresManualVerification: bankDetails.requiresManualVerification || false,
-      },
-    });
-
-    await payment.save();
-
-    // Update delivery
-    delivery.payment.status = 'pending_payment';
-    delivery.payment.method = 'bank_transfer';
-    delivery.payment.paystackReference = reference;
-    await delivery.save();
-
-    console.log(`✅ Bank transfer initialized (${bankDetails.type}) - Reference: ${reference}`);
-
-    // Response varies based on account type
-    const responseData = {
-      paymentId: payment._id,
-      reference: reference,
-      amount: amount,
-      paymentChannel: 'bank_transfer',
-      bankDetails: {
-        bankName: bankDetails.bankName,
-        accountNumber: bankDetails.accountNumber,
-        accountName: bankDetails.accountName,
-        amount: `₦${amount.toLocaleString()}`,
-        narration: bankDetails.narration || 'Not required',
-        type: bankDetails.type,
-        expiresAt: bankDetails.expiresAt,
-        instructions: bankDetails.instructions,
-      },
-      paymentBreakdown: {
-        totalAmount: `₦${amount.toLocaleString()}`,
-        platformFee: `₦${platformFee.toLocaleString()} (10%)`,
-        companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
-        escrowMessage: 'Payment held securely until delivery completion',
-      },
-      support: {
-        email: process.env.SUPPORT_EMAIL || 'support@riderr.com',
-        phone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
-        whatsapp: process.env.SUPPORT_WHATSAPP || '+234 800 000 0000',
-      },
-    };
-
-    // Add specific next steps based on transfer type
-    if (bankDetails.type === 'dedicated_virtual') {
-      responseData.nextSteps = [
-        'Open your banking app or USSD',
-        'Transfer to the account number above',
-        'Amount must be exact: ₦' + amount.toLocaleString(),
-        'Payment confirmed automatically (instant)',
-        'You will receive notification immediately',
-      ];
-      responseData.priority = 'high';
-      responseData.estimatedConfirmation = 'Instant (within 30 seconds)';
-    } else if (bankDetails.type === 'company_account') {
-      responseData.nextSteps = [
-        'Open your banking app',
-        'Transfer to the company account above',
-        'Use exact amount and reference',
-        'Keep your transfer receipt',
-        'Payment verified within 5-10 minutes',
-        'Submit receipt via support if needed',
-      ];
-      responseData.priority = 'medium';
-      responseData.estimatedConfirmation = '5-10 minutes';
-    } else {
-      responseData.nextSteps = [
-        'Open your banking app',
-        'Transfer to the account above',
-        'MUST use reference: ' + reference,
-        'Screenshot/save your receipt',
-        'Send receipt to WhatsApp: ' + (process.env.SUPPORT_WHATSAPP || 'support'),
-        'Payment verified within 5-30 minutes',
-      ];
-      responseData.priority = 'manual';
-      responseData.estimatedConfirmation = '5-30 minutes (business hours)';
-      responseData.warning = 'Payment requires manual verification. Please keep your receipt.';
-    }
-
-    res.status(200).json({
-      success: true,
-      message: bankDetails.type === 'dedicated_virtual' 
-        ? 'Virtual account generated. Transfer to complete payment.'
-        : 'Bank details generated. Complete transfer in your banking app.',
-      data: responseData,
-    });
+    return { bankDetails, paymentMethod, priority };
   } catch (error) {
-    console.error('❌ Handle in-app bank transfer error:', error);
-    
-    // Better error messages for production
-    const errorMessage = error.message.includes('not available')
-      ? error.message
-      : 'Failed to generate bank transfer details. Please try card payment or contact support.';
-    
-    res.status(500).json({
-      success: false,
-      message: errorMessage,
-      error: IS_PRODUCTION ? undefined : error.message,
-      fallback: {
-        suggestion: 'Try card payment instead',
-        supportContact: process.env.SUPPORT_WHATSAPP || process.env.SUPPORT_PHONE,
-      },
-    });
+    console.error("âŒ Bank transfer generation error:", error);
+    throw error;
   }
 }
 
 /**
- * @desc    Initialize delivery payment
+ * @desc    UNIFIED: Initialize payment (card or transfer, single endpoint)
  * @route   POST /api/payments/initialize
  * @access  Private (Customer)
+ * @mobile  Optimized for mobile consumption
+ *
+ * Request body:
+ * {
+ *   deliveryId: "xyz",
+ *   paymentType: "card" | "transfer",
+ *   cardDetails?: { number, cvv, expiry_month, expiry_year, pin? }
+ * }
+ *
+ * Response: Unified format for both payment types
  */
 export const initializeDeliveryPayment = async (req, res) => {
   try {
     const customer = req.user;
-    const { deliveryId, paymentChannel } = req.body;
+    const { deliveryId, paymentType, cardDetails } = req.body;
 
-    console.log(`💳 [PAYMENT INIT] Customer ${customer._id} - Delivery ${deliveryId} - Channel: ${paymentChannel || 'bank_transfer'} - Env: ${IS_PRODUCTION ? 'LIVE' : 'TEST'}`);
-
-    if (customer.role !== 'customer') {
+    // Validate customer role
+    if (customer.role !== "customer") {
       return res.status(403).json({
         success: false,
-        message: 'Only customers can make payments',
+        message: "Only customers can make payments",
+        code: "INVALID_ROLE",
       });
     }
 
-    // Validate payment channel
-    const validChannels = ['card', 'bank_transfer'];
-    if (!paymentChannel || !validChannels.includes(paymentChannel)) {
+    // Validate payment type
+    if (!paymentType || !["card", "transfer"].includes(paymentType)) {
       return res.status(400).json({
         success: false,
-        message: 'Payment channel is required. Choose either "card" or "bank_transfer"',
-        validOptions: validChannels,
+        message: "Invalid payment type",
+        code: "INVALID_PAYMENT_TYPE",
+        supportedTypes: ["card", "transfer"],
       });
     }
 
-    // Find delivery
+    console.log(
+      `ðŸ’³ [PAYMENT INIT] Customer: ${customer._id}, Delivery: ${deliveryId}, Type: ${paymentType}`,
+    );
+
+    // Find and validate delivery
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       customerId: customer._id,
-    }).populate('companyId');
+    }).populate("companyId");
 
     if (!delivery) {
       return res.status(404).json({
         success: false,
-        message: 'Delivery not found',
+        message: "Delivery not found",
+        code: "DELIVERY_NOT_FOUND",
       });
     }
 
-    if (delivery.status !== 'created') {
+    // Payment allowed on created (before assignment) or assigned (rider accepted, awaiting payment)
+    if (!["created", "assigned"].includes(delivery.status)) {
       return res.status(400).json({
         success: false,
-        message: `Payment can only be made for newly created deliveries. Current status: ${delivery.status}`,
+        message: "Payment can only be made for pending or assigned deliveries",
+        code: "INVALID_DELIVERY_STATUS",
+        currentStatus: delivery.status,
       });
     }
 
-    // Check existing payment
+    // Check for existing active payment
     const existingPayment = await Payment.findOne({
       deliveryId: delivery._id,
-      status: { $in: ['successful', 'processing', 'pending'] },
+      status: { $in: ["successful", "processing", "pending"] },
     });
 
-    if (existingPayment) {
-      console.log(`⚠️ Payment already exists for delivery ${deliveryId}`);
-      
-      if (paymentChannel === 'bank_transfer' && existingPayment.metadata?.bankTransferDetails) {
+    if (existingPayment && paymentType === "transfer") {
+      // Allow reuse of transfer details
+      if (
+        existingPayment.paymentMethod === "bank_transfer_dedicated" ||
+        existingPayment.metadata?.bankTransferDetails
+      ) {
         return res.status(200).json({
           success: true,
-          message: 'Bank transfer already initialized. Use existing details.',
-          data: {
-            paymentId: existingPayment._id,
-            reference: existingPayment.paystackReference,
-            status: existingPayment.status,
-            paymentChannel: 'bank_transfer',
-            bankDetails: existingPayment.metadata.bankTransferDetails,
-            amount: existingPayment.amount,
-          },
+          message: "Using existing transfer details",
+          code: "TRANSFER_REUSED",
+          data: formatTransferResponse(existingPayment, delivery),
         });
       }
-      
+    }
+
+    if (existingPayment) {
       return res.status(400).json({
         success: false,
-        message: 'Payment already initialized for this delivery',
-        data: {
-          paymentId: existingPayment._id,
-          reference: existingPayment.paystackReference,
-          status: existingPayment.status,
-        },
+        message: "Payment already initialized for this delivery",
+        code: "PAYMENT_EXISTS",
+        paymentId: existingPayment._id,
       });
     }
 
-    const amount = delivery.fare.totalFare;
-    const platformFeePercentage = 10;
-    const platformFee = Math.round((amount * platformFeePercentage) / 100);
-    const companyAmount = amount - platformFee;
+    // Calculate amounts
+    const totalAmount = delivery.fare.totalFare;
+    const platformFee = Math.round((totalAmount * PLATFORM_FEE_PCT) / 100);
+    const companyAmount = totalAmount - platformFee;
+    const reference = generatePaymentReference();
 
-    console.log(`💰 Payment breakdown - Total: ₦${amount}, Company: ₦${companyAmount} (90%), Platform: ₦${platformFee} (10%)`);
+    console.log(
+      `ðŸ’° Amounts: Total=â‚¦${totalAmount}, Platform=â‚¦${platformFee} (10%), Company=â‚¦${companyAmount} (90%)`,
+    );
 
-    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-
-    // Handle based on payment channel
-    if (paymentChannel === 'bank_transfer') {
-      return await handleInAppBankTransfer(req, res, {
+    // Route based on payment type
+    if (paymentType === "transfer") {
+      return handleTransferInitialization(req, res, {
         customer,
         delivery,
-        amount,
+        totalAmount,
         platformFee,
         companyAmount,
         reference,
       });
     } else {
-      return await handleInAppCardPayment(req, res, {
+      // Card: inline charge immediately for mobile UX
+      return handleCardChargeInline(req, res, {
         customer,
         delivery,
-        amount,
+        totalAmount,
         platformFee,
         companyAmount,
         reference,
+        cardDetails,
       });
     }
   } catch (error) {
-    console.error('❌ Initialize payment error:', error);
+    console.error("âŒ Initialize payment error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to initialize payment',
+      message: "Failed to initialize payment",
+      code: "INIT_ERROR",
       error: IS_PRODUCTION ? undefined : error.message,
     });
   }
 };
 
 /**
- * Helper: Handle in-app card payment
+ * Handle transfer payment initialization
  */
-async function handleInAppCardPayment(req, res, { customer, delivery, amount, platformFee, companyAmount, reference }) {
+async function handleTransferInitialization(
+  req,
+  res,
+  { customer, delivery, totalAmount, platformFee, companyAmount, reference },
+) {
   try {
-    console.log(`💳 Handling in-app card payment for ${reference} (${IS_PRODUCTION ? 'LIVE' : 'TEST'})`);
+    const { bankDetails, paymentMethod, priority } =
+      await generateBankTransferDetails(
+        customer,
+        delivery,
+        totalAmount,
+        reference,
+      );
 
     // Create payment record
     const payment = new Payment({
       deliveryId: delivery._id,
       customerId: customer._id,
       companyId: delivery.companyId?._id,
-      amount: amount,
-      currency: 'NGN',
+      amount: totalAmount,
+      currency: "NGN",
+      gateway: getGatewayProvider(),
+      gatewayReference: reference,
       paystackReference: reference,
-      status: 'pending',
-      paymentMethod: 'card',
+      status: "pending",
+      paymentMethod: paymentMethod,
       companyAmount: companyAmount,
       platformFee: platformFee,
-      paymentType: 'escrow',
+      paymentType: "escrow",
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
-        platform: 'in-app',
-        pendingSettlement: true,
-        environment: IS_PRODUCTION ? 'production' : 'development',
+        bankTransferDetails: bankDetails,
+        platform: "in-app",
+        paymentPriority: priority,
       },
     });
 
     await payment.save();
 
     // Update delivery
-    delivery.payment.status = 'pending_payment';
-    delivery.payment.method = 'card';
-    delivery.payment.paystackReference = reference;
+    delivery.payment.status = "pending_payment";
+    delivery.payment.method = "transfer";
+    delivery.payment.reference = reference;
     await delivery.save();
 
-    console.log(`✅ Card payment initialized - Reference: ${reference}`);
+    console.log(`âœ… Transfer initialized - Reference: ${reference}`);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Payment initialized. Proceed to enter card details.',
-      data: {
-        paymentId: payment._id,
-        reference: reference,
-        amount: amount,
-        paymentChannel: 'card',
-        nextStep: 'charge_card',
-        instructions: 'Call /api/payments/charge-card with card details',
-        paymentBreakdown: {
-          totalAmount: `₦${amount.toLocaleString()}`,
-          platformFee: `₦${platformFee.toLocaleString()} (10%)`,
-          companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
-          escrowMessage: 'Payment held securely until delivery completion',
-        },
-        environment: IS_PRODUCTION ? 'production' : 'development',
-      },
+      message: "Bank transfer details ready",
+      data: formatTransferResponse(payment, delivery),
     });
   } catch (error) {
-    console.error('❌ Handle in-app card payment error:', error);
-    throw error;
+    console.error("âŒ Transfer initialization error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to generate transfer details",
+      code: "TRANSFER_INIT_ERROR",
+      fallback: "Please try card payment instead",
+      error: IS_PRODUCTION ? undefined : error.message,
+    });
+  }
+}
+
+/**
+ * Handle card payment - inline charge for mobile
+ */
+async function handleCardChargeInline(
+  req,
+  res,
+  {
+    customer,
+    delivery,
+    totalAmount,
+    platformFee,
+    companyAmount,
+    reference,
+    cardDetails,
+  },
+) {
+  try {
+    // Validate card details
+    if (!cardDetails) {
+      // If no card details, return error asking for card
+      const payment = new Payment({
+        deliveryId: delivery._id,
+        customerId: customer._id,
+        companyId: delivery.companyId?._id,
+        amount: totalAmount,
+        currency: "NGN",
+        gateway: getGatewayProvider(),
+        gatewayReference: reference,
+        paystackReference: reference,
+        status: "pending",
+        paymentMethod: "card",
+        companyAmount: companyAmount,
+        platformFee: platformFee,
+        paymentType: "escrow",
+        metadata: {
+          customerEmail: customer.email,
+          customerName: customer.name,
+          platform: "in-app",
+        },
+      });
+      await payment.save();
+
+      delivery.payment.status = "pending_payment";
+      delivery.payment.method = "card";
+      delivery.payment.reference = reference;
+      await delivery.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Ready for card payment",
+        code: "CARD_AWAITING_DETAILS",
+        requiresCardDetails: true,
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: totalAmount,
+          amountFormatted: `â‚¦${totalAmount.toLocaleString()}`,
+          paymentType: "card",
+          status: "pending_card_details",
+          breakdown: {
+            total: totalAmount,
+            platformFee: platformFee,
+            companyAmount: companyAmount,
+          },
+        },
+      });
+    }
+
+    // Validate card fields
+    if (
+      !cardDetails.number ||
+      !cardDetails.cvv ||
+      !cardDetails.expiry_month ||
+      !cardDetails.expiry_year
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Complete card details required",
+        code: "CARD_DETAILS_INCOMPLETE",
+        requiredFields: ["number", "cvv", "expiry_month", "expiry_year"],
+      });
+    }
+
+    console.log(
+      `ðŸ’³ Charging card - Reference: ${reference}, Amount: â‚¦${totalAmount}`,
+    );
+
+    // Create payment record first
+    const payment = new Payment({
+      deliveryId: delivery._id,
+      customerId: customer._id,
+      companyId: delivery.companyId?._id,
+      amount: totalAmount,
+      currency: "NGN",
+      gateway: getGatewayProvider(),
+      gatewayReference: reference,
+      paystackReference: reference,
+      status: "processing",
+      paymentMethod: "card",
+      companyAmount: companyAmount,
+      platformFee: platformFee,
+      paymentType: "escrow",
+      metadata: {
+        customerEmail: customer.email,
+        customerName: customer.name,
+        platform: "in-app",
+      },
+    });
+
+    await payment.save();
+
+    // Attempt card charge
+    const chargeResult = await gatewayChargeCard({
+      email: customer.email,
+      amount: totalAmount,
+      currency: "NGN",
+      card: {
+        number: cardDetails.number,
+        cvv: cardDetails.cvv,
+        expiry_month: cardDetails.expiry_month,
+        expiry_year: cardDetails.expiry_year,
+        pin: cardDetails.pin || null,
+      },
+      metadata: {
+        deliveryId: delivery._id.toString(),
+        customerId: customer._id.toString(),
+        reference: reference,
+      },
+    });
+
+    // Handle charge response
+    const chargeData = chargeResult.data;
+
+    // OTP Required
+    if (chargeData.status === "send_otp") {
+      payment.status = "processing";
+      payment.metadata = {
+        ...payment.metadata,
+        requiresOtp: true,
+        cardLast4: cardDetails.number.slice(-4),
+        chargeReference: chargeResult.paystackReference || reference,
+      };
+      payment.markModified("metadata");
+      await payment.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "OTP sent to your registered phone",
+        code: "CARD_OTP_REQUIRED",
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: totalAmount,
+          status: "pending_otp",
+          nextAction: "submit_otp",
+          otpMessage: chargeData.display_text || "Enter OTP",
+        },
+      });
+    }
+
+    // PIN Required
+    if (chargeData.status === "send_pin") {
+      payment.status = "processing";
+      payment.metadata = {
+        ...payment.metadata,
+        requiresPin: true,
+        cardLast4: cardDetails.number.slice(-4),
+        chargeReference: chargeResult.paystackReference || reference,
+      };
+      payment.markModified("metadata");
+      await payment.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Card requires PIN",
+        code: "CARD_PIN_REQUIRED",
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          amount: totalAmount,
+          status: "pending_pin",
+          nextAction: "submit_pin",
+        },
+      });
+    }
+
+    // Charge successful
+    if (chargeData.status === "success") {
+      payment.status = "successful";
+      payment.paidAt = new Date();
+      payment.verifiedAt = new Date();
+      payment.metadata = {
+        ...payment.metadata,
+        cardLast4: cardDetails.number.slice(-4),
+        cardType: chargeData.authorization?.card_type,
+        bank: chargeData.authorization?.bank,
+        chargeId: chargeData.id,
+      };
+      await payment.save();
+
+      // Update delivery
+      delivery.payment.status = "paid";
+      delivery.payment.paidAt = new Date();
+      await delivery.save();
+
+      // Send notification
+      await sendNotification({
+        userId: customer._id,
+        title: "âœ… Payment Successful",
+        message: `Payment of â‚¦${totalAmount.toLocaleString()} confirmed`,
+        data: {
+          type: "payment_success",
+          deliveryId: delivery._id,
+          paymentId: payment._id,
+        },
+      });
+
+      console.log(`âœ… Card payment successful - Reference: ${reference}`);
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment successful!",
+        code: "PAYMENT_SUCCESSFUL",
+        data: formatPaymentSuccessResponse(payment, delivery),
+      });
+    }
+
+    // Charge declined or error
+    if (chargeData.status === "failed" || !chargeResult.success) {
+      payment.status = "failed";
+      payment.metadata = {
+        ...payment.metadata,
+        failureReason: chargeResult.message || "Card declined",
+        cardLast4: cardDetails.number.slice(-4),
+      };
+      await payment.save();
+
+      return res.status(400).json({
+        success: false,
+        message: chargeResult.message || "Card charge failed",
+        code: "CARD_CHARGE_FAILED",
+        data: {
+          paymentId: payment._id,
+          reference: reference,
+          reason:
+            chargeData.status === "failed"
+              ? chargeData.message || "Card declined"
+              : chargeResult.message,
+        },
+      });
+    }
+
+    // Unexpected status
+    throw new Error(`Unexpected charge status: ${chargeData.status}`);
+  } catch (error) {
+    console.error("âŒ Card charge error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to process card payment",
+      code: "CARD_CHARGE_ERROR",
+      error: IS_PRODUCTION ? undefined : error.message,
+    });
   }
 }
 
@@ -463,27 +625,36 @@ export const chargeCard = async (req, res) => {
     const customer = req.user;
     const { reference, cardDetails } = req.body;
 
-    console.log(`💳 Customer ${customer._id} charging card for ${reference} (${IS_PRODUCTION ? 'LIVE' : 'TEST'})`);
+    console.log(
+      `ðŸ’³ Customer ${customer._id} charging card for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
+    );
 
     if (!reference) {
       return res.status(400).json({
         success: false,
-        message: 'Payment reference is required. Call /api/payments/initialize first.',
+        message:
+          "Payment reference is required. Call /api/payments/initialize first.",
       });
     }
 
     // Validate card details
-    if (!cardDetails || !cardDetails.number || !cardDetails.cvv || 
-        !cardDetails.expiry_month || !cardDetails.expiry_year) {
+    if (
+      !cardDetails ||
+      !cardDetails.number ||
+      !cardDetails.cvv ||
+      !cardDetails.expiry_month ||
+      !cardDetails.expiry_year
+    ) {
       return res.status(400).json({
         success: false,
-        message: 'Complete card details required (number, cvv, expiry_month, expiry_year)',
+        message:
+          "Complete card details required (number, cvv, expiry_month, expiry_year)",
         example: {
-          number: '5061010000000000043',
-          cvv: '123',
-          expiry_month: '12',
-          expiry_year: '25',
-          pin: '1234' // Optional, for Nigerian cards
+          number: "5061010000000000043",
+          cvv: "123",
+          expiry_month: "12",
+          expiry_year: "25",
+          pin: "1234", // Optional, for Nigerian cards
         },
       });
     }
@@ -497,24 +668,25 @@ export const chargeCard = async (req, res) => {
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found. Initialize payment first.',
+        message: "Payment not found. Initialize payment first.",
       });
     }
 
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       return res.status(400).json({
         success: false,
-        message: 'Payment already completed',
+        message: "Payment already completed",
       });
     }
 
     const amount = payment.amount;
 
-    // ✅ Always use real Paystack charge (works in both test and live)
+    // âœ… Always use real charge (works in both test and live)
     try {
-      const chargeResult = await chargeCardViaPaystack({
+      const chargeResult = await gatewayChargeCard({
         email: customer.email,
-        amount: amount, // Function handles kobo conversion
+        amount: amount,
+        currency: "NGN",
         card: {
           number: cardDetails.number,
           cvv: cardDetails.cvv,
@@ -526,14 +698,14 @@ export const chargeCard = async (req, res) => {
           deliveryId: payment.deliveryId.toString(),
           customerId: customer._id.toString(),
           reference: reference,
-          environment: IS_PRODUCTION ? 'production' : 'development',
+          environment: IS_PRODUCTION ? "production" : "development",
         },
       });
 
       if (!chargeResult.success) {
         return res.status(400).json({
           success: false,
-          message: chargeResult.message || 'Card charge failed',
+          message: chargeResult.message || "Card charge failed",
           error: chargeResult.error,
         });
       }
@@ -541,25 +713,27 @@ export const chargeCard = async (req, res) => {
       const chargeData = chargeResult.data;
 
       // Handle OTP requirement
-       
-        if (chargeData.status === 'send_otp') {
-        // ✅ FIX: Use chargeResult.paystackReference, not chargeData.reference.
-        // chargeData is response.data.data — reference may not be in there.
+
+      if (chargeData.status === "send_otp") {
+        // âœ… FIX: Use chargeResult.paystackReference, not chargeData.reference.
+        // chargeData is response.data.data â€” reference may not be in there.
         // We now return it explicitly from chargeCardViaPaystack.
         const paystackRef = chargeResult.paystackReference;
 
-        console.log('🔐 OTP required');
-        console.log('   Internal ref  :', reference);
-        console.log('   Paystack ref  :', paystackRef);
+        console.log("ðŸ” OTP required");
+        console.log("   Internal ref  :", reference);
+        console.log("   Paystack ref  :", paystackRef);
 
         if (!paystackRef) {
           // Safety net: if we still can't get Paystack's reference, log the
           // full chargeResult so you can see what came back
-          console.error('❌ CRITICAL: paystackReference is undefined. Full chargeResult:');
+          console.error(
+            "âŒ CRITICAL: paystackReference is undefined. Full chargeResult:",
+          );
           console.error(JSON.stringify(chargeResult, null, 2));
         }
 
-        payment.status = 'processing';
+        payment.status = "processing";
         payment.metadata = {
           ...payment.metadata,
           requiresOtp: true,
@@ -567,29 +741,31 @@ export const chargeCard = async (req, res) => {
           cardLast4: cardDetails.number.slice(-4),
           chargeReference: paystackRef || reference, // fallback to internal ref
         };
-        payment.markModified('metadata');
+        payment.markModified("metadata");
         await payment.save();
 
         return res.status(200).json({
           success: true,
           requiresOtp: true,
-          message: 'OTP sent to your phone number',
+          message: "OTP sent to your phone number",
           data: {
             paymentId: payment._id,
             reference: reference,
             amount: payment.amount,
-            displayMessage: chargeData.display_text || 'Please enter the OTP sent to your phone',
+            displayMessage:
+              chargeData.display_text ||
+              "Please enter the OTP sent to your phone",
           },
         });
       }
 
       // Handle PIN requirement
-      if (chargeData.status === 'send_pin') {
+      if (chargeData.status === "send_pin") {
         const paystackRef = chargeResult.paystackReference;
 
-        console.log('🔐 PIN required | Paystack ref:', paystackRef);
+        console.log("ðŸ” PIN required | Paystack ref:", paystackRef);
 
-        payment.status = 'processing';
+        payment.status = "processing";
         payment.metadata = {
           ...payment.metadata,
           requiresPin: true,
@@ -597,52 +773,53 @@ export const chargeCard = async (req, res) => {
           cardLast4: cardDetails.number.slice(-4),
           chargeReference: paystackRef || reference,
         };
-        payment.markModified('metadata');
+        payment.markModified("metadata");
         await payment.save();
 
         return res.status(200).json({
           success: true,
           requiresPin: true,
-          message: 'Card requires PIN',
+          message: "Card requires PIN",
           data: {
             paymentId: payment._id,
             reference: reference,
             amount: payment.amount,
-            displayMessage: 'Please enter your card PIN',
+            displayMessage: "Please enter your card PIN",
           },
         });
       }
 
-      // Payment successful immediately (no OTP/PIN needed)
-      if (chargeData.status === 'success') {
-        payment.status = 'successful';
+      if (chargeData.status === "success") {
+        payment.status = "successful";
         payment.paidAt = new Date();
         payment.verifiedAt = new Date();
         payment.webhookData = chargeData;
         payment.metadata = {
           ...payment.metadata,
           cardLast4: cardDetails.number.slice(-4),
-          cardType: chargeData.authorization?.card_type,
-          bank: chargeData.authorization?.bank,
-          escrowStatus: 'held',
+          cardType:
+            chargeData.authorization?.card_type || chargeData.card?.type,
+          bank: chargeData.authorization?.bank || chargeData.card?.issuer,
+          escrowStatus: "held",
           escrowHeldAt: new Date(),
+          flwRef: chargeData.flw_ref,
         };
-        payment.markModified('metadata');
+        payment.markModified("metadata");
         await payment.save();
 
         const delivery = await Delivery.findById(payment.deliveryId);
         if (delivery) {
-          delivery.payment.status = 'paid';
+          delivery.payment.status = "paid";
           delivery.payment.paidAt = new Date();
           await delivery.save();
         }
 
         await sendNotification({
           userId: customer._id,
-          title: '✅ Payment Successful',
-          message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+          title: "âœ… Payment Successful",
+          message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
           data: {
-            type: 'payment_successful',
+            type: "payment_successful",
             deliveryId: payment.deliveryId,
             paymentId: payment._id,
             amount: payment.amount,
@@ -652,7 +829,7 @@ export const chargeCard = async (req, res) => {
         return res.status(200).json({
           success: true,
           requiresOtp: false,
-          message: 'Payment successful!',
+          message: "Payment successful!",
           data: {
             paymentId: payment._id,
             reference: reference,
@@ -662,97 +839,31 @@ export const chargeCard = async (req, res) => {
         });
       }
 
-      return res.status(400).json({
-        success: false,
-        message: `Unexpected payment status: ${chargeData.status}`,
-      });
-
-        
-
-    
-
-      // Payment successful
-      if (chargeData.status === 'success') {
-        payment.status = 'successful';
-        payment.paidAt = new Date();
-        payment.verifiedAt = new Date();
-        payment.webhookData = chargeData;
-        payment.metadata = {
-          ...payment.metadata,
-          cardLast4: cardDetails.number.slice(-4),
-          cardType: chargeData.authorization?.card_type,
-          bank: chargeData.authorization?.bank,
-          escrowStatus: 'held',
-          escrowHeldAt: new Date(),
-        };
-        await payment.save();
-
-        // Update delivery
-        const delivery = await Delivery.findById(payment.deliveryId);
-        if (delivery) {
-          delivery.payment.status = 'paid';
-          delivery.payment.paidAt = new Date();
-          await delivery.save();
-        }
-
-        await sendNotification({
-          userId: customer._id,
-          title: '✅ Payment Successful',
-          message: `Your payment of ₦${amount.toLocaleString()} is confirmed. Finding a driver for you...`,
-          data: {
-            type: 'payment_successful',
-            deliveryId: payment.deliveryId,
-            paymentId: payment._id,
-            amount: amount,
-          },
-        });
-
-        return res.status(200).json({
-          success: true,
-          requiresOtp: false,
-          message: 'Payment successful!',
-          data: {
-            paymentId: payment._id,
-            reference: reference,
-            amount: amount,
-            deliveryId: payment.deliveryId,
-          },
-        });
-      }
-
-      // Unknown status
       return res.status(400).json({
         success: false,
         message: `Unexpected payment status: ${chargeData.status}`,
       });
     } catch (chargeError) {
-      console.error('❌ Paystack charge error:', chargeError);
+      console.error("âŒ Paystack charge error:", chargeError);
       return res.status(500).json({
         success: false,
-        message: 'Failed to process card payment',
+        message: "Failed to process card payment",
         error: IS_PRODUCTION ? undefined : chargeError.message,
       });
     }
   } catch (error) {
-    console.error('❌ Charge card error:', error);
+    console.error("âŒ Charge card error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to process card payment',
+      message: "Failed to process card payment",
       error: IS_PRODUCTION ? undefined : error.message,
     });
   }
 };
 
-
- 
-
 /**
  * Helper: Handle in-app bank transfer (NO CHECKOUT URL)
  */
- 
-
- 
- 
 
 /**
  * @desc    Verify bank transfer manually (for manual transfers)
@@ -767,27 +878,27 @@ export const verifyBankTransferManually = async (req, res) => {
     if (!reference) {
       return res.status(400).json({
         success: false,
-        message: 'Payment reference is required',
+        message: "Payment reference is required",
       });
     }
 
     const payment = await Payment.findOne({
       paystackReference: reference,
       customerId: customer._id,
-      paymentMethod: { $in: ['bank_transfer', 'manual_bank_transfer'] },
+      paymentMethod: { $in: ["bank_transfer", "manual_bank_transfer"] },
     });
 
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Bank transfer payment not found',
+        message: "Bank transfer payment not found",
       });
     }
 
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       return res.status(400).json({
         success: false,
-        message: 'Payment already verified',
+        message: "Payment already verified",
       });
     }
 
@@ -798,7 +909,7 @@ export const verifyBankTransferManually = async (req, res) => {
       verificationRequested: true,
       verificationRequestedAt: new Date(),
     };
-    payment.status = 'processing'; // Changed from pending to processing
+    payment.status = "processing"; // Changed from pending to processing
     await payment.save();
 
     // Notify admin/support for manual verification
@@ -806,26 +917,27 @@ export const verifyBankTransferManually = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Transfer submitted for verification. We will confirm payment within 5-10 minutes.',
+      message:
+        "Transfer submitted for verification. We will confirm payment within 5-10 minutes.",
       data: {
         paymentId: payment._id,
         reference: reference,
-        status: 'processing',
-        estimatedVerificationTime: '5-10 minutes',
+        status: "processing",
+        estimatedVerificationTime: "5-10 minutes",
         nextSteps: [
-          'We are verifying your bank transfer',
-          'You will receive a notification once confirmed',
-          'Estimated time: 5-10 minutes',
-          'Contact support if not confirmed within 30 minutes',
+          "We are verifying your bank transfer",
+          "You will receive a notification once confirmed",
+          "Estimated time: 5-10 minutes",
+          "Contact support if not confirmed within 30 minutes",
         ],
       },
     });
   } catch (error) {
-    console.error('❌ Verify bank transfer error:', error);
+    console.error("âŒ Verify bank transfer error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to submit transfer for verification',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to submit transfer for verification",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -849,66 +961,65 @@ export const initiateBankTransfer = async (req, res) => {
     if (!delivery) {
       return res.status(404).json({
         success: false,
-        message: 'Delivery not found',
+        message: "Delivery not found",
       });
     }
 
     const amount = delivery.fare.totalFare;
-    const platformFee = Math.round((amount * 10) / 100);
+    const platformFee = Math.round((amount * PLATFORM_FEE_PCT) / 100);
     const companyAmount = amount - platformFee;
 
-    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
     let bankDetails = null;
-    let paymentMethod = 'bank_transfer';
+    let paymentMethod = "bank_transfer";
 
     try {
-      // Try Paystack virtual account first
-      const paymentResult = await initializePayment({
+      // Try Flutterwave virtual account
+      const vaResult = await createDedicatedVirtualAccount({
         email: customer.email,
-        amount: amount,
-        reference: reference,
-        callback_url: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/payments/bank-transfer-callback`,
-        channels: ['bank_transfer'],
-        metadata: {
-          deliveryId: delivery._id.toString(),
-          customerId: customer._id.toString(),
-          type: 'bank_transfer_delivery',
-        },
+        metadata: { reference, amount },
       });
 
-      if (paymentResult.success && paymentResult.data.authorization_url) {
+      if (vaResult.success && vaResult.data) {
+        const va = vaResult.data;
         bankDetails = {
-          authorizationUrl: paymentResult.data.authorization_url,
-          accessCode: paymentResult.data.access_code,
-          reference: paymentResult.data.reference,
-          type: 'paystack_virtual',
-          instructions: 'Complete transfer via the authorization URL',
+          bankName: va.bankName,
+          accountNumber: va.accountNumber,
+          accountName: va.accountName,
+          reference: reference,
+          amount: amount,
+          type: "flutterwave_virtual",
+          narration: "Not required",
+          expiresAt: va.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000),
+          instructions: [
+            `Transfer exactly ₦${amount.toLocaleString()}`,
+            "Payment confirmed automatically",
+          ],
         };
-        console.log(`✅ Paystack virtual account created for ${reference}`);
+        paymentMethod = "bank_transfer_dedicated";
+        console.log(`✅ Flutterwave virtual account created for ${reference}`);
       } else {
-        throw new Error('Paystack virtual account not available');
+        throw new Error(vaResult.message || "Virtual account unavailable");
       }
-    } catch (paystackError) {
-      console.warn('⚠️ Paystack virtual account failed, using manual method:', paystackError.message);
-      
-      // Fallback to manual bank transfer
+    } catch (vaError) {
+      console.warn("⚠️ Virtual account failed, using manual method:", vaError.message);
       bankDetails = {
-        bankName: process.env.FALLBACK_BANK_NAME || 'Zenith Bank',
-        accountNumber: process.env.FALLBACK_ACCOUNT_NUMBER || '1012345678',
-        accountName: process.env.FALLBACK_ACCOUNT_NAME || 'RIDERR NIG LTD',
+        bankName: process.env.PLATFORM_BANK_NAME || process.env.FALLBACK_BANK_NAME || "Zenith Bank",
+        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER || process.env.FALLBACK_ACCOUNT_NUMBER || "1012345678",
+        accountName: process.env.PLATFORM_ACCOUNT_NAME || process.env.FALLBACK_ACCOUNT_NAME || "RIDERR NIG LTD",
         reference: reference,
         amount: amount,
-        type: 'manual_transfer',
-        narration: `Riderr Delivery - ${delivery.referenceId}`,
+        type: "manual_transfer",
+        narration: `Riderr-${reference}`,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         instructions: [
           `Transfer exactly ₦${amount.toLocaleString()}`,
           `Use "${reference}" as narration`,
-          `Payment valid for 24 hours`,
+          "Payment valid for 24 hours",
         ],
       };
-      paymentMethod = 'manual_bank_transfer';
+      paymentMethod = "manual_bank_transfer";
     }
 
     // Create payment record
@@ -916,20 +1027,22 @@ export const initiateBankTransfer = async (req, res) => {
       deliveryId: delivery._id,
       customerId: customer._id,
       amount: amount,
-      currency: 'NGN',
+      currency: "NGN",
+      gateway: getGatewayProvider(),
+      gatewayReference: reference,
       paystackReference: reference,
-      status: 'pending',
+      status: "pending",
       paymentMethod: paymentMethod,
       companyAmount: companyAmount,
       platformFee: platformFee,
-      paymentType: 'escrow',
+      paymentType: "escrow",
       paystackAuthorizationUrl: bankDetails.authorizationUrl || null,
       paystackAccessCode: bankDetails.accessCode || null,
       metadata: {
         customerEmail: customer.email,
         customerName: customer.name,
         bankTransferDetails: bankDetails,
-        platform: 'in-app',
+        platform: "in-app",
         pendingSettlement: true,
         transferType: bankDetails.type,
       },
@@ -937,15 +1050,17 @@ export const initiateBankTransfer = async (req, res) => {
 
     await payment.save();
 
-    delivery.payment.status = 'pending_payment';
-    delivery.payment.paystackReference = reference;
+    delivery.payment.status = "pending_payment";
+    delivery.payment.reference = reference;
     await delivery.save();
 
-    console.log(`✅ Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`);
+    console.log(
+      `âœ… Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`,
+    );
 
     res.status(200).json({
       success: true,
-      message: 'Bank transfer details generated successfully',
+      message: "Bank transfer details generated successfully",
       data: {
         paymentId: payment._id,
         reference: reference,
@@ -953,38 +1068,37 @@ export const initiateBankTransfer = async (req, res) => {
         bankDetails: bankDetails,
         transferType: bankDetails.type,
         paymentBreakdown: {
-          totalAmount: `₦${amount.toLocaleString()}`,
-          platformFee: `₦${platformFee.toLocaleString()} (10%)`,
-          companyReceives: `₦${companyAmount.toLocaleString()} (90%)`,
-          escrowStatus: 'Payment held securely until delivery completion',
+          totalAmount: `â‚¦${amount.toLocaleString()}`,
+          platformFee: `â‚¦${platformFee.toLocaleString()} (10%)`,
+          companyReceives: `â‚¦${companyAmount.toLocaleString()} (90%)`,
+          escrowStatus: "Payment held securely until delivery completion",
         },
-        nextSteps: bankDetails.type === 'paystack_virtual' ? [
-          'Click the authorization URL below',
-          'Select your bank',
-          'Complete the transfer',
-          'Payment confirmed automatically',
-        ] : [
-          'Transfer to the bank account below',
-          'Use exact amount and reference',
-          'Keep proof of payment',
-          'Contact support if needed',
+        nextSteps: [
+          "Open your banking app",
+          `Transfer exactly ₦${amount.toLocaleString()} to the account shown`,
+          "Return to this app — payment confirms automatically",
         ],
+        polling: {
+          url: `/api/payments/status/${reference}`,
+          intervalSeconds: 5,
+          timeoutMinutes: 30,
+        },
         support: {
-          email: process.env.SUPPORT_EMAIL || 'support@riderr.com',
-          phone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
-          hours: '9AM - 6PM, Mon - Fri',
+          email: process.env.SUPPORT_EMAIL || "support@riderr.com",
+          phone: process.env.SUPPORT_PHONE || "+234 800 000 0000",
+          hours: "9AM - 6PM, Mon - Fri",
         },
       },
     });
   } catch (error) {
-    console.error('❌ Initiate bank transfer error:', error);
+    console.error("âŒ Initiate bank transfer error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to initiate bank transfer',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to initiate bank transfer",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
-}
+};
 /**
  * @desc    Verify escrow payment (called after customer pays)
  * @route   GET /api/payments/verify/:reference
@@ -998,7 +1112,7 @@ export const verifyDeliveryPayment = async (req, res) => {
   try {
     const { reference } = req.params;
 
-    console.log(`🔍 [STEP 2b] Verifying payment: ${reference}`);
+    console.log(`ðŸ” [STEP 2b] Verifying payment: ${reference}`);
 
     // Verify with Paystack
     const verificationResult = await verifyPayment(reference);
@@ -1006,36 +1120,41 @@ export const verifyDeliveryPayment = async (req, res) => {
     if (!verificationResult.success) {
       await session.abortTransaction();
       session.endSession();
-      console.error(`❌ Paystack verification failed:`, verificationResult.message);
+      console.error(
+        `âŒ Paystack verification failed:`,
+        verificationResult.message,
+      );
       return res.status(400).json({
         success: false,
-        message: 'Payment verification failed',
+        message: "Payment verification failed",
         error: verificationResult.message,
       });
     }
 
-    const paystackData = verificationResult.data;
+    const paymentData = verificationResult.data;
 
     // Find payment record
-    const payment = await Payment.findOne({ paystackReference: reference }).session(session);
+    const payment = await Payment.findOne({
+      paystackReference: reference,
+    }).session(session);
 
     if (!payment) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: 'Payment record not found',
+        message: "Payment record not found",
       });
     }
 
     // Check if already verified
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       await session.abortTransaction();
       session.endSession();
-      console.log(`ℹ️ Payment already verified: ${reference}`);
+      console.log(`â„¹ï¸ Payment already verified: ${reference}`);
       return res.status(200).json({
         success: true,
-        message: 'Payment already verified',
+        message: "Payment already verified",
         data: {
           paymentId: payment._id,
           status: payment.status,
@@ -1046,68 +1165,74 @@ export const verifyDeliveryPayment = async (req, res) => {
       });
     }
 
-    // Check payment status from Paystack
-    if (paystackData.status !== 'success') {
-      payment.status = 'failed';
-      payment.failureReason = paystackData.gateway_response || 'Payment failed';
+    // Check payment status from gateway
+    if (paymentData.status !== "success") {
+      payment.status = "failed";
+      payment.failureReason = paymentData.gateway_response || "Payment failed";
       await payment.save({ session });
 
       await session.commitTransaction();
       session.endSession();
 
-      console.error(`❌ Payment failed - Gateway response: ${paystackData.gateway_response}`);
+      console.error(
+        `âŒ Payment failed - Gateway response: ${paymentData.gateway_response}`,
+      );
       return res.status(400).json({
         success: false,
-        message: 'Payment was not successful',
+        message: "Payment was not successful",
         data: {
-          status: paystackData.status,
-          message: paystackData.gateway_response,
+          status: paymentData.status,
+          message: paymentData.gateway_response,
         },
       });
     }
 
-    // ✅ Payment successful - Update payment record
-    payment.status = 'successful';
+    // âœ… Payment successful - Update payment record
+    payment.status = "successful";
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
     payment.metadata = {
       ...payment.metadata,
-      channel: paystackData.channel,
-      cardType: paystackData.authorization?.card_type,
-      bank: paystackData.authorization?.bank,
-      lastFourDigits: paystackData.authorization?.last4,
-      authorizationCode: paystackData.authorization?.authorization_code,
-      // Funds held in escrow - will be released after delivery completion
-      escrowStatus: 'held',
+      channel: paymentData.channel,
+      cardType: paymentData.authorization?.card_type,
+      bank: paymentData.authorization?.bank,
+      lastFourDigits: paymentData.authorization?.last4,
+      flwRef: paymentData.flw_ref,
+      // Funds held in escrow
+      escrowStatus: "held",
       escrowHeldAt: new Date(),
     };
-    payment.webhookData = paystackData;
+    payment.webhookData = paymentData;
 
     await payment.save({ session });
 
     // Update delivery - Now PAID and ready for driver acceptance
-    const delivery = await Delivery.findById(payment.deliveryId).session(session);
-    
+    const delivery = await Delivery.findById(payment.deliveryId).session(
+      session,
+    );
+
     if (delivery) {
-      delivery.payment.status = 'paid'; // ✅ Payment received and held in escrow
+      delivery.payment.status = "paid"; // âœ… Payment received and held in escrow
       delivery.payment.paidAt = new Date();
-      delivery.payment.paystackReference = reference;
-      delivery.status = 'created'; // Keep as "created" - waiting for driver to accept
+      delivery.payment.reference = reference;
+      delivery.status = "created"; // Keep as "created" - waiting for driver to accept
       await delivery.save({ session });
     }
 
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Payment verified and funds held in escrow - Reference: ${reference}`);
+    console.log(
+      `âœ… Payment verified and funds held in escrow - Reference: ${reference}`,
+    );
 
     // Notify customer
     await sendNotification({
       userId: payment.customerId,
-      title: '✅ Payment Successful',
-      message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      title: "âœ… Payment Successful",
+      message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
       data: {
-        type: 'payment_successful',
+        type: "payment_successful",
         deliveryId: delivery._id,
         paymentId: payment._id,
         amount: payment.amount,
@@ -1116,7 +1241,8 @@ export const verifyDeliveryPayment = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Payment successful! Funds are held securely. Looking for available drivers...',
+      message:
+        "Payment successful! Funds are held securely. Looking for available drivers...",
       data: {
         paymentId: payment._id,
         status: payment.status,
@@ -1124,18 +1250,19 @@ export const verifyDeliveryPayment = async (req, res) => {
         paidAt: payment.paidAt,
         deliveryId: payment.deliveryId,
         reference: payment.paystackReference,
-        escrowMessage: 'Payment held securely. Will be released to company after delivery completion.',
-        nextStep: 'Waiting for driver to accept your delivery request',
+        escrowMessage:
+          "Payment held securely. Will be released to company after delivery completion.",
+        nextStep: "Waiting for driver to accept your delivery request",
       },
     });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error('❌ Verify payment error:', error);
+    console.error("âŒ Verify payment error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify payment',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to verify payment",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -1155,14 +1282,16 @@ export const completeAndSettlePayment = async (req, res) => {
     const { deliveryId } = req.params;
     const { review, verified } = req.body;
 
-    console.log(`📦 [SETTLEMENT] Customer ${customer._id} verifying delivery ${deliveryId}`);
+    console.log(
+      `ðŸ“¦ [SETTLEMENT] Customer ${customer._id} verifying delivery ${deliveryId}`,
+    );
 
     if (!verified) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: 'Please confirm that you received the delivery',
+        message: "Please confirm that you received the delivery",
       });
     }
 
@@ -1171,8 +1300,8 @@ export const completeAndSettlePayment = async (req, res) => {
       _id: deliveryId,
       customerId: customer._id,
     })
-      .populate('driverId')
-      .populate('companyId')
+      .populate("driverId")
+      .populate("companyId")
       .session(session);
 
     if (!delivery) {
@@ -1180,11 +1309,11 @@ export const completeAndSettlePayment = async (req, res) => {
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: 'Delivery not found',
+        message: "Delivery not found",
       });
     }
 
-    if (!['delivered', 'completed'].includes(delivery.status)) {
+    if (!["delivered", "completed"].includes(delivery.status)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1196,7 +1325,7 @@ export const completeAndSettlePayment = async (req, res) => {
     // Find payment
     const payment = await Payment.findOne({
       deliveryId: delivery._id,
-      status: 'successful',
+      status: "successful",
     }).session(session);
 
     if (!payment) {
@@ -1204,7 +1333,7 @@ export const completeAndSettlePayment = async (req, res) => {
       session.endSession();
       return res.status(404).json({
         success: false,
-        message: 'Payment not found or not successful',
+        message: "Payment not found or not successful",
       });
     }
 
@@ -1214,7 +1343,7 @@ export const completeAndSettlePayment = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: 'Payment has already been settled',
+        message: "Payment has already been settled",
         data: {
           settledAt: payment.escrowDetails.settlementDate,
           transferId: payment.escrowDetails.paystackTransferId,
@@ -1228,7 +1357,7 @@ export const completeAndSettlePayment = async (req, res) => {
       customerVerifiedAt: new Date(),
       customerVerified: true,
     };
-    payment.markModified('metadata');
+    payment.markModified("metadata");
 
     // Set company ID if not set
     if (!payment.companyId && delivery.companyId) {
@@ -1238,51 +1367,60 @@ export const completeAndSettlePayment = async (req, res) => {
     await payment.save({ session });
 
     // Update delivery
-    delivery.status = 'completed';
+    delivery.status = "completed";
+    delivery.completedAt = new Date();
     delivery.review = review;
     delivery.ratedAt = new Date();
-    delivery.payment.status = 'completed';
+    delivery.payment.status = "completed";
     await delivery.save({ session });
 
-    // ═══════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // AUTOMATIC SETTLEMENT - This is where money moves!
-    // ═══════════════════════════════════════════════════════════════════
-    console.log('💸 [SETTLEMENT] Initiating automatic transfer to company...');
-    
-    const settlementResult = await settlePaymentToCompany(payment, delivery.companyId);
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    console.log(
+      "ðŸ’¸ [SETTLEMENT] Initiating automatic transfer to company...",
+    );
+
+    const settlementResult = await settlePaymentToCompany(
+      payment,
+      delivery.companyId,
+    );
 
     if (settlementResult.success) {
-      // ✅ Transfer successful - update payment record
+      // âœ… Transfer successful - update payment record
       payment.escrowDetails.settledToCompany = true;
       payment.escrowDetails.settlementDate = new Date();
       payment.escrowDetails.paystackTransferId = settlementResult.transferId;
-      
+
       payment.metadata = {
         ...payment.metadata,
         settlementStatus: settlementResult.status, // 'success', 'pending', 'failed'
         settlementReference: settlementResult.transferReference,
         settledAt: settlementResult.settledAt,
       };
-      payment.markModified('metadata');
-      
+      payment.markModified("metadata");
+
       // Add to audit log
       payment.auditLog.push({
-        action: 'settled_to_company',
+        action: "settled_to_company",
         timestamp: new Date(),
-        details: { 
+        details: {
           transferId: settlementResult.transferId,
           amount: payment.companyAmount,
           status: settlementResult.status,
         },
       });
-      
+
       await payment.save({ session });
 
       // Update company stats
       if (delivery.companyId) {
-        const company = await Company.findById(delivery.companyId._id).session(session);
+        const company = await Company.findById(delivery.companyId._id).session(
+          session,
+        );
         if (company) {
-          company.totalEarnings = (company.totalEarnings || 0) + payment.companyAmount;
+          company.totalEarnings =
+            (company.totalEarnings || 0) + payment.companyAmount;
           company.totalDeliveries = (company.totalDeliveries || 0) + 1;
           company.lastPaymentReceived = new Date();
           await company.save({ session });
@@ -1291,7 +1429,9 @@ export const completeAndSettlePayment = async (req, res) => {
 
       // Update driver stats
       if (delivery.driverId) {
-        const driver = await Driver.findById(delivery.driverId._id).session(session);
+        const driver = await Driver.findById(delivery.driverId._id).session(
+          session,
+        );
         if (driver) {
           driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
           driver.lastDeliveryDate = new Date();
@@ -1302,20 +1442,23 @@ export const completeAndSettlePayment = async (req, res) => {
       await session.commitTransaction();
       session.endSession();
 
-      console.log(`✅ [SETTLEMENT COMPLETE] Transfer successful!`);
+      console.log(`âœ… [SETTLEMENT COMPLETE] Transfer successful!`);
       console.log(`   Transfer ID: ${settlementResult.transferId}`);
-      console.log(`   Amount: ₦${payment.companyAmount.toLocaleString()}`);
+      console.log(`   Amount: â‚¦${payment.companyAmount.toLocaleString()}`);
       console.log(`   Status: ${settlementResult.status}`);
 
       // Notify company
       try {
         if (delivery.companyId) {
           await sendNotification({
-            userId: delivery.companyId.userId || delivery.companyId.ownerId || delivery.companyId.owner,
-            title: '💰 Payment Received',
-            message: `₦${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
+            userId:
+              delivery.companyId.userId ||
+              delivery.companyId.ownerId ||
+              delivery.companyId.owner,
+            title: "ðŸ’° Payment Received",
+            message: `â‚¦${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
             data: {
-              type: 'payment_settled',
+              type: "payment_settled",
               deliveryId: delivery._id,
               paymentId: payment._id,
               amount: payment.companyAmount,
@@ -1324,41 +1467,49 @@ export const completeAndSettlePayment = async (req, res) => {
           });
         }
       } catch (notificationError) {
-        console.error('⚠️ Notification error (non-critical):', notificationError);
+        console.error(
+          "âš ï¸ Notification error (non-critical):",
+          notificationError,
+        );
       }
 
       // Notify driver
       try {
         if (delivery.driverId) {
-          const driver = await Driver.findById(delivery.driverId._id).populate('userId');
+          const driver = await Driver.findById(delivery.driverId._id).populate(
+            "userId",
+          );
           if (driver && driver.userId) {
             await sendNotification({
               userId: driver.userId._id,
-              title: '✅ Delivery Completed & Payment Settled',
+              title: "âœ… Delivery Completed & Payment Settled",
               message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
               data: {
-                type: 'delivery_completed',
+                type: "delivery_completed",
                 deliveryId: delivery._id,
               },
             });
           }
         }
       } catch (notificationError) {
-        console.error('⚠️ Notification error (non-critical):', notificationError);
+        console.error(
+          "âš ï¸ Notification error (non-critical):",
+          notificationError,
+        );
       }
 
       return res.status(200).json({
         success: true,
-        message: 'Delivery verified and payment settled successfully!',
+        message: "Delivery verified and payment settled successfully!",
         data: {
           deliveryId: delivery._id,
           paymentId: payment._id,
-          status: 'completed',
+          status: "completed",
           review: review,
           settlement: {
             success: true,
-            companyReceived: `₦${payment.companyAmount.toLocaleString()}`,
-            platformFee: `₦${payment.platformFee.toLocaleString()}`,
+            companyReceived: `â‚¦${payment.companyAmount.toLocaleString()}`,
+            platformFee: `â‚¦${payment.platformFee.toLocaleString()}`,
             settledAt: payment.escrowDetails.settlementDate,
             transferId: settlementResult.transferId,
             transferStatus: settlementResult.status,
@@ -1366,14 +1517,13 @@ export const completeAndSettlePayment = async (req, res) => {
           },
         },
       });
-
     } else {
-      // ❌ Transfer failed - rollback and notify
+      // âŒ Transfer failed - rollback and notify
       await session.abortTransaction();
       session.endSession();
 
-      console.error('❌ [SETTLEMENT FAILED]', settlementResult.error);
-      
+      console.error("âŒ [SETTLEMENT FAILED]", settlementResult.error);
+
       // Update payment with failure info (don't mark as settled)
       payment.metadata = {
         ...payment.metadata,
@@ -1382,142 +1532,189 @@ export const completeAndSettlePayment = async (req, res) => {
         settlementError: settlementResult.error,
         requiresManualSettlement: true,
       };
-      payment.markModified('metadata');
-      
+      payment.markModified("metadata");
+
       payment.auditLog.push({
-        action: 'settlement_failed',
+        action: "settlement_failed",
         timestamp: new Date(),
-        details: { 
+        details: {
           error: settlementResult.error,
           amount: payment.companyAmount,
         },
       });
-      
+
       await payment.save();
 
       return res.status(500).json({
         success: false,
-        message: 'Delivery verified but automatic settlement failed',
+        message: "Delivery verified but automatic settlement failed",
         error: settlementResult.error,
         data: {
           deliveryId: delivery._id,
           paymentId: payment._id,
-          deliveryStatus: 'completed',
+          deliveryStatus: "completed",
           review: review,
           settlement: {
             success: false,
             error: settlementResult.error,
             companyAmount: payment.companyAmount,
-            requiresAction: 'Contact support to complete manual settlement',
+            requiresAction: "Contact support to complete manual settlement",
           },
         },
       });
     }
-
   } catch (error) {
     if (session.inTransaction()) {
       await session.abortTransaction();
     }
     session.endSession();
-    
-    console.error('❌ Complete and settle payment error:', error);
+
+    console.error("âŒ Complete and settle payment error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to complete delivery and settle payment',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to complete delivery and settle payment",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
-
 async function settlePaymentToCompany(payment, company) {
   try {
-    console.log(`💸 [SETTLEMENT] Starting settlement for payment ${payment._id}`);
-    console.log(`   Amount: ₦${payment.companyAmount.toLocaleString()}`);
+    console.log(
+      `ðŸ’¸ [SETTLEMENT] Starting settlement for payment ${payment._id}`,
+    );
+    console.log(`   Amount: â‚¦${payment.companyAmount.toLocaleString()}`);
     console.log(`   Company: ${company.name}`);
 
-
-    // ═══════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // STEP 1: Validate company has account number (that's all we need!)
-    // ═══════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     if (!company.bankAccount?.accountNumber) {
-      console.error('❌ Company account number not configured');
+      console.error("âŒ Company account number not configured");
       return {
         success: false,
-        error: 'Company account number not configured',
-        requiresAction: 'company_add_account_number',
+        error: "Company account number not configured",
+        requiresAction: "company_add_account_number",
       };
     }
 
     if (!company.bankAccount?.accountName) {
-      console.error('❌ Company account name not configured');
+      console.error("âŒ Company account name not configured");
       return {
         success: false,
-        error: 'Company account name not configured',
-        requiresAction: 'company_add_account_name',
+        error: "Company account name not configured",
+        requiresAction: "company_add_account_name",
       };
     }
 
+    if (!company.bankAccount?.bankCode) {
+      return {
+        success: false,
+        error:
+          "Company bank code not configured. Company must update bank details with their bank code.",
+        requiresAction: "company_add_bank_code",
+      };
+    }
 
-if (!company.bankAccount?.bankCode) {
-  return {
-    success: false,
-    error: 'Company bank code not configured. Company must update bank details with their bank code.',
-    requiresAction: 'company_add_bank_code',
-  };
-}
-
-    console.log(`✅ Account found: ${company.bankAccount.accountNumber}`);
+    console.log(`âœ… Account found: ${company.bankAccount.accountNumber}`);
     console.log(`   Name: ${company.bankAccount.accountName}`);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 2: Create recipient (Paystack auto-detects bank from account)
-    // ═══════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // STEP 2 & 3: Create recipient (Paystack) or transfer directly (Flutterwave)
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    const transferReference = `SETTLE-${payment.paystackReference}`;
+    const provider = getGatewayProvider();
+
+    if (provider === "flutterwave") {
+      // Flutterwave: transfer directly using account details (no recipient code)
+      console.log(
+        `ðŸ’° Initiating Flutterwave transfer of â‚¦${payment.companyAmount.toLocaleString()}...`,
+      );
+
+      const transferResult = await initiateTransfer({
+        accountBank: company.bankAccount.bankCode,
+        accountNumber: company.bankAccount.accountNumber,
+        amount: payment.companyAmount,
+        beneficiaryName: company.bankAccount.accountName,
+        reference: transferReference,
+        reason: `Settlement for delivery ${payment.deliveryId}`,
+      });
+
+      if (!transferResult.success) {
+        console.error(
+          "âŒ Flutterwave transfer failed:",
+          transferResult.message,
+        );
+        return {
+          success: false,
+          error: transferResult.message,
+          flutterwaveError: transferResult.error,
+        };
+      }
+
+      console.log(`âœ… Flutterwave transfer successful!`);
+      return {
+        success: true,
+        transferId: transferResult.data.transferCode,
+        transferReference: transferResult.data.reference,
+        amount: payment.companyAmount,
+        settledAt: new Date(),
+        status: transferResult.data.status,
+      };
+    }
+
+    // Paystack: create recipient then transfer
     if (!company.paystackRecipientCode) {
-      console.log('📝 Creating Paystack recipient (bank auto-detected)...');
-      
+      console.log("ðŸ“ Creating Paystack recipient (bank auto-detected)...");
+
       const recipientResult = await createTransferRecipient({
         accountName: company.bankAccount.accountName,
         accountNumber: company.bankAccount.accountNumber,
         bankCode: company.bankAccount.bankCode,
         companyId: company._id.toString(),
-       });
+      });
 
       if (!recipientResult.success) {
-        console.error('❌ Failed to create recipient:', recipientResult.message);
-        console.error('❌ Transfer failed:', transferResult.message);
-  console.error('❌ Full transfer error:', JSON.stringify(transferResult.error, null, 2));
+        console.error(
+          "âŒ Failed to create recipient:",
+          recipientResult.message,
+        );
         return {
           success: false,
           error: recipientResult.message,
           paystackError: recipientResult.error,
-          
         };
       }
 
       // Save recipient code AND the bank info Paystack detected
       company.paystackRecipientCode = recipientResult.data.recipientCode;
-      
+
       // Update bank details with what Paystack detected
       company.bankAccount.bankName = recipientResult.data.bankName;
       company.bankAccount.bankCode = recipientResult.data.bankCode;
       company.bankAccount.verified = true;
       company.bankAccount.verifiedAt = new Date();
-      
+
       await company.save();
-      
-      console.log(`✅ Recipient created: ${recipientResult.data.recipientCode}`);
-      console.log(`   Bank detected by Paystack: ${recipientResult.data.bankName}`);
+
+      console.log(
+        `âœ… Recipient created: ${recipientResult.data.recipientCode}`,
+      );
+      console.log(
+        `   Bank detected by Paystack: ${recipientResult.data.bankName}`,
+      );
     } else {
-      console.log(`✅ Using existing recipient: ${company.paystackRecipientCode}`);
+      console.log(
+        `âœ… Using existing recipient: ${company.paystackRecipientCode}`,
+      );
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 3: Initiate transfer
-    // ═══════════════════════════════════════════════════════════════════
-    const transferReference = `SETTLE-${payment.paystackReference}`;
-    
-    console.log(`💰 Initiating transfer of ₦${payment.companyAmount.toLocaleString()}...`);
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // STEP 3: Initiate Paystack transfer
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    console.log(
+      `ðŸ’° Initiating Paystack transfer of â‚¦${payment.companyAmount.toLocaleString()}...`,
+    );
 
     const transferResult = await initiateTransfer({
       amount: payment.companyAmount,
@@ -1527,15 +1724,15 @@ if (!company.bankAccount?.bankCode) {
     });
 
     if (!transferResult.success) {
-      console.error('❌ Transfer failed:', transferResult.message);
-      
+      console.error("âŒ Transfer failed:", transferResult.message);
+
       // If "Recipient not found", clear recipient code so it recreates next time
-      if (transferResult.message?.includes('Recipient not found')) {
-        console.log('🔄 Clearing invalid recipient code...');
+      if (transferResult.message?.includes("Recipient not found")) {
+        console.log("ðŸ”„ Clearing invalid recipient code...");
         company.paystackRecipientCode = null;
         await company.save();
       }
-      
+
       return {
         success: false,
         error: transferResult.message,
@@ -1543,10 +1740,10 @@ if (!company.bankAccount?.bankCode) {
       };
     }
 
-    console.log(`✅ Transfer successful!`);
+    console.log(`âœ… Transfer successful!`);
     console.log(`   Transfer Code: ${transferResult.data.transferCode}`);
     console.log(`   Status: ${transferResult.data.status}`);
-    
+
     return {
       success: true,
       transferId: transferResult.data.transferCode,
@@ -1555,18 +1752,14 @@ if (!company.bankAccount?.bankCode) {
       settledAt: new Date(),
       status: transferResult.data.status,
     };
-
   } catch (error) {
-    console.error('❌ Settlement error:', error);
+    console.error("âŒ Settlement error:", error);
     return {
       success: false,
       error: error.message,
     };
   }
 }
-
-
-
 
 /**
  * @desc    Mobile payment callback handler
@@ -1595,8 +1788,10 @@ export const mobilePaymentCallback = async (req, res) => {
       `);
     }
 
-    const payment = await Payment.findOne({ paystackReference: paymentReference });
-    
+    const payment = await Payment.findOne({
+      paystackReference: paymentReference,
+    });
+
     if (!payment) {
       return res.status(400).send(`
         <!DOCTYPE html>
@@ -1614,7 +1809,7 @@ export const mobilePaymentCallback = async (req, res) => {
       `);
     }
 
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       return res.send(`
         <!DOCTYPE html>
         <html>
@@ -1649,10 +1844,10 @@ export const mobilePaymentCallback = async (req, res) => {
           </style>
         </head>
         <body>
-          <div class="success-icon">✅</div>
+          <div class="success-icon">âœ…</div>
           <h1>Payment Successful!</h1>
           <p>Your payment has been received and held securely until delivery completion.</p>
-          <div class="amount">₦${payment.amount.toLocaleString()}</div>
+          <div class="amount">â‚¦${payment.amount.toLocaleString()}</div>
           <p>Finding a driver for you...</p>
           <div class="button" onclick="redirectToApp()">Return to App</div>
           
@@ -1668,7 +1863,7 @@ export const mobilePaymentCallback = async (req, res) => {
         </body>
         </html>
       `);
-    } else if (payment.status === 'pending') {
+    } else if (payment.status === "pending") {
       return res.send(`
         <!DOCTYPE html>
         <html>
@@ -1730,9 +1925,9 @@ export const mobilePaymentCallback = async (req, res) => {
           </style>
         </head>
         <body>
-          <div class="error-icon">❌</div>
+          <div class="error-icon">âŒ</div>
           <h1>Payment Failed</h1>
-          <p>${payment.failureReason || 'Payment could not be processed'}</p>
+          <p>${payment.failureReason || "Payment could not be processed"}</p>
           <button onclick="window.location.href = 'riderrapp://payment/retry/${paymentReference}'">
             Try Again
           </button>
@@ -1744,7 +1939,7 @@ export const mobilePaymentCallback = async (req, res) => {
       `);
     }
   } catch (error) {
-    console.error('Mobile callback error:', error);
+    console.error("Mobile callback error:", error);
     res.status(500).send(`
       <!DOCTYPE html>
       <html>
@@ -1770,17 +1965,18 @@ export const mobilePaymentCallback = async (req, res) => {
 export const checkPaymentStatus = async (req, res) => {
   try {
     const { reference } = req.params;
-    
-    const payment = await Payment.findOne({ paystackReference: reference })
-      .select('status amount paidAt failureReason deliveryId metadata');
-    
+
+    const payment = await Payment.findOne({
+      paystackReference: reference,
+    }).select("status amount paidAt failureReason deliveryId metadata");
+
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: "Payment not found",
       });
     }
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -1790,14 +1986,14 @@ export const checkPaymentStatus = async (req, res) => {
         failureReason: payment.failureReason,
         deliveryId: payment.deliveryId,
         reference: reference,
-        escrowStatus: payment.metadata?.escrowStatus || 'pending',
+        escrowStatus: payment.metadata?.escrowStatus || "pending",
       },
     });
   } catch (error) {
-    console.error('Check payment status error:', error);
+    console.error("Check payment status error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to check payment status',
+      message: "Failed to check payment status",
     });
   }
 };
@@ -1807,59 +2003,65 @@ export const checkPaymentStatus = async (req, res) => {
  * @route   POST /api/payments/webhook
  * @access  Public (Paystack)
  */
- export const handlePaystackWebhook = async (req, res) => {
+export const handlePaystackWebhook = async (req, res) => {
   try {
-    const hash = crypto
-      .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
-      .update(JSON.stringify(req.body))
-      .digest('hex');
+    const event = req.body;
+    const signature = req.headers["verif-hash"];
 
-    if (hash !== req.headers['x-paystack-signature']) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid signature',
-      });
+    if (!verifyWebhookSignature(event, signature)) {
+      console.warn("âš ï¸ Invalid Flutterwave webhook signature");
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid signature" });
     }
 
-    const event = req.body;
-    console.log('📨 Paystack webhook:', event.event);
+    const status = (event.data?.status || "").toLowerCase();
+    const txRef = event.data?.tx_ref;
+    const flwRef = event.data?.flw_ref;
+    const eventType = event.event;
 
-    if (event.event === 'charge.success') {
-      const reference = event.data.reference;
-      const payment = await Payment.findOne({ paystackReference: reference });
+    console.log(
+      `ðŸ“¨ Flutterwave webhook: event=${eventType} tx_ref=${txRef} status=${status}`,
+    );
 
-      if (payment && payment.status === 'pending') {
-        payment.status = 'successful';
+    // â”€â”€ Charge success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (eventType === "charge.completed" && status === "successful") {
+      const payment =
+        (await Payment.findOne({ gatewayReference: txRef })) ||
+        (await Payment.findOne({ paystackReference: txRef }));
+
+      if (payment && payment.status !== "successful") {
+        payment.status = "successful";
         payment.paidAt = new Date();
         payment.verifiedAt = new Date();
         payment.webhookData = event.data;
         payment.metadata = {
           ...payment.metadata,
-          escrowStatus: 'held',
+          escrowStatus: "held",
           escrowHeldAt: new Date(),
+          flwRef,
         };
-        payment.markModified('metadata');
-        
+        payment.markModified("metadata");
         await payment.save();
 
-        // Update delivery
         const delivery = await Delivery.findById(payment.deliveryId);
         if (delivery) {
-          delivery.payment.status = 'paid';
+          delivery.payment.status = "paid";
           delivery.payment.paidAt = new Date();
-          delivery.waitingForPayment = false; // ✅ Clear waiting flag
+          delivery.waitingForPayment = false;
           await delivery.save();
-          
-          // ✅ NEW: Notify driver that payment is complete
+
           if (delivery.driverId) {
-            const driver = await Driver.findById(delivery.driverId).populate('userId');
-            if (driver && driver.userId) {
+            const driver = await Driver.findById(delivery.driverId).populate(
+              "userId",
+            );
+            if (driver?.userId) {
               await sendNotification({
                 userId: driver.userId._id,
-                title: '✅ Payment Confirmed!',
+                title: "âœ… Payment Confirmed!",
                 message: `Customer completed payment for delivery #${delivery.referenceId}. You can now start the delivery!`,
                 data: {
-                  type: 'payment_confirmed',
+                  type: "payment_confirmed",
                   deliveryId: delivery._id,
                   paymentId: payment._id,
                   amount: payment.amount,
@@ -1870,20 +2072,34 @@ export const checkPaymentStatus = async (req, res) => {
           }
         }
 
-        console.log('✅ Payment updated via webhook:', reference);
+        console.log("âœ… Payment updated via webhook:", txRef);
       }
     }
 
-    res.status(200).json({ success: true });
+    // â”€â”€ Transfer success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (eventType === "transfer.completed" && status === "successful") {
+      const transferRef = event.data?.reference;
+      const payment = await Payment.findOne({
+        "metadata.settlementReference": transferRef,
+      });
+      if (payment) {
+        payment.escrowDetails.settledToCompany = true;
+        payment.escrowDetails.settlementDate = new Date();
+        payment.escrowDetails.paystackTransferId = String(event.data?.id);
+        payment.markModified("escrowDetails");
+        await payment.save();
+        console.log("âœ… Transfer confirmed via webhook:", transferRef);
+      }
+    }
+
+    return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('❌ Webhook error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Webhook processing failed',
-    });
+    console.error("âŒ Webhook error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Webhook processing failed" });
   }
 };
-
 
 /**
  * @desc    Get payment details
@@ -1900,62 +2116,72 @@ export const getPaymentDetails = async (req, res) => {
     const { paymentId } = req.params;
     const user = req.user;
 
-    // ✅ ADD VALIDATION: Check if it's a valid ObjectId
+    // âœ… ADD VALIDATION: Check if it's a valid ObjectId
     // If it's "company-payments", it's not a payment ID
-    if (paymentId === 'company-payments' || paymentId === 'my-payments' || paymentId === 'initialize' || 
-        paymentId === 'verify' || paymentId === 'complete-and-settle' || paymentId === 'mobile-callback' ||
-        paymentId === 'status' || paymentId === 'webhook') {
+    if (
+      paymentId === "company-payments" ||
+      paymentId === "my-payments" ||
+      paymentId === "initialize" ||
+      paymentId === "verify" ||
+      paymentId === "complete-and-settle" ||
+      paymentId === "mobile-callback" ||
+      paymentId === "status" ||
+      paymentId === "webhook"
+    ) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
-        hint: 'This appears to be a route, not a payment ID. Check your URL.',
+        message: "Payment not found",
+        hint: "This appears to be a route, not a payment ID. Check your URL.",
       });
     }
 
-    // ✅ Check if it's a valid MongoDB ObjectId
+    // âœ… Check if it's a valid MongoDB ObjectId
     if (!mongoose.Types.ObjectId.isValid(paymentId)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid payment ID format',
+        message: "Invalid payment ID format",
         data: {
           providedId: paymentId,
-          exampleId: '507f1f77bcf86cd799439011',
+          exampleId: "507f1f77bcf86cd799439011",
           validRoutes: [
-            '/api/payments/company-payments',
-            '/api/payments/my-payments',
-            '/api/payments/initialize',
-            '/api/payments/verify/:reference',
+            "/api/payments/company-payments",
+            "/api/payments/my-payments",
+            "/api/payments/initialize",
+            "/api/payments/verify/:reference",
           ],
         },
       });
     }
 
     const payment = await Payment.findById(paymentId)
-      .populate('customerId', 'name email phone')
-      .populate('deliveryId')
+      .populate("customerId", "name email phone")
+      .populate("deliveryId")
       .populate({
-        path: 'driverId',
-        populate: { path: 'userId', select: 'name phone' },
+        path: "driverId",
+        populate: { path: "userId", select: "name phone" },
       })
-      .populate('companyId', 'name email');
+      .populate("companyId", "name email");
 
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: "Payment not found",
       });
     }
 
-    const isCustomer = user._id.toString() === payment.customerId._id.toString();
-    const isDriver = user.role === 'driver';
-    const isCompanyOwner = user.role === 'company' && payment.companyId && 
-                           payment.companyId.ownerId?.toString() === user._id.toString();
-    const isAdmin = user.role === 'admin';
+    const isCustomer =
+      user._id.toString() === payment.customerId._id.toString();
+    const isDriver = user.role === "driver";
+    const isCompanyOwner =
+      user.role === "company" &&
+      payment.companyId &&
+      payment.companyId.ownerId?.toString() === user._id.toString();
+    const isAdmin = user.role === "admin";
 
     if (!isCustomer && !isDriver && !isCompanyOwner && !isAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied',
+        message: "Access denied",
       });
     }
 
@@ -1967,43 +2193,45 @@ export const getPaymentDetails = async (req, res) => {
           totalAmount: payment.amount,
           companyReceives: payment.companyAmount,
           platformFee: payment.platformFee,
-          percentage: { company: '90%', platform: '10%' },
+          percentage: { company: "90%", platform: "10%" },
         },
         escrowInfo: {
-          status: payment.metadata?.escrowStatus || 'pending',
+          status: payment.metadata?.escrowStatus || "pending",
           heldAt: payment.metadata?.escrowHeldAt,
           settledAt: payment.metadata?.settledAt,
-          message: payment.metadata?.escrowStatus === 'settled'
-            ? 'Payment has been released to company'
-            : 'Payment is held securely in escrow',
+          message:
+            payment.metadata?.escrowStatus === "settled"
+              ? "Payment has been released to company"
+              : "Payment is held securely in escrow",
         },
       },
     });
   } catch (error) {
-    console.error('❌ Get payment details error:', error);
-    
+    console.error("âŒ Get payment details error:", error);
+
     // Handle CastError specifically
-    if (error.name === 'CastError' && error.kind === 'ObjectId') {
+    if (error.name === "CastError" && error.kind === "ObjectId") {
       return res.status(400).json({
         success: false,
-        message: 'Invalid payment ID format',
+        message: "Invalid payment ID format",
         data: {
           error: error.message,
           value: error.value,
-          suggestion: 'Payment ID must be a 24-character hex string like: 507f1f77bcf86cd799439011',
+          suggestion:
+            "Payment ID must be a 24-character hex string like: 507f1f77bcf86cd799439011",
           validRoutes: [
-            '/api/payments/company-payments',
-            '/api/payments/my-payments',
-            '/api/payments/initialize',
+            "/api/payments/company-payments",
+            "/api/payments/my-payments",
+            "/api/payments/initialize",
           ],
         },
       });
     }
-    
+
     res.status(500).json({
       success: false,
-      message: 'Failed to get payment details',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to get payment details",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -2019,7 +2247,7 @@ export const getMyPayments = async (req, res) => {
     const { page = 1, limit = 10, status } = req.query;
 
     const query = { customerId: customer._id };
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       query.status = status;
     }
 
@@ -2027,8 +2255,8 @@ export const getMyPayments = async (req, res) => {
 
     const [payments, total] = await Promise.all([
       Payment.find(query)
-        .populate('deliveryId', 'pickup dropoff status referenceId')
-        .populate('companyId', 'name')
+        .populate("deliveryId", "pickup dropoff status referenceId")
+        .populate("companyId", "name")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
@@ -2046,15 +2274,15 @@ export const getMyPayments = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('❌ Get my payments error:', error);
+    console.error("âŒ Get my payments error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get payments',
+      message: "Failed to get payments",
     });
   }
 };
 
- /**
+/**
  * @desc    Get company payments and settlement history
  * @route   GET /api/payments/company-payments
  * @access  Private (Company)
@@ -2062,7 +2290,7 @@ export const getMyPayments = async (req, res) => {
 export const getCompanyPayments = async (req, res) => {
   try {
     const company = await Company.findById(req.user.companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -2080,20 +2308,23 @@ export const getCompanyPayments = async (req, res) => {
     } = req.query;
 
     const query = { companyId: company._id };
-    
+
     if (status && status !== "all") {
       query.status = status;
     }
-    
-    // ✅ Update to use escrowDetails
+
+    // âœ… Update to use escrowDetails
     if (settlementStatus) {
-      if (settlementStatus === 'settled') {
-        query['escrowDetails.settledToCompany'] = true;
-      } else if (settlementStatus === 'pending' || settlementStatus === 'held') {
-        query['escrowDetails.settledToCompany'] = false;
+      if (settlementStatus === "settled") {
+        query["escrowDetails.settledToCompany"] = true;
+      } else if (
+        settlementStatus === "pending" ||
+        settlementStatus === "held"
+      ) {
+        query["escrowDetails.settledToCompany"] = false;
       }
     }
-    
+
     if (startDate && endDate) {
       query.paidAt = {
         $gte: new Date(startDate),
@@ -2108,7 +2339,8 @@ export const getCompanyPayments = async (req, res) => {
         .populate("customerId", "name email phone avatarUrl")
         .populate({
           path: "deliveryId",
-          select: "pickup dropoff status referenceId createdAt completedAt review ratedAt",
+          select:
+            "pickup dropoff status referenceId createdAt completedAt review ratedAt",
           populate: {
             path: "driverId",
             select: "userId vehicleType plateNumber vehicleMake vehicleModel",
@@ -2125,9 +2357,9 @@ export const getCompanyPayments = async (req, res) => {
       Payment.countDocuments(query),
     ]);
 
-    // ✅ Update aggregation to use escrowDetails
+    // âœ… Update aggregation to use escrowDetails
     const summary = await Payment.aggregate([
-      { $match: { companyId: company._id, status: 'successful' } },
+      { $match: { companyId: company._id, status: "successful" } },
       {
         $group: {
           _id: null,
@@ -2136,98 +2368,102 @@ export const getCompanyPayments = async (req, res) => {
           totalTransactions: { $sum: 1 },
           pendingSettlements: {
             $sum: {
-              $cond: [
-                { $ne: ["$escrowDetails.settledToCompany", true] }, 
-                1, 
-                0
-              ]
-            }
+              $cond: [{ $ne: ["$escrowDetails.settledToCompany", true] }, 1, 0],
+            },
           },
           settledAmount: {
             $sum: {
               $cond: [
-                { $eq: ["$escrowDetails.settledToCompany", true] }, 
-                "$companyAmount", 
-                0
-              ]
-            }
+                { $eq: ["$escrowDetails.settledToCompany", true] },
+                "$companyAmount",
+                0,
+              ],
+            },
           },
           pendingAmount: {
             $sum: {
               $cond: [
-                { $ne: ["$escrowDetails.settledToCompany", true] }, 
-                "$companyAmount", 
-                0
-              ]
-            }
+                { $ne: ["$escrowDetails.settledToCompany", true] },
+                "$companyAmount",
+                0,
+              ],
+            },
           },
-        }
-      }
+        },
+      },
     ]);
 
-    // ✅ Update recent settlements query
+    // âœ… Update recent settlements query
     const recentSettlements = await Payment.find({
       companyId: company._id,
-      status: 'successful',
-      'escrowDetails.settledToCompany': true
+      status: "successful",
+      "escrowDetails.settledToCompany": true,
     })
-      .sort({ 'escrowDetails.settlementDate': -1 })
+      .sort({ "escrowDetails.settlementDate": -1 })
       .limit(5)
-      .select('amount companyAmount platformFee escrowDetails paystackReference deliveryId paidAt')
-      .populate('deliveryId', 'referenceId')
+      .select(
+        "amount companyAmount platformFee escrowDetails paystackReference deliveryId paidAt",
+      )
+      .populate("deliveryId", "referenceId")
       .lean();
 
-    // ✅ Update formatting to use escrowDetails
-    const formattedPayments = payments.map(payment => {
+    // âœ… Update formatting to use escrowDetails
+    const formattedPayments = payments.map((payment) => {
       const settled = payment.escrowDetails?.settledToCompany || false;
-      const escrowStatus = settled ? 'settled' : 'pending';
+      const escrowStatus = settled ? "settled" : "pending";
       const settledAt = payment.escrowDetails?.settlementDate || null;
       const transferId = payment.escrowDetails?.paystackTransferId || null;
-      
+
       return {
         _id: payment._id,
-        delivery: payment.deliveryId ? {
-          _id: payment.deliveryId._id,
-          referenceId: payment.deliveryId.referenceId,
-          status: payment.deliveryId.status,
-          pickup: payment.deliveryId.pickup?.address,
-          dropoff: payment.deliveryId.dropoff?.address,
-          review: payment.deliveryId.review,
-          ratedAt: payment.deliveryId.ratedAt,
-          driver: payment.deliveryId.driverId?.userId ? {
-            name: payment.deliveryId.driverId.userId.name,
-            phone: payment.deliveryId.driverId.userId.phone,
-            avatarUrl: payment.deliveryId.driverId.userId.avatarUrl,
-            vehicleType: payment.deliveryId.driverId.vehicleType,
-            vehicleMake: payment.deliveryId.driverId.vehicleMake,
-            vehicleModel: payment.deliveryId.driverId.vehicleModel,
-            plateNumber: payment.deliveryId.driverId.plateNumber,
-          } : null,
-        } : null,
-        customer: payment.customerId ? {
-          name: payment.customerId.name,
-          email: payment.customerId.email,
-          phone: payment.customerId.phone,
-          avatarUrl: payment.customerId.avatarUrl,
-        } : null,
+        delivery: payment.deliveryId
+          ? {
+              _id: payment.deliveryId._id,
+              referenceId: payment.deliveryId.referenceId,
+              status: payment.deliveryId.status,
+              pickup: payment.deliveryId.pickup?.address,
+              dropoff: payment.deliveryId.dropoff?.address,
+              review: payment.deliveryId.review,
+              ratedAt: payment.deliveryId.ratedAt,
+              driver: payment.deliveryId.driverId?.userId
+                ? {
+                    name: payment.deliveryId.driverId.userId.name,
+                    phone: payment.deliveryId.driverId.userId.phone,
+                    avatarUrl: payment.deliveryId.driverId.userId.avatarUrl,
+                    vehicleType: payment.deliveryId.driverId.vehicleType,
+                    vehicleMake: payment.deliveryId.driverId.vehicleMake,
+                    vehicleModel: payment.deliveryId.driverId.vehicleModel,
+                    plateNumber: payment.deliveryId.driverId.plateNumber,
+                  }
+                : null,
+            }
+          : null,
+        customer: payment.customerId
+          ? {
+              name: payment.customerId.name,
+              email: payment.customerId.email,
+              phone: payment.customerId.phone,
+              avatarUrl: payment.customerId.avatarUrl,
+            }
+          : null,
         amount: payment.amount,
         companyAmount: payment.companyAmount,
         platformFee: payment.platformFee,
         status: payment.status,
-        escrowStatus: escrowStatus, // ✅ Now will show "settled"
+        escrowStatus: escrowStatus, // âœ… Now will show "settled"
         paidAt: payment.paidAt,
         settledAt: settledAt,
         transferId: transferId,
         paymentMethod: payment.paymentMethod,
         paystackReference: payment.paystackReference,
-        currency: payment.currency || 'NGN',
+        currency: payment.currency || "NGN",
       };
     });
 
-    // ✅ Format recent settlements
-    const formattedRecentSettlements = recentSettlements.map(settlement => ({
+    // âœ… Format recent settlements
+    const formattedRecentSettlements = recentSettlements.map((settlement) => ({
       _id: settlement._id,
-      deliveryReference: settlement.deliveryId?.referenceId || 'N/A',
+      deliveryReference: settlement.deliveryId?.referenceId || "N/A",
       amount: settlement.amount,
       companyAmount: settlement.companyAmount,
       platformFee: settlement.platformFee,
@@ -2239,7 +2475,7 @@ export const getCompanyPayments = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Found ${formattedPayments.length} payment${formattedPayments.length !== 1 ? 's' : ''} for ${company.name}`,
+      message: `Found ${formattedPayments.length} payment${formattedPayments.length !== 1 ? "s" : ""} for ${company.name}`,
       data: {
         payments: formattedPayments,
         summary: summary[0] || {
@@ -2268,19 +2504,25 @@ export const getCompanyPayments = async (req, res) => {
         },
         filters: {
           applied: {
-            status: status || 'all',
-            settlementStatus: settlementStatus || 'all',
+            status: status || "all",
+            settlementStatus: settlementStatus || "all",
             dateRange: startDate && endDate ? { startDate, endDate } : null,
           },
           available: {
-            statuses: ['all', 'pending', 'successful', 'failed'],
-            settlementStatuses: ['all', 'pending', 'held', 'settling', 'settled'],
+            statuses: ["all", "pending", "successful", "failed"],
+            settlementStatuses: [
+              "all",
+              "pending",
+              "held",
+              "settling",
+              "settled",
+            ],
           },
         },
       },
     });
   } catch (error) {
-    console.error("❌ Get company payments error:", error);
+    console.error("âŒ Get company payments error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company payments",
@@ -2296,7 +2538,7 @@ export const getCompanyPayments = async (req, res) => {
 export const getCompanySettlementDetails = async (req, res) => {
   try {
     const company = await Company.findById(req.user.companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -2321,7 +2563,8 @@ export const getCompanySettlementDetails = async (req, res) => {
       .populate("customerId", "name email phone avatarUrl")
       .populate({
         path: "deliveryId",
-        select: "pickup dropoff status referenceId createdAt completedAt driverDetails driverId companyDetails estimatedDistanceKm fare",
+        select:
+          "pickup dropoff status referenceId createdAt completedAt driverDetails driverId companyDetails estimatedDistanceKm fare",
         populate: [
           {
             path: "driverId",
@@ -2334,14 +2577,16 @@ export const getCompanySettlementDetails = async (req, res) => {
           {
             path: "companyId",
             select: "name logo contactPhone",
-          }
+          },
         ],
       })
       .lean();
 
     if (!payment) {
       // Check if payment exists but belongs to another company
-      const existingPayment = await Payment.findById(paymentId).select("companyId").lean();
+      const existingPayment = await Payment.findById(paymentId)
+        .select("companyId")
+        .lean();
       if (existingPayment) {
         return res.status(403).json({
           success: false,
@@ -2357,15 +2602,21 @@ export const getCompanySettlementDetails = async (req, res) => {
     // Get settlement transaction details
     const settlementDetails = {
       transferId: payment.metadata?.settlementTransferId,
-     status: payment.escrowDetails?.settledToCompany ? 'settled' : 'held',
-settledAt: payment.escrowDetails?.settlementDate,
-transferId: payment.escrowDetails?.paystackTransferId,
-transferStatus: payment.metadata?.settlementStatus,
-      estimatedArrival: getEstimatedArrival(payment.metadata?.escrowStatus, payment.metadata?.settledAt),
-      transferReference: payment.metadata?.transferReference || `TRF-${payment.paystackReference}`,
+      status: payment.escrowDetails?.settledToCompany ? "settled" : "held",
+      settledAt: payment.escrowDetails?.settlementDate,
+      transferId: payment.escrowDetails?.paystackTransferId,
+      transferStatus: payment.metadata?.settlementStatus,
+      estimatedArrival: getEstimatedArrival(
+        payment.metadata?.escrowStatus,
+        payment.metadata?.settledAt,
+      ),
+      transferReference:
+        payment.metadata?.transferReference ||
+        `TRF-${payment.paystackReference}`,
       bankName: company.bankDetails?.bankName,
-      accountNumber: company.bankDetails?.accountNumber ? 
-        `****${company.bankDetails.accountNumber.slice(-4)}` : null,
+      accountNumber: company.bankDetails?.accountNumber
+        ? `****${company.bankDetails.accountNumber.slice(-4)}`
+        : null,
       accountName: company.bankDetails?.accountName,
     };
 
@@ -2376,15 +2627,18 @@ transferStatus: payment.metadata?.settlementStatus,
         // In production, you would call Paystack Transfer API
         // transferInfo = await paystack.transfer.verify(payment.metadata.settlementTransferId);
         transferInfo = {
-          status: 'success',
-          recipient: company.bankDetails?.accountName || 'Company Account',
+          status: "success",
+          recipient: company.bankDetails?.accountName || "Company Account",
           amount: payment.companyAmount,
           fee: payment.platformFee,
           createdAt: payment.metadata?.settledAt,
           transferredAt: payment.metadata?.settledAt,
         };
       } catch (transferError) {
-        console.warn("⚠️ Failed to fetch transfer details:", transferError.message);
+        console.warn(
+          "âš ï¸ Failed to fetch transfer details:",
+          transferError.message,
+        );
       }
     }
 
@@ -2397,92 +2651,100 @@ transferStatus: payment.metadata?.settlementStatus,
         company: Math.round((payment.companyAmount / payment.amount) * 100),
         platform: Math.round((payment.platformFee / payment.amount) * 100),
       },
-      currency: payment.currency || 'NGN',
+      currency: payment.currency || "NGN",
     };
 
     // Enhanced timeline
     const timeline = [];
-    
+
     // Payment timeline
-    if (payment.paidAt) timeline.push({
-      event: 'payment_received',
-      time: payment.paidAt,
-      description: 'Customer payment received',
-      status: 'completed',
-      icon: '💳',
-      details: `₦${payment.amount.toLocaleString()} from ${payment.customerId?.name || 'Customer'}`
-    });
-    
-    if (payment.metadata?.escrowHeldAt) timeline.push({
-      event: 'escrow_held',
-      time: payment.metadata.escrowHeldAt,
-      description: 'Funds held in escrow',
-      status: 'completed',
-      icon: '🔒',
-      details: 'Payment secured until delivery completion'
-    });
-    
+    if (payment.paidAt)
+      timeline.push({
+        event: "payment_received",
+        time: payment.paidAt,
+        description: "Customer payment received",
+        status: "completed",
+        icon: "ðŸ’³",
+        details: `â‚¦${payment.amount.toLocaleString()} from ${payment.customerId?.name || "Customer"}`,
+      });
+
+    if (payment.metadata?.escrowHeldAt)
+      timeline.push({
+        event: "escrow_held",
+        time: payment.metadata.escrowHeldAt,
+        description: "Funds held in escrow",
+        status: "completed",
+        icon: "ðŸ”’",
+        details: "Payment secured until delivery completion",
+      });
+
     // Driver acceptance timeline (from delivery)
     if (payment.deliveryId?.driverId) {
       const delivery = await Delivery.findById(payment.deliveryId._id)
         .select("assignedAt pickedUpAt deliveredAt")
         .lean();
-      
-      if (delivery?.assignedAt) timeline.push({
-        event: 'driver_assigned',
-        time: delivery.assignedAt,
-        description: 'Driver accepted delivery',
-        status: 'completed',
-        icon: '🚗',
-        details: payment.deliveryId.driverId?.userId?.name || 'Driver'
-      });
-      
-      if (delivery?.pickedUpAt) timeline.push({
-        event: 'package_picked_up',
-        time: delivery.pickedUpAt,
-        description: 'Package picked up',
-        status: 'completed',
-        icon: '📦',
-        details: 'Driver collected the package'
-      });
-      
-      if (delivery?.deliveredAt) timeline.push({
-        event: 'delivery_completed',
-        time: delivery.deliveredAt,
-        description: 'Package delivered',
-        status: 'completed',
-        icon: '✅',
-        details: 'Delivery completed by driver'
-      });
+
+      if (delivery?.assignedAt)
+        timeline.push({
+          event: "driver_assigned",
+          time: delivery.assignedAt,
+          description: "Driver accepted delivery",
+          status: "completed",
+          icon: "ðŸš—",
+          details: payment.deliveryId.driverId?.userId?.name || "Driver",
+        });
+
+      if (delivery?.pickedUpAt)
+        timeline.push({
+          event: "package_picked_up",
+          time: delivery.pickedUpAt,
+          description: "Package picked up",
+          status: "completed",
+          icon: "ðŸ“¦",
+          details: "Driver collected the package",
+        });
+
+      if (delivery?.deliveredAt)
+        timeline.push({
+          event: "delivery_completed",
+          time: delivery.deliveredAt,
+          description: "Package delivered",
+          status: "completed",
+          icon: "âœ…",
+          details: "Delivery completed by driver",
+        });
     }
-    
+
     // Verification and settlement timeline
-    if (payment.metadata?.customerVerifiedAt) timeline.push({
-      event: 'customer_verified',
-      time: payment.metadata.customerVerifiedAt,
-      description: 'Customer verified delivery',
-      status: 'completed',
-      icon: '👤',
-      details: 'Customer confirmed successful delivery'
-    });
-    
-    if (payment.metadata?.settledAt) timeline.push({
-      event: 'settlement_initiated',
-      time: payment.metadata.settledAt,
-      description: 'Settlement to company initiated',
-      status: 'completed',
-      icon: '💰',
-      details: `₦${payment.companyAmount.toLocaleString()} transferred to company account`
-    });
-    
-    if (payment.metadata?.escrowStatus === 'settled') timeline.push({
-      event: 'settlement_completed',
-      time: payment.metadata.settledAt,
-      description: 'Settlement completed',
-      status: 'completed',
-      icon: '🎉',
-      details: 'Funds successfully deposited'
-    });
+    if (payment.metadata?.customerVerifiedAt)
+      timeline.push({
+        event: "customer_verified",
+        time: payment.metadata.customerVerifiedAt,
+        description: "Customer verified delivery",
+        status: "completed",
+        icon: "ðŸ‘¤",
+        details: "Customer confirmed successful delivery",
+      });
+
+    if (payment.metadata?.settledAt)
+      timeline.push({
+        event: "settlement_initiated",
+        time: payment.metadata.settledAt,
+        description: "Settlement to company initiated",
+        status: "completed",
+        icon: "ðŸ’°",
+        details: `â‚¦${payment.companyAmount.toLocaleString()} transferred to company account`,
+      });
+
+    if (payment.metadata?.escrowStatus === "settled")
+      timeline.push({
+        event: "settlement_completed",
+        time: payment.metadata.settledAt,
+        description: "Settlement completed",
+        status: "completed",
+        icon: "ðŸŽ‰",
+        details: "Funds successfully deposited",
+      });
 
     // Sort timeline
     timeline.sort((a, b) => new Date(a.time) - new Date(b.time));
@@ -2491,10 +2753,10 @@ transferStatus: payment.metadata?.settlementStatus,
     const relatedDeliveries = await Delivery.find({
       customerId: payment.customerId,
       companyId: company._id,
-      status: 'completed',
-      _id: { $ne: payment.deliveryId?._id }
+      status: "completed",
+      _id: { $ne: payment.deliveryId?._id },
     })
-      .select('referenceId fare.totalFare completedAt')
+      .select("referenceId fare.totalFare completedAt")
       .sort({ completedAt: -1 })
       .limit(3)
       .lean();
@@ -2510,58 +2772,66 @@ transferStatus: payment.metadata?.settlementStatus,
           companyAmount: payment.companyAmount,
           platformFee: payment.platformFee,
           status: payment.status,
-          escrowStatus: payment.metadata?.escrowStatus || 'pending',
+          escrowStatus: payment.metadata?.escrowStatus || "pending",
           paidAt: payment.paidAt,
           paymentMethod: payment.paymentMethod,
           currency: payment.currency,
         },
-        delivery: payment.deliveryId ? {
-          _id: payment.deliveryId._id,
-          referenceId: payment.deliveryId.referenceId,
-          status: payment.deliveryId.status,
-          pickup: {
-            address: payment.deliveryId.pickup?.address,
-            lat: payment.deliveryId.pickup?.lat,
-            lng: payment.deliveryId.pickup?.lng,
-            name: payment.deliveryId.pickup?.name,
-            phone: payment.deliveryId.pickup?.phone,
-          },
-          dropoff: {
-            address: payment.deliveryId.dropoff?.address,
-            lat: payment.deliveryId.dropoff?.lat,
-            lng: payment.deliveryId.dropoff?.lng,
-            name: payment.deliveryId.dropoff?.name,
-            phone: payment.deliveryId.dropoff?.phone,
-          },
-          driver: payment.deliveryId.driverId?.userId ? {
-            _id: payment.deliveryId.driverId._id,
-            name: payment.deliveryId.driverId.userId.name,
-            phone: payment.deliveryId.driverId.userId.phone,
-            avatarUrl: payment.deliveryId.driverId.userId.avatarUrl,
-            rating: payment.deliveryId.driverId.userId.rating,
-            vehicle: {
-              type: payment.deliveryId.driverId.vehicleType,
-              make: payment.deliveryId.driverId.vehicleMake,
-              model: payment.deliveryId.driverId.vehicleModel,
-              plateNumber: payment.deliveryId.driverId.plateNumber,
-            },
-          } : payment.deliveryId.driverDetails || null,
-          distance: payment.deliveryId.estimatedDistanceKm,
-          fare: payment.deliveryId.fare,
-          completedAt: payment.deliveryId.completedAt,
-          company: payment.deliveryId.companyId ? {
-            name: payment.deliveryId.companyId.name,
-            logo: payment.deliveryId.companyId.logo,
-            contactPhone: payment.deliveryId.companyId.contactPhone,
-          } : null,
-        } : null,
-        customer: payment.customerId ? {
-          _id: payment.customerId._id,
-          name: payment.customerId.name,
-          email: payment.customerId.email,
-          phone: payment.customerId.phone,
-          avatarUrl: payment.customerId.avatarUrl,
-        } : null,
+        delivery: payment.deliveryId
+          ? {
+              _id: payment.deliveryId._id,
+              referenceId: payment.deliveryId.referenceId,
+              status: payment.deliveryId.status,
+              pickup: {
+                address: payment.deliveryId.pickup?.address,
+                lat: payment.deliveryId.pickup?.lat,
+                lng: payment.deliveryId.pickup?.lng,
+                name: payment.deliveryId.pickup?.name,
+                phone: payment.deliveryId.pickup?.phone,
+              },
+              dropoff: {
+                address: payment.deliveryId.dropoff?.address,
+                lat: payment.deliveryId.dropoff?.lat,
+                lng: payment.deliveryId.dropoff?.lng,
+                name: payment.deliveryId.dropoff?.name,
+                phone: payment.deliveryId.dropoff?.phone,
+              },
+              driver: payment.deliveryId.driverId?.userId
+                ? {
+                    _id: payment.deliveryId.driverId._id,
+                    name: payment.deliveryId.driverId.userId.name,
+                    phone: payment.deliveryId.driverId.userId.phone,
+                    avatarUrl: payment.deliveryId.driverId.userId.avatarUrl,
+                    rating: payment.deliveryId.driverId.userId.rating,
+                    vehicle: {
+                      type: payment.deliveryId.driverId.vehicleType,
+                      make: payment.deliveryId.driverId.vehicleMake,
+                      model: payment.deliveryId.driverId.vehicleModel,
+                      plateNumber: payment.deliveryId.driverId.plateNumber,
+                    },
+                  }
+                : payment.deliveryId.driverDetails || null,
+              distance: payment.deliveryId.estimatedDistanceKm,
+              fare: payment.deliveryId.fare,
+              completedAt: payment.deliveryId.completedAt,
+              company: payment.deliveryId.companyId
+                ? {
+                    name: payment.deliveryId.companyId.name,
+                    logo: payment.deliveryId.companyId.logo,
+                    contactPhone: payment.deliveryId.companyId.contactPhone,
+                  }
+                : null,
+            }
+          : null,
+        customer: payment.customerId
+          ? {
+              _id: payment.customerId._id,
+              name: payment.customerId.name,
+              email: payment.customerId.email,
+              phone: payment.customerId.phone,
+              avatarUrl: payment.customerId.avatarUrl,
+            }
+          : null,
         settlement: settlementDetails,
         transferInfo,
         commission: commissionBreakdown,
@@ -2569,24 +2839,25 @@ transferStatus: payment.metadata?.settlementStatus,
         relatedDeliveries,
         actions: getAvailableActions(payment.metadata?.escrowStatus),
         support: {
-          contactEmail: process.env.SUPPORT_EMAIL || 'support@riderr.com',
-          contactPhone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
-          disputeWindow: '24 hours after settlement',
+          contactEmail: process.env.SUPPORT_EMAIL || "support@riderr.com",
+          contactPhone: process.env.SUPPORT_PHONE || "+234 800 000 0000",
+          disputeWindow: "24 hours after settlement",
         },
       },
     });
   } catch (error) {
-    console.error("❌ Get settlement details error:", error);
-    
+    console.error("âŒ Get settlement details error:", error);
+
     // Handle specific errors
-    if (error.name === 'CastError') {
+    if (error.name === "CastError") {
       return res.status(400).json({
         success: false,
         message: "Invalid payment ID format",
-        error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: "Failed to get settlement details",
@@ -2599,29 +2870,29 @@ transferStatus: payment.metadata?.settlementStatus,
  * Helper function to calculate estimated arrival time
  */
 function getEstimatedArrival(escrowStatus, settledAt) {
-  if (!escrowStatus) return 'Pending settlement';
-  
+  if (!escrowStatus) return "Pending settlement";
+
   switch (escrowStatus) {
-    case 'settled':
+    case "settled":
       if (settledAt) {
         const settledDate = new Date(settledAt);
         const now = new Date();
         const hoursDiff = Math.abs(now - settledDate) / 36e5;
-        
-        if (hoursDiff < 1) return 'Just now';
+
+        if (hoursDiff < 1) return "Just now";
         if (hoursDiff < 24) return `${Math.floor(hoursDiff)} hours ago`;
         return `${Math.floor(hoursDiff / 24)} days ago`;
       }
-      return 'Settlement completed';
-      
-    case 'settling':
-      return 'Processing (1-2 business days)';
-      
-    case 'held':
-      return 'After customer verification (within 24 hours)';
-      
+      return "Settlement completed";
+
+    case "settling":
+      return "Processing (1-2 business days)";
+
+    case "held":
+      return "After customer verification (within 24 hours)";
+
     default:
-      return 'Pending';
+      return "Pending";
   }
 }
 
@@ -2630,38 +2901,48 @@ function getEstimatedArrival(escrowStatus, settledAt) {
  */
 function getAvailableActions(escrowStatus) {
   const actions = [];
-  
+
   switch (escrowStatus) {
-    case 'held':
+    case "held":
       actions.push(
-        { label: 'Contact Customer', action: 'contact_customer', icon: '📞' },
-        { label: 'View Delivery Details', action: 'view_delivery', icon: '📋' },
-        { label: 'Check Driver Status', action: 'check_driver', icon: '🚗' }
+        { label: "Contact Customer", action: "contact_customer", icon: "ðŸ“ž" },
+        {
+          label: "View Delivery Details",
+          action: "view_delivery",
+          icon: "ðŸ“‹",
+        },
+        { label: "Check Driver Status", action: "check_driver", icon: "ðŸš—" },
       );
       break;
-      
-    case 'settling':
+
+    case "settling":
       actions.push(
-        { label: 'Track Transfer', action: 'track_transfer', icon: '📍' },
-        { label: 'View Transfer Details', action: 'view_transfer', icon: '💰' },
-        { label: 'Contact Support', action: 'contact_support', icon: '🆘' }
+        { label: "Track Transfer", action: "track_transfer", icon: "ðŸ“" },
+        {
+          label: "View Transfer Details",
+          action: "view_transfer",
+          icon: "ðŸ’°",
+        },
+        { label: "Contact Support", action: "contact_support", icon: "ðŸ†˜" },
       );
       break;
-      
-    case 'settled':
+
+    case "settled":
       actions.push(
-        { label: 'Download Receipt', action: 'download_receipt', icon: '📄' },
-        { label: 'View Bank Statement', action: 'view_statement', icon: '🏦' },
-        { label: 'Report Issue', action: 'report_issue', icon: '⚠️' }
+        { label: "Download Receipt", action: "download_receipt", icon: "ðŸ“„" },
+        { label: "View Bank Statement", action: "view_statement", icon: "ðŸ¦" },
+        { label: "Report Issue", action: "report_issue", icon: "âš ï¸" },
       );
       break;
-      
+
     default:
-      actions.push(
-        { label: 'Contact Support', action: 'contact_support', icon: '🆘' }
-      );
+      actions.push({
+        label: "Contact Support",
+        action: "contact_support",
+        icon: "ðŸ†˜",
+      });
   }
-  
+
   return actions;
 }
 
@@ -2673,7 +2954,7 @@ function getAvailableActions(escrowStatus) {
 export const downloadSettlementReceipt = async (req, res) => {
   try {
     const company = await Company.findById(req.user.companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -2733,11 +3014,11 @@ export const downloadSettlementReceipt = async (req, res) => {
           </div>
           <div class="detail-row">
             <span class="label">Customer:</span>
-            <span class="value">${payment.customerId?.name || 'N/A'}</span>
+            <span class="value">${payment.customerId?.name || "N/A"}</span>
           </div>
           <div class="detail-row">
             <span class="label">Delivery Reference:</span>
-            <span class="value">${payment.deliveryId?.referenceId || 'N/A'}</span>
+            <span class="value">${payment.deliveryId?.referenceId || "N/A"}</span>
           </div>
           <div class="detail-row">
             <span class="label">Payment Reference:</span>
@@ -2749,7 +3030,7 @@ export const downloadSettlementReceipt = async (req, res) => {
           </div>
           <div class="detail-row">
             <span class="label">Settled Date:</span>
-            <span class="value">${payment.metadata?.settledAt ? new Date(payment.metadata.settledAt).toLocaleDateString() : 'N/A'}</span>
+            <span class="value">${payment.metadata?.settledAt ? new Date(payment.metadata.settledAt).toLocaleDateString() : "N/A"}</span>
           </div>
         </div>
         
@@ -2760,19 +3041,19 @@ export const downloadSettlementReceipt = async (req, res) => {
           </tr>
           <tr>
             <td>Total Payment</td>
-            <td>₦${payment.amount.toLocaleString()}</td>
+            <td>â‚¦${payment.amount.toLocaleString()}</td>
           </tr>
           <tr>
             <td>Platform Fee (${Math.round((payment.platformFee / payment.amount) * 100)}%)</td>
-            <td>₦${payment.platformFee.toLocaleString()}</td>
+            <td>â‚¦${payment.platformFee.toLocaleString()}</td>
           </tr>
           <tr>
             <td><strong>Amount Settled to Company</strong></td>
-            <td><strong>₦${payment.companyAmount.toLocaleString()}</strong></td>
+            <td><strong>â‚¦${payment.companyAmount.toLocaleString()}</strong></td>
           </tr>
         </table>
         
-        <div class="amount">₦${payment.companyAmount.toLocaleString()}</div>
+        <div class="amount">â‚¦${payment.companyAmount.toLocaleString()}</div>
         
         <div class="footer">
           <p>This is an automated receipt generated by Riderr</p>
@@ -2784,12 +3065,15 @@ export const downloadSettlementReceipt = async (req, res) => {
     `;
 
     // Set headers for PDF download
-    res.setHeader('Content-Type', 'text/html');
-    res.setHeader('Content-Disposition', `attachment; filename="receipt-${payment._id}.html"`);
-    
+    res.setHeader("Content-Type", "text/html");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="receipt-${payment._id}.html"`,
+    );
+
     res.send(receiptHtml);
   } catch (error) {
-    console.error("❌ Download receipt error:", error);
+    console.error("âŒ Download receipt error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to generate receipt",
@@ -2797,8 +3081,6 @@ export const downloadSettlementReceipt = async (req, res) => {
     });
   }
 };
-
-
 
 /**
  * @desc    Submit OTP for card charge
@@ -2813,7 +3095,7 @@ export const submitOtp = async (req, res) => {
     if (!reference || !otp) {
       return res.status(400).json({
         success: false,
-        message: 'Reference and OTP are required',
+        message: "Reference and OTP are required",
       });
     }
 
@@ -2825,50 +3107,57 @@ export const submitOtp = async (req, res) => {
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: "Payment not found",
       });
     }
 
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       return res.status(400).json({
         success: false,
-        message: 'Payment already completed',
+        message: "Payment already completed",
       });
     }
 
-    // ✅ FIXED: Don't check requiresOtp flag (it was being silently dropped
+    // âœ… FIXED: Don't check requiresOtp flag (it was being silently dropped
     // by the old strict schema). Instead check payment is in 'processing'
     // state and that we have a chargeReference saved.
-    if (payment.status !== 'processing') {
+    if (payment.status !== "processing") {
       return res.status(400).json({
         success: false,
         message: `Payment is not awaiting OTP. Current status: ${payment.status}`,
       });
     }
 
-     const paystackReference = payment.metadata?.chargeReference;
+    const paystackReference = payment.metadata?.chargeReference;
 
-    console.log('🔐 Submitting OTP to Paystack');
-    console.log('   Internal ref  :', reference);
-    console.log('   chargeReference from metadata:', paystackReference);
-    console.log('   Full metadata :', JSON.stringify(payment.metadata, null, 2));
+    console.log("ðŸ” Submitting OTP to Paystack");
+    console.log("   Internal ref  :", reference);
+    console.log("   chargeReference from metadata:", paystackReference);
+    console.log(
+      "   Full metadata :",
+      JSON.stringify(payment.metadata, null, 2),
+    );
 
     if (!paystackReference) {
-      console.error('❌ chargeReference missing from payment metadata!');
-      console.error('   This means it was not saved during chargeCard step.');
-      console.error('   Payment status:', payment.status);
+      console.error("âŒ chargeReference missing from payment metadata!");
+      console.error("   This means it was not saved during chargeCard step.");
+      console.error("   Payment status:", payment.status);
       return res.status(400).json({
         success: false,
-        message: 'Payment session expired or invalid. Please start a new payment.',
-        debug: process.env.NODE_ENV !== 'production' ? {
-          hint: 'chargeReference was not saved to metadata during charge step',
-          paymentStatus: payment.status,
-          metadataKeys: Object.keys(payment.metadata || {}),
-        } : undefined,
+        message:
+          "Payment session expired or invalid. Please start a new payment.",
+        debug:
+          process.env.NODE_ENV !== "production"
+            ? {
+                hint: "chargeReference was not saved to metadata during charge step",
+                paymentStatus: payment.status,
+                metadataKeys: Object.keys(payment.metadata || {}),
+              }
+            : undefined,
       });
     }
 
-    const otpResult = await submitOtpToPaystack({
+    const otpResult = await gatewaySubmitOtp({
       otp: otp.toString().trim(),
       reference: paystackReference,
     });
@@ -2876,13 +3165,13 @@ export const submitOtp = async (req, res) => {
     if (!otpResult.success) {
       return res.status(400).json({
         success: false,
-        message: otpResult.message || 'Invalid OTP',
+        message: otpResult.message || "Invalid OTP",
         error: otpResult.error,
       });
     }
 
-    // ✅ OTP accepted — mark payment successful
-    payment.status = 'successful';
+    // âœ… OTP accepted â€” mark payment successful
+    payment.status = "successful";
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
     payment.webhookData = otpResult.data;
@@ -2890,27 +3179,28 @@ export const submitOtp = async (req, res) => {
       ...payment.metadata,
       requiresOtp: false,
       otpVerifiedAt: new Date(),
-      escrowStatus: 'held',
+      escrowStatus: "held",
       escrowHeldAt: new Date(),
+      flwRef: otpResult.data?.flw_ref,
     };
-    // ✅ Required for Mixed schema fields
-    payment.markModified('metadata');
+    // âœ… Required for Mixed schema fields
+    payment.markModified("metadata");
     await payment.save();
 
     // Update delivery
     const delivery = await Delivery.findById(payment.deliveryId);
     if (delivery) {
-      delivery.payment.status = 'paid';
+      delivery.payment.status = "paid";
       delivery.payment.paidAt = new Date();
       await delivery.save();
     }
 
     await sendNotification({
       userId: customer._id,
-      title: '✅ Payment Successful',
-      message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      title: "âœ… Payment Successful",
+      message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
       data: {
-        type: 'payment_successful',
+        type: "payment_successful",
         deliveryId: payment.deliveryId,
         paymentId: payment._id,
         amount: payment.amount,
@@ -2919,7 +3209,7 @@ export const submitOtp = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Payment completed successfully!',
+      message: "Payment completed successfully!",
       data: {
         paymentId: payment._id,
         reference: reference,
@@ -2929,11 +3219,11 @@ export const submitOtp = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('❌ Submit OTP error:', error);
+    console.error("âŒ Submit OTP error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify OTP',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to verify OTP",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -2951,7 +3241,7 @@ export const submitPin = async (req, res) => {
     if (!reference || !pin) {
       return res.status(400).json({
         success: false,
-        message: 'Reference and PIN are required',
+        message: "Reference and PIN are required",
       });
     }
 
@@ -2963,24 +3253,24 @@ export const submitPin = async (req, res) => {
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: "Payment not found",
       });
     }
 
-    if (payment.status === 'successful') {
+    if (payment.status === "successful") {
       return res.status(400).json({
         success: false,
-        message: 'Payment already completed',
+        message: "Payment already completed",
       });
     }
 
-    // ✅ Use Paystack's reference, not internal RIDERR-xxx reference
+    // âœ… Use Paystack's reference, not internal RIDERR-xxx reference
     const paystackReference = payment.metadata?.chargeReference || reference;
 
-    console.log(`🔐 Submitting PIN for payment ${payment._id}`);
+    console.log(`ðŸ” Submitting PIN for payment ${payment._id}`);
     console.log(`   Paystack ref : ${paystackReference}`);
 
-    const pinResult = await submitPinToPaystack({
+    const pinResult = await gatewaySubmitPin({
       pin: pin.toString().trim(),
       reference: paystackReference,
     });
@@ -2988,7 +3278,7 @@ export const submitPin = async (req, res) => {
     if (!pinResult.success) {
       return res.status(400).json({
         success: false,
-        message: pinResult.message || 'Invalid PIN',
+        message: pinResult.message || "Invalid PIN",
         error: pinResult.error,
       });
     }
@@ -2996,12 +3286,12 @@ export const submitPin = async (req, res) => {
     const pinData = pinResult.data;
 
     // After PIN, Paystack may ask for OTP next
-    if (pinResult.requiresOtp || pinData?.status === 'send_otp') {
+    if (pinResult.requiresOtp || pinData?.status === "send_otp") {
       payment.metadata = {
         ...payment.metadata,
         requiresPin: false,
         requiresOtp: true,
-        // ✅ Update chargeReference in case Paystack changed it
+        // âœ… Update chargeReference in case Paystack changed it
         chargeReference: pinData.reference || paystackReference,
       };
       await payment.save();
@@ -3009,43 +3299,44 @@ export const submitPin = async (req, res) => {
       return res.status(200).json({
         success: true,
         requiresOtp: true,
-        message: 'OTP sent to your phone number',
+        message: "OTP sent to your phone number",
         data: {
           paymentId: payment._id,
           reference: reference,
           amount: payment.amount,
-          displayMessage: pinData.display_text || 'Please enter the OTP sent to your phone',
+          displayMessage:
+            pinData.display_text || "Please enter the OTP sent to your phone",
         },
       });
     }
 
     // PIN accepted and payment successful immediately
-    if (pinData?.status === 'success') {
-      payment.status = 'successful';
+    if (pinData?.status === "success") {
+      payment.status = "successful";
       payment.paidAt = new Date();
       payment.verifiedAt = new Date();
       payment.webhookData = pinData;
       payment.metadata = {
         ...payment.metadata,
         requiresPin: false,
-        escrowStatus: 'held',
+        escrowStatus: "held",
         escrowHeldAt: new Date(),
       };
       await payment.save();
 
       const delivery = await Delivery.findById(payment.deliveryId);
       if (delivery) {
-        delivery.payment.status = 'paid';
+        delivery.payment.status = "paid";
         delivery.payment.paidAt = new Date();
         await delivery.save();
       }
 
       await sendNotification({
         userId: customer._id,
-        title: '✅ Payment Successful',
-        message: `Your payment of ₦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+        title: "âœ… Payment Successful",
+        message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
         data: {
-          type: 'payment_successful',
+          type: "payment_successful",
           deliveryId: payment.deliveryId,
           paymentId: payment._id,
           amount: payment.amount,
@@ -3054,7 +3345,7 @@ export const submitPin = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Payment completed successfully!',
+        message: "Payment completed successfully!",
         data: {
           paymentId: payment._id,
           reference: reference,
@@ -3069,11 +3360,11 @@ export const submitPin = async (req, res) => {
       message: `Unexpected status after PIN: ${pinData?.status}`,
     });
   } catch (error) {
-    console.error('❌ Submit PIN error:', error);
+    console.error("âŒ Submit PIN error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify PIN',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to verify PIN",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -3086,11 +3377,11 @@ export const submitPin = async (req, res) => {
 export const getDriverPayments = async (req, res) => {
   try {
     const driverUser = req.user;
-    
-    if (driverUser.role !== 'driver') {
+
+    if (driverUser.role !== "driver") {
       return res.status(403).json({
         success: false,
-        message: 'Only drivers can view payment history',
+        message: "Only drivers can view payment history",
       });
     }
 
@@ -3099,44 +3390,44 @@ export const getDriverPayments = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver profile not found',
+        message: "Driver profile not found",
       });
     }
 
-    const { 
-      status, 
-      startDate, 
-      endDate, 
-      page = 1, 
+    const {
+      status,
+      startDate,
+      endDate,
+      page = 1,
       limit = 10,
       paymentMethod,
-      settledStatus 
+      settledStatus,
     } = req.query;
 
     // Build query
     const query = { driverId: driver._id };
-    
-    if (status && status !== 'all') {
+
+    if (status && status !== "all") {
       query.status = status;
     }
-    
-    if (paymentMethod && paymentMethod !== 'all') {
+
+    if (paymentMethod && paymentMethod !== "all") {
       query.paymentMethod = paymentMethod;
     }
-    
+
     if (startDate && endDate) {
       query.paidAt = {
         $gte: new Date(startDate),
         $lte: new Date(endDate),
       };
     }
-    
+
     // Filter by settlement status (for cash payments that need to be settled)
     if (settledStatus) {
-      if (settledStatus === 'settled') {
-        query['metadata.isSettledToDriver'] = true;
-      } else if (settledStatus === 'pending') {
-        query['metadata.isSettledToDriver'] = false;
+      if (settledStatus === "settled") {
+        query["metadata.isSettledToDriver"] = true;
+      } else if (settledStatus === "pending") {
+        query["metadata.isSettledToDriver"] = false;
       }
     }
 
@@ -3144,11 +3435,12 @@ export const getDriverPayments = async (req, res) => {
 
     const [payments, total] = await Promise.all([
       Payment.find(query)
-        .populate('customerId', 'name email phone avatarUrl')
-        .populate('companyId', 'name logo contactPhone')
+        .populate("customerId", "name email phone avatarUrl")
+        .populate("companyId", "name logo contactPhone")
         .populate({
-          path: 'deliveryId',
-          select: 'pickup dropoff status referenceId createdAt completedAt driverDetails fare',
+          path: "deliveryId",
+          select:
+            "pickup dropoff status referenceId createdAt completedAt driverDetails fare",
         })
         .sort({ paidAt: -1 })
         .skip(skip)
@@ -3159,150 +3451,166 @@ export const getDriverPayments = async (req, res) => {
 
     // Calculate earnings summary
     const summary = await Payment.aggregate([
-      { $match: { driverId: driver._id, status: 'successful' } },
+      { $match: { driverId: driver._id, status: "successful" } },
       {
         $group: {
           _id: null,
-          totalEarnings: { $sum: '$amount' },
+          totalEarnings: { $sum: "$amount" },
           totalTransactions: { $sum: 1 },
           cashPayments: {
             $sum: {
-              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, 1, 0]
-            }
+              $cond: [{ $eq: ["$paymentMethod", "cash"] }, 1, 0],
+            },
           },
           cashAmount: {
             $sum: {
-              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $eq: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
           onlinePayments: {
             $sum: {
-              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, 1, 0]
-            }
+              $cond: [{ $ne: ["$paymentMethod", "cash"] }, 1, 0],
+            },
           },
           onlineAmount: {
             $sum: {
-              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $ne: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
           pendingSettlements: {
             $sum: {
               $cond: [
-                { 
+                {
                   $and: [
-                    { $eq: ['$paymentMethod', 'cash'] },
-                    { $ne: ['$metadata.isSettledToDriver', true] }
-                  ]
-                }, 
-                1, 
-                0
-              ]
-            }
+                    { $eq: ["$paymentMethod", "cash"] },
+                    { $ne: ["$metadata.isSettledToDriver", true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
           },
           pendingAmount: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$paymentMethod', 'cash'] },
-                    { $ne: ['$metadata.isSettledToDriver', true] }
-                  ]
+                    { $eq: ["$paymentMethod", "cash"] },
+                    { $ne: ["$metadata.isSettledToDriver", true] },
+                  ],
                 },
-                '$amount',
-                0
-              ]
-            }
+                "$amount",
+                0,
+              ],
+            },
           },
           settledAmount: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$paymentMethod', 'cash'] },
-                    { $eq: ['$metadata.isSettledToDriver', true] }
-                  ]
+                    { $eq: ["$paymentMethod", "cash"] },
+                    { $eq: ["$metadata.isSettledToDriver", true] },
+                  ],
                 },
-                '$amount',
-                0
-              ]
-            }
+                "$amount",
+                0,
+              ],
+            },
           },
-        }
-      }
+        },
+      },
     ]);
 
     // Get recent cash payments that need settlement
     const pendingCashSettlements = await Payment.find({
       driverId: driver._id,
-      paymentMethod: 'cash',
-      status: 'successful',
-      'metadata.isSettledToDriver': { $ne: true }
+      paymentMethod: "cash",
+      status: "successful",
+      "metadata.isSettledToDriver": { $ne: true },
     })
       .sort({ paidAt: -1 })
       .limit(5)
-      .select('amount deliveryId paidAt metadata.companyId')
-      .populate('companyId', 'name contactPhone')
-      .populate('deliveryId', 'referenceId')
+      .select("amount deliveryId paidAt metadata.companyId")
+      .populate("companyId", "name contactPhone")
+      .populate("deliveryId", "referenceId")
       .lean();
 
     // Format payments for response
-    const formattedPayments = payments.map(payment => {
-      const isCash = payment.paymentMethod === 'cash';
+    const formattedPayments = payments.map((payment) => {
+      const isCash = payment.paymentMethod === "cash";
       const settledToDriver = payment.metadata?.isSettledToDriver || false;
       const settledAt = payment.metadata?.settledToDriverAt || null;
       const settlementMethod = payment.metadata?.settlementMethod || null;
-      
+
       return {
         _id: payment._id,
-        delivery: payment.deliveryId ? {
-          _id: payment.deliveryId._id,
-          referenceId: payment.deliveryId.referenceId,
-          status: payment.deliveryId.status,
-          pickup: payment.deliveryId.pickup?.address,
-          dropoff: payment.deliveryId.dropoff?.address,
-          fare: payment.deliveryId.fare,
-        } : null,
-        customer: payment.customerId ? {
-          name: payment.customerId.name,
-          phone: payment.customerId.phone,
-          avatarUrl: payment.customerId.avatarUrl,
-        } : null,
-        company: payment.companyId ? {
-          name: payment.companyId.name,
-          contactPhone: payment.companyId.contactPhone,
-          logo: payment.companyId.logo,
-        } : null,
+        delivery: payment.deliveryId
+          ? {
+              _id: payment.deliveryId._id,
+              referenceId: payment.deliveryId.referenceId,
+              status: payment.deliveryId.status,
+              pickup: payment.deliveryId.pickup?.address,
+              dropoff: payment.deliveryId.dropoff?.address,
+              fare: payment.deliveryId.fare,
+            }
+          : null,
+        customer: payment.customerId
+          ? {
+              name: payment.customerId.name,
+              phone: payment.customerId.phone,
+              avatarUrl: payment.customerId.avatarUrl,
+            }
+          : null,
+        company: payment.companyId
+          ? {
+              name: payment.companyId.name,
+              contactPhone: payment.companyId.contactPhone,
+              logo: payment.companyId.logo,
+            }
+          : null,
         amount: payment.amount,
         status: payment.status,
         paymentMethod: payment.paymentMethod,
         isCash: isCash,
         paidAt: payment.paidAt,
-        
+
         // Cash payment specific fields
-        settlementStatus: isCash ? (settledToDriver ? 'settled' : 'pending') : 'n/a',
+        settlementStatus: isCash
+          ? settledToDriver
+            ? "settled"
+            : "pending"
+          : "n/a",
         settledAt: settledAt,
         settlementMethod: settlementMethod,
         canCollect: isCash && !settledToDriver,
-        
+
         // Online payment specific fields
-        escrowStatus: !isCash ? payment.metadata?.escrowStatus || 'pending' : 'n/a',
-        
-        currency: payment.currency || 'NGN',
+        escrowStatus: !isCash
+          ? payment.metadata?.escrowStatus || "pending"
+          : "n/a",
+
+        currency: payment.currency || "NGN",
         paystackReference: payment.paystackReference,
-        notes: payment.metadata?.notes || '',
+        notes: payment.metadata?.notes || "",
       };
     });
 
     // Format pending cash settlements
-    const formattedPendingSettlements = pendingCashSettlements.map(settlement => ({
-      _id: settlement._id,
-      deliveryReference: settlement.deliveryId?.referenceId || 'N/A',
-      amount: settlement.amount,
-      companyName: settlement.companyId?.name || 'Unknown Company',
-      companyPhone: settlement.companyId?.contactPhone || '',
-      paidAt: settlement.paidAt,
-      daysPending: Math.floor((new Date() - new Date(settlement.paidAt)) / (1000 * 60 * 60 * 24)),
-    }));
+    const formattedPendingSettlements = pendingCashSettlements.map(
+      (settlement) => ({
+        _id: settlement._id,
+        deliveryReference: settlement.deliveryId?.referenceId || "N/A",
+        amount: settlement.amount,
+        companyName: settlement.companyId?.name || "Unknown Company",
+        companyPhone: settlement.companyId?.contactPhone || "",
+        paidAt: settlement.paidAt,
+        daysPending: Math.floor(
+          (new Date() - new Date(settlement.paidAt)) / (1000 * 60 * 60 * 24),
+        ),
+      }),
+    );
 
     res.status(200).json({
       success: true,
@@ -3327,8 +3635,9 @@ export const getDriverPayments = async (req, res) => {
           phone: driverUser.phone,
           rating: driver.rating || 0,
           totalDeliveries: driver.totalDeliveries || 0,
-          acceptanceRate: driver.totalRequests ? 
-            Math.round((driver.acceptedRequests / driver.totalRequests) * 100) : 0,
+          acceptanceRate: driver.totalRequests
+            ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+            : 0,
           currentStatus: {
             isOnline: driver.isOnline,
             isAvailable: driver.isAvailable,
@@ -3343,25 +3652,25 @@ export const getDriverPayments = async (req, res) => {
         },
         filters: {
           applied: {
-            status: status || 'all',
-            paymentMethod: paymentMethod || 'all',
-            settlementStatus: settledStatus || 'all',
+            status: status || "all",
+            paymentMethod: paymentMethod || "all",
+            settlementStatus: settledStatus || "all",
             dateRange: startDate && endDate ? { startDate, endDate } : null,
           },
           available: {
-            statuses: ['all', 'pending', 'successful', 'failed'],
-            paymentMethods: ['all', 'cash', 'card', 'bank_transfer'],
-            settlementStatuses: ['all', 'pending', 'settled'],
+            statuses: ["all", "pending", "successful", "failed"],
+            paymentMethods: ["all", "cash", "card", "bank_transfer"],
+            settlementStatuses: ["all", "pending", "settled"],
           },
         },
       },
     });
   } catch (error) {
-    console.error('❌ Get driver payments error:', error);
+    console.error("âŒ Get driver payments error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get driver payments',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to get driver payments",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -3376,10 +3685,10 @@ export const getDriverPaymentDetails = async (req, res) => {
     const driverUser = req.user;
     const { paymentId } = req.params;
 
-    if (driverUser.role !== 'driver') {
+    if (driverUser.role !== "driver") {
       return res.status(403).json({
         success: false,
-        message: 'Only drivers can view payment details',
+        message: "Only drivers can view payment details",
       });
     }
 
@@ -3387,7 +3696,7 @@ export const getDriverPaymentDetails = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(paymentId)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid payment ID format',
+        message: "Invalid payment ID format",
       });
     }
 
@@ -3395,7 +3704,7 @@ export const getDriverPaymentDetails = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver profile not found',
+        message: "Driver profile not found",
       });
     }
 
@@ -3404,17 +3713,18 @@ export const getDriverPaymentDetails = async (req, res) => {
       _id: paymentId,
       driverId: driver._id,
     })
-      .populate('customerId', 'name email phone avatarUrl rating')
-      .populate('companyId', 'name logo contactPhone address')
+      .populate("customerId", "name email phone avatarUrl rating")
+      .populate("companyId", "name logo contactPhone address")
       .populate({
-        path: 'deliveryId',
-        select: 'pickup dropoff status referenceId createdAt completedAt driverDetails fare estimatedDistanceKm',
+        path: "deliveryId",
+        select:
+          "pickup dropoff status referenceId createdAt completedAt driverDetails fare estimatedDistanceKm",
         populate: {
-          path: 'driverId',
-          select: 'userId vehicleType plateNumber',
+          path: "driverId",
+          select: "userId vehicleType plateNumber",
           populate: {
-            path: 'userId',
-            select: 'name phone avatarUrl rating',
+            path: "userId",
+            select: "name phone avatarUrl rating",
           },
         },
       })
@@ -3422,24 +3732,26 @@ export const getDriverPaymentDetails = async (req, res) => {
 
     if (!payment) {
       // Check if payment exists but belongs to another driver
-      const existingPayment = await Payment.findById(paymentId).select('driverId').lean();
+      const existingPayment = await Payment.findById(paymentId)
+        .select("driverId")
+        .lean();
       if (existingPayment) {
         return res.status(403).json({
           success: false,
-          message: 'You don\'t have permission to view this payment',
+          message: "You don't have permission to view this payment",
         });
       }
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: "Payment not found",
       });
     }
 
-    const isCash = payment.paymentMethod === 'cash';
+    const isCash = payment.paymentMethod === "cash";
     const settledToDriver = payment.metadata?.isSettledToDriver || false;
     const settledAt = payment.metadata?.settledToDriverAt || null;
     const settlementMethod = payment.metadata?.settlementMethod || null;
-    const settlementNotes = payment.metadata?.settlementNotes || '';
+    const settlementNotes = payment.metadata?.settlementNotes || "";
 
     // Calculate driver's share (for commission-based systems)
     // In your case, driver might get the full cash amount or a percentage
@@ -3449,62 +3761,67 @@ export const getDriverPaymentDetails = async (req, res) => {
 
     // Build timeline
     const timeline = [];
-    
-    if (payment.createdAt) timeline.push({
-      event: 'payment_created',
-      time: payment.createdAt,
-      description: 'Payment record created',
-      icon: '📝',
-      details: 'Payment initiated for delivery'
-    });
-    
-    if (payment.paidAt) timeline.push({
-      event: 'payment_received',
-      time: payment.paidAt,
-      description: isCash ? 'Cash payment collected' : 'Payment received',
-      icon: isCash ? '💵' : '💳',
-      details: `₦${payment.amount.toLocaleString()} ${isCash ? 'cash collected' : 'received via ' + payment.paymentMethod}`
-    });
-    
+
+    if (payment.createdAt)
+      timeline.push({
+        event: "payment_created",
+        time: payment.createdAt,
+        description: "Payment record created",
+        icon: "ðŸ“",
+        details: "Payment initiated for delivery",
+      });
+
+    if (payment.paidAt)
+      timeline.push({
+        event: "payment_received",
+        time: payment.paidAt,
+        description: isCash ? "Cash payment collected" : "Payment received",
+        icon: isCash ? "ðŸ’µ" : "ðŸ’³",
+        details: `â‚¦${payment.amount.toLocaleString()} ${isCash ? "cash collected" : "received via " + payment.paymentMethod}`,
+      });
+
     // Add delivery events if delivery exists
     if (payment.deliveryId) {
       const delivery = await Delivery.findById(payment.deliveryId._id)
-        .select('assignedAt pickedUpAt deliveredAt')
+        .select("assignedAt pickedUpAt deliveredAt")
         .lean();
-      
-      if (delivery?.assignedAt) timeline.push({
-        event: 'delivery_assigned',
-        time: delivery.assignedAt,
-        description: 'Delivery assigned to driver',
-        icon: '🚗',
-        details: 'You accepted the delivery request'
-      });
-      
-      if (delivery?.pickedUpAt) timeline.push({
-        event: 'package_picked_up',
-        time: delivery.pickedUpAt,
-        description: 'Package picked up',
-        icon: '📦',
-        details: 'Package collected from customer'
-      });
-      
-      if (delivery?.deliveredAt) timeline.push({
-        event: 'delivery_completed',
-        time: delivery.deliveredAt,
-        description: 'Package delivered',
-        icon: '✅',
-        details: 'Delivery completed successfully'
-      });
+
+      if (delivery?.assignedAt)
+        timeline.push({
+          event: "delivery_assigned",
+          time: delivery.assignedAt,
+          description: "Delivery assigned to driver",
+          icon: "ðŸš—",
+          details: "You accepted the delivery request",
+        });
+
+      if (delivery?.pickedUpAt)
+        timeline.push({
+          event: "package_picked_up",
+          time: delivery.pickedUpAt,
+          description: "Package picked up",
+          icon: "ðŸ“¦",
+          details: "Package collected from customer",
+        });
+
+      if (delivery?.deliveredAt)
+        timeline.push({
+          event: "delivery_completed",
+          time: delivery.deliveredAt,
+          description: "Package delivered",
+          icon: "âœ…",
+          details: "Delivery completed successfully",
+        });
     }
-    
+
     // Add settlement event for cash payments
     if (isCash && settledToDriver && settledAt) {
       timeline.push({
-        event: 'payment_settled',
+        event: "payment_settled",
         time: settledAt,
-        description: 'Cash payment settled',
-        icon: '💰',
-        details: `₦${payment.amount.toLocaleString()} settled to you via ${settlementMethod || 'cash'}`
+        description: "Cash payment settled",
+        icon: "ðŸ’°",
+        details: `â‚¦${payment.amount.toLocaleString()} settled to you via ${settlementMethod || "cash"}`,
       });
     }
 
@@ -3515,18 +3832,18 @@ export const getDriverPaymentDetails = async (req, res) => {
     const relatedPayments = await Payment.find({
       driverId: driver._id,
       customerId: payment.customerId,
-      status: 'successful',
-      _id: { $ne: payment._id }
+      status: "successful",
+      _id: { $ne: payment._id },
     })
       .sort({ paidAt: -1 })
       .limit(3)
-      .select('amount paymentMethod paidAt deliveryId')
-      .populate('deliveryId', 'referenceId')
+      .select("amount paymentMethod paidAt deliveryId")
+      .populate("deliveryId", "referenceId")
       .lean();
 
     const response = {
       success: true,
-      message: 'Payment details retrieved successfully',
+      message: "Payment details retrieved successfully",
       data: {
         payment: {
           _id: payment._id,
@@ -3539,82 +3856,92 @@ export const getDriverPaymentDetails = async (req, res) => {
           paymentMethod: payment.paymentMethod,
           isCash,
           paidAt: payment.paidAt,
-          currency: payment.currency || 'NGN',
-          settlementStatus: isCash ? (settledToDriver ? 'settled' : 'pending') : 'n/a',
+          currency: payment.currency || "NGN",
+          settlementStatus: isCash
+            ? settledToDriver
+              ? "settled"
+              : "pending"
+            : "n/a",
           settledAt,
           settlementMethod,
           settlementNotes,
           canRequestSettlement: isCash && !settledToDriver,
         },
-        delivery: payment.deliveryId ? {
-          _id: payment.deliveryId._id,
-          referenceId: payment.deliveryId.referenceId,
-          status: payment.deliveryId.status,
-          pickup: {
-            address: payment.deliveryId.pickup?.address,
-            lat: payment.deliveryId.pickup?.lat,
-            lng: payment.deliveryId.pickup?.lng,
-            name: payment.deliveryId.pickup?.name,
-            phone: payment.deliveryId.pickup?.phone,
-          },
-          dropoff: {
-            address: payment.deliveryId.dropoff?.address,
-            lat: payment.deliveryId.dropoff?.lat,
-            lng: payment.deliveryId.dropoff?.lng,
-            name: payment.deliveryId.dropoff?.name,
-            phone: payment.deliveryId.dropoff?.phone,
-          },
-          distance: payment.deliveryId.estimatedDistanceKm,
-          fare: payment.deliveryId.fare,
-          completedAt: payment.deliveryId.completedAt,
-        } : null,
-        customer: payment.customerId ? {
-          _id: payment.customerId._id,
-          name: payment.customerId.name,
-          phone: payment.customerId.phone,
-          email: payment.customerId.email,
-          avatarUrl: payment.customerId.avatarUrl,
-          rating: payment.customerId.rating,
-        } : null,
-        company: payment.companyId ? {
-          _id: payment.companyId._id,
-          name: payment.companyId.name,
-          logo: payment.companyId.logo,
-          contactPhone: payment.companyId.contactPhone,
-          address: payment.companyId.address,
-        } : null,
+        delivery: payment.deliveryId
+          ? {
+              _id: payment.deliveryId._id,
+              referenceId: payment.deliveryId.referenceId,
+              status: payment.deliveryId.status,
+              pickup: {
+                address: payment.deliveryId.pickup?.address,
+                lat: payment.deliveryId.pickup?.lat,
+                lng: payment.deliveryId.pickup?.lng,
+                name: payment.deliveryId.pickup?.name,
+                phone: payment.deliveryId.pickup?.phone,
+              },
+              dropoff: {
+                address: payment.deliveryId.dropoff?.address,
+                lat: payment.deliveryId.dropoff?.lat,
+                lng: payment.deliveryId.dropoff?.lng,
+                name: payment.deliveryId.dropoff?.name,
+                phone: payment.deliveryId.dropoff?.phone,
+              },
+              distance: payment.deliveryId.estimatedDistanceKm,
+              fare: payment.deliveryId.fare,
+              completedAt: payment.deliveryId.completedAt,
+            }
+          : null,
+        customer: payment.customerId
+          ? {
+              _id: payment.customerId._id,
+              name: payment.customerId.name,
+              phone: payment.customerId.phone,
+              email: payment.customerId.email,
+              avatarUrl: payment.customerId.avatarUrl,
+              rating: payment.customerId.rating,
+            }
+          : null,
+        company: payment.companyId
+          ? {
+              _id: payment.companyId._id,
+              name: payment.companyId.name,
+              logo: payment.companyId.logo,
+              contactPhone: payment.companyId.contactPhone,
+              address: payment.companyId.address,
+            }
+          : null,
         timeline,
-        relatedPayments: relatedPayments.map(p => ({
+        relatedPayments: relatedPayments.map((p) => ({
           _id: p._id,
           amount: p.amount,
           paymentMethod: p.paymentMethod,
           paidAt: p.paidAt,
-          deliveryReference: p.deliveryId?.referenceId || 'N/A',
+          deliveryReference: p.deliveryId?.referenceId || "N/A",
         })),
         actions: getDriverPaymentActions(isCash, settledToDriver),
         support: {
-          contactEmail: process.env.SUPPORT_EMAIL || 'support@riderr.com',
-          contactPhone: process.env.SUPPORT_PHONE || '+234 800 000 0000',
-          cashSettlementWindow: 'Within 24 hours of delivery completion',
+          contactEmail: process.env.SUPPORT_EMAIL || "support@riderr.com",
+          contactPhone: process.env.SUPPORT_PHONE || "+234 800 000 0000",
+          cashSettlementWindow: "Within 24 hours of delivery completion",
         },
       },
     };
 
     res.status(200).json(response);
   } catch (error) {
-    console.error('❌ Get driver payment details error:', error);
-    
-    if (error.name === 'CastError') {
+    console.error("âŒ Get driver payment details error:", error);
+
+    if (error.name === "CastError") {
       return res.status(400).json({
         success: false,
-        message: 'Invalid payment ID format',
+        message: "Invalid payment ID format",
       });
     }
-    
+
     res.status(500).json({
       success: false,
-      message: 'Failed to get payment details',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to get payment details",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -3624,29 +3951,45 @@ export const getDriverPaymentDetails = async (req, res) => {
  */
 function getDriverPaymentActions(isCash, settledToDriver) {
   const actions = [];
-  
+
   if (isCash) {
     if (!settledToDriver) {
       actions.push(
-        { label: 'Request Settlement', action: 'request_settlement', icon: '📲' },
-        { label: 'Contact Company', action: 'contact_company', icon: '🏢' },
-        { label: 'View Delivery Details', action: 'view_delivery', icon: '📋' }
+        {
+          label: "Request Settlement",
+          action: "request_settlement",
+          icon: "ðŸ“²",
+        },
+        { label: "Contact Company", action: "contact_company", icon: "ðŸ¢" },
+        {
+          label: "View Delivery Details",
+          action: "view_delivery",
+          icon: "ðŸ“‹",
+        },
       );
     } else {
       actions.push(
-        { label: 'Download Receipt', action: 'download_receipt', icon: '📄' },
-        { label: 'View Settlement Details', action: 'view_settlement', icon: '💰' },
-        { label: 'Report Issue', action: 'report_issue', icon: '⚠️' }
+        { label: "Download Receipt", action: "download_receipt", icon: "ðŸ“„" },
+        {
+          label: "View Settlement Details",
+          action: "view_settlement",
+          icon: "ðŸ’°",
+        },
+        { label: "Report Issue", action: "report_issue", icon: "âš ï¸" },
       );
     }
   } else {
     actions.push(
-      { label: 'View Escrow Status', action: 'view_escrow', icon: '🔒' },
-      { label: 'Contact Company', action: 'contact_company', icon: '🏢' },
-      { label: 'Download Payment Proof', action: 'download_proof', icon: '📄' }
+      { label: "View Escrow Status", action: "view_escrow", icon: "ðŸ”’" },
+      { label: "Contact Company", action: "contact_company", icon: "ðŸ¢" },
+      {
+        label: "Download Payment Proof",
+        action: "download_proof",
+        icon: "ðŸ“„",
+      },
     );
   }
-  
+
   return actions;
 }
 
@@ -3661,10 +4004,10 @@ export const requestCashSettlement = async (req, res) => {
     const { paymentId } = req.params;
     const { settlementMethod, notes } = req.body;
 
-    if (driverUser.role !== 'driver') {
+    if (driverUser.role !== "driver") {
       return res.status(403).json({
         success: false,
-        message: 'Only drivers can request settlement',
+        message: "Only drivers can request settlement",
       });
     }
 
@@ -3672,21 +4015,21 @@ export const requestCashSettlement = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver profile not found',
+        message: "Driver profile not found",
       });
     }
 
     const payment = await Payment.findOne({
       _id: paymentId,
       driverId: driver._id,
-      paymentMethod: 'cash',
-      status: 'successful',
+      paymentMethod: "cash",
+      status: "successful",
     });
 
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Cash payment not found or not eligible for settlement',
+        message: "Cash payment not found or not eligible for settlement",
       });
     }
 
@@ -3694,7 +4037,7 @@ export const requestCashSettlement = async (req, res) => {
     if (payment.metadata?.isSettledToDriver) {
       return res.status(400).json({
         success: false,
-        message: 'Payment has already been settled',
+        message: "Payment has already been settled",
       });
     }
 
@@ -3703,18 +4046,18 @@ export const requestCashSettlement = async (req, res) => {
       ...payment.metadata,
       settlementRequested: true,
       settlementRequestedAt: new Date(),
-      settlementMethod: settlementMethod || 'cash',
-      settlementNotes: notes || '',
+      settlementMethod: settlementMethod || "cash",
+      settlementNotes: notes || "",
     };
 
     // Add to audit log
     payment.auditLog.push({
-      action: 'settlement_requested',
+      action: "settlement_requested",
       timestamp: new Date(),
-      details: { 
+      details: {
         settlementMethod,
         notes,
-        requestedBy: driverUser._id 
+        requestedBy: driverUser._id,
       },
     });
 
@@ -3725,20 +4068,17 @@ export const requestCashSettlement = async (req, res) => {
       const company = await Company.findById(payment.companyId);
       if (company) {
         // Find company owner/user to notify
-        const companyUser = await User.findOne({ 
-          $or: [
-            { _id: company.ownerId },
-            { email: company.email }
-          ] 
+        const companyUser = await User.findOne({
+          $or: [{ _id: company.ownerId }, { email: company.email }],
         });
 
         if (companyUser) {
           await sendNotification({
             userId: companyUser._id,
-            title: '💰 Settlement Request',
-            message: `Driver ${driverUser.name} has requested settlement for cash payment of ₦${payment.amount.toLocaleString()}`,
+            title: "ðŸ’° Settlement Request",
+            message: `Driver ${driverUser.name} has requested settlement for cash payment of â‚¦${payment.amount.toLocaleString()}`,
             data: {
-              type: 'cash_settlement_request',
+              type: "cash_settlement_request",
               paymentId: payment._id,
               driverId: driver._id,
               driverName: driverUser.name,
@@ -3752,26 +4092,26 @@ export const requestCashSettlement = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Settlement request submitted successfully',
+      message: "Settlement request submitted successfully",
       data: {
         paymentId: payment._id,
         amount: payment.amount,
-        settlementMethod: settlementMethod || 'cash',
+        settlementMethod: settlementMethod || "cash",
         requestedAt: new Date(),
         nextSteps: [
-          'Company will review your request',
-          'Settlement typically processed within 24 hours',
-          'You will be notified when payment is settled',
-          'Contact support if no response within 48 hours',
+          "Company will review your request",
+          "Settlement typically processed within 24 hours",
+          "You will be notified when payment is settled",
+          "Contact support if no response within 48 hours",
         ],
       },
     });
   } catch (error) {
-    console.error('❌ Request cash settlement error:', error);
+    console.error("âŒ Request cash settlement error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to request settlement',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to request settlement",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -3784,11 +4124,11 @@ export const requestCashSettlement = async (req, res) => {
 export const markCashPaymentAsSettled = async (req, res) => {
   try {
     const companyUser = req.user;
-    
-    if (companyUser.role !== 'company') {
+
+    if (companyUser.role !== "company") {
       return res.status(403).json({
         success: false,
-        message: 'Only companies can mark payments as settled',
+        message: "Only companies can mark payments as settled",
       });
     }
 
@@ -3796,7 +4136,7 @@ export const markCashPaymentAsSettled = async (req, res) => {
     if (!company) {
       return res.status(404).json({
         success: false,
-        message: 'Company not found',
+        message: "Company not found",
       });
     }
 
@@ -3806,14 +4146,14 @@ export const markCashPaymentAsSettled = async (req, res) => {
     const payment = await Payment.findOne({
       _id: paymentId,
       companyId: company._id,
-      paymentMethod: 'cash',
-      status: 'successful',
-    }).populate('driverId', 'userId');
+      paymentMethod: "cash",
+      status: "successful",
+    }).populate("driverId", "userId");
 
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: 'Cash payment not found or not associated with your company',
+        message: "Cash payment not found or not associated with your company",
       });
     }
 
@@ -3821,7 +4161,7 @@ export const markCashPaymentAsSettled = async (req, res) => {
     if (payment.metadata?.isSettledToDriver) {
       return res.status(400).json({
         success: false,
-        message: 'Payment has already been settled',
+        message: "Payment has already been settled",
       });
     }
 
@@ -3831,17 +4171,17 @@ export const markCashPaymentAsSettled = async (req, res) => {
       isSettledToDriver: true,
       settledToDriverAt: new Date(),
       settledBy: companyUser._id,
-      settlementMethod: settlementMethod || 'cash',
-      settlementNotes: settlementNotes || '',
+      settlementMethod: settlementMethod || "cash",
+      settlementNotes: settlementNotes || "",
     };
 
     // Add to audit log
     payment.auditLog.push({
-      action: 'settled_to_driver',
+      action: "settled_to_driver",
       timestamp: new Date(),
-      details: { 
+      details: {
         settledBy: companyUser._id,
-        settlementMethod: settlementMethod || 'cash',
+        settlementMethod: settlementMethod || "cash",
         notes: settlementNotes,
       },
     });
@@ -3852,35 +4192,35 @@ export const markCashPaymentAsSettled = async (req, res) => {
     if (payment.driverId?.userId) {
       await sendNotification({
         userId: payment.driverId.userId,
-        title: '💰 Payment Settled!',
-        message: `Your cash payment of ₦${payment.amount.toLocaleString()} has been settled by ${company.name}`,
+        title: "ðŸ’° Payment Settled!",
+        message: `Your cash payment of â‚¦${payment.amount.toLocaleString()} has been settled by ${company.name}`,
         data: {
-          type: 'cash_payment_settled',
+          type: "cash_payment_settled",
           paymentId: payment._id,
           amount: payment.amount,
           companyName: company.name,
-          settlementMethod: settlementMethod || 'cash',
+          settlementMethod: settlementMethod || "cash",
         },
       });
     }
 
     res.status(200).json({
       success: true,
-      message: 'Payment marked as settled successfully',
+      message: "Payment marked as settled successfully",
       data: {
         paymentId: payment._id,
         amount: payment.amount,
         driverId: payment.driverId,
         settledAt: new Date(),
-        settlementMethod: settlementMethod || 'cash',
+        settlementMethod: settlementMethod || "cash",
       },
     });
   } catch (error) {
-    console.error('❌ Mark cash payment as settled error:', error);
+    console.error("âŒ Mark cash payment as settled error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to mark payment as settled',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to mark payment as settled",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -3893,11 +4233,11 @@ export const markCashPaymentAsSettled = async (req, res) => {
 export const getDriverEarningsSummary = async (req, res) => {
   try {
     const driverUser = req.user;
-    
-    if (driverUser.role !== 'driver') {
+
+    if (driverUser.role !== "driver") {
       return res.status(403).json({
         success: false,
-        message: 'Only drivers can view earnings summary',
+        message: "Only drivers can view earnings summary",
       });
     }
 
@@ -3905,27 +4245,27 @@ export const getDriverEarningsSummary = async (req, res) => {
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver profile not found',
+        message: "Driver profile not found",
       });
     }
 
-    const { period = 'month' } = req.query;
+    const { period = "month" } = req.query;
 
     // Calculate date ranges
     const now = new Date();
     let startDate;
-    
+
     switch (period) {
-      case 'today':
+      case "today":
         startDate = new Date(now.setHours(0, 0, 0, 0));
         break;
-      case 'week':
+      case "week":
         startDate = new Date(now.setDate(now.getDate() - 7));
         break;
-      case 'month':
+      case "month":
         startDate = new Date(now.setMonth(now.getMonth() - 1));
         break;
-      case 'year':
+      case "year":
         startDate = new Date(now.setFullYear(now.getFullYear() - 1));
         break;
       default:
@@ -3937,65 +4277,65 @@ export const getDriverEarningsSummary = async (req, res) => {
       {
         $match: {
           driverId: driver._id,
-          status: 'successful',
-          paidAt: { $gte: startDate }
-        }
+          status: "successful",
+          paidAt: { $gte: startDate },
+        },
       },
       {
         $group: {
           _id: null,
-          totalEarnings: { $sum: '$amount' },
+          totalEarnings: { $sum: "$amount" },
           totalDeliveries: { $sum: 1 },
           cashEarnings: {
             $sum: {
-              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $eq: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
           cashDeliveries: {
             $sum: {
-              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, 1, 0]
-            }
+              $cond: [{ $eq: ["$paymentMethod", "cash"] }, 1, 0],
+            },
           },
           onlineEarnings: {
             $sum: {
-              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $ne: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
           onlineDeliveries: {
             $sum: {
-              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, 1, 0]
-            }
+              $cond: [{ $ne: ["$paymentMethod", "cash"] }, 1, 0],
+            },
           },
           pendingCashSettlements: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$paymentMethod', 'cash'] },
-                    { $ne: ['$metadata.isSettledToDriver', true] }
-                  ]
+                    { $eq: ["$paymentMethod", "cash"] },
+                    { $ne: ["$metadata.isSettledToDriver", true] },
+                  ],
                 },
-                '$amount',
-                0
-              ]
-            }
+                "$amount",
+                0,
+              ],
+            },
           },
           pendingCashCount: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$paymentMethod', 'cash'] },
-                    { $ne: ['$metadata.isSettledToDriver', true] }
-                  ]
+                    { $eq: ["$paymentMethod", "cash"] },
+                    { $ne: ["$metadata.isSettledToDriver", true] },
+                  ],
                 },
                 1,
-                0
-              ]
-            }
+                0,
+              ],
+            },
           },
-        }
-      }
+        },
+      },
     ]);
 
     // Get daily earnings for chart
@@ -4003,35 +4343,35 @@ export const getDriverEarningsSummary = async (req, res) => {
       {
         $match: {
           driverId: driver._id,
-          status: 'successful',
-          paidAt: { 
-            $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
-          }
-        }
+          status: "successful",
+          paidAt: {
+            $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
+          },
+        },
       },
       {
         $group: {
-          _id: { 
-            $dateToString: { 
-              format: "%Y-%m-%d", 
-              date: "$paidAt" 
-            } 
+          _id: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$paidAt",
+            },
           },
-          earnings: { $sum: '$amount' },
+          earnings: { $sum: "$amount" },
           deliveries: { $sum: 1 },
           cashEarnings: {
             $sum: {
-              $cond: [{ $eq: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $eq: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
           onlineEarnings: {
             $sum: {
-              $cond: [{ $ne: ['$paymentMethod', 'cash'] }, '$amount', 0]
-            }
+              $cond: [{ $ne: ["$paymentMethod", "cash"] }, "$amount", 0],
+            },
           },
-        }
+        },
       },
-      { $sort: { _id: 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
     // Get top earning days
@@ -4039,24 +4379,24 @@ export const getDriverEarningsSummary = async (req, res) => {
       {
         $match: {
           driverId: driver._id,
-          status: 'successful',
-          paidAt: { $gte: startDate }
-        }
+          status: "successful",
+          paidAt: { $gte: startDate },
+        },
       },
       {
         $group: {
-          _id: { 
-            $dateToString: { 
-              format: "%Y-%m-%d", 
-              date: "$paidAt" 
-            } 
+          _id: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$paidAt",
+            },
           },
-          earnings: { $sum: '$amount' },
+          earnings: { $sum: "$amount" },
           deliveries: { $sum: 1 },
-        }
+        },
       },
       { $sort: { earnings: -1 } },
-      { $limit: 5 }
+      { $limit: 5 },
     ]);
 
     const result = earningsData[0] || {
@@ -4072,37 +4412,42 @@ export const getDriverEarningsSummary = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Earnings summary retrieved successfully',
+      message: "Earnings summary retrieved successfully",
       data: {
         summary: {
           ...result,
-          averageEarningsPerDelivery: result.totalDeliveries > 0 
-            ? result.totalEarnings / result.totalDeliveries 
-            : 0,
-          settlementRate: result.cashDeliveries > 0
-            ? ((result.cashDeliveries - result.pendingCashCount) / result.cashDeliveries) * 100
-            : 100,
+          averageEarningsPerDelivery:
+            result.totalDeliveries > 0
+              ? result.totalEarnings / result.totalDeliveries
+              : 0,
+          settlementRate:
+            result.cashDeliveries > 0
+              ? ((result.cashDeliveries - result.pendingCashCount) /
+                  result.cashDeliveries) *
+                100
+              : 100,
         },
         dailyEarnings,
         topEarningDays,
         period,
-        currency: 'NGN',
+        currency: "NGN",
         driverInfo: {
           name: driverUser.name,
           phone: driverUser.phone,
           rating: driver.rating || 0,
           totalDeliveries: driver.totalDeliveries || 0,
-          acceptanceRate: driver.totalRequests ? 
-            Math.round((driver.acceptedRequests / driver.totalRequests) * 100) : 0,
+          acceptanceRate: driver.totalRequests
+            ? Math.round((driver.acceptedRequests / driver.totalRequests) * 100)
+            : 0,
         },
       },
     });
   } catch (error) {
-    console.error('❌ Get driver earnings summary error:', error);
+    console.error("âŒ Get driver earnings summary error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get earnings summary',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to get earnings summary",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -4114,20 +4459,20 @@ export const getDriverEarningsSummary = async (req, res) => {
  */
 export const getNigerianBanks = async (req, res) => {
   try {
-    console.log('🏦 Fetching Nigerian banks from Paystack...');
-    
+    console.log("ðŸ¦ Fetching Nigerian banks from Paystack...");
+
     const result = await getBankList();
 
     if (!result.success) {
       return res.status(500).json({
         success: false,
-        message: 'Failed to fetch bank list',
+        message: "Failed to fetch bank list",
         error: result.message,
       });
     }
 
     // Format for frontend dropdown
-    const banks = result.data.map(bank => ({
+    const banks = result.data.map((bank) => ({
       code: bank.code,
       name: bank.name,
       slug: bank.slug,
@@ -4136,7 +4481,7 @@ export const getNigerianBanks = async (req, res) => {
       type: bank.type,
     }));
 
-    console.log(`✅ Fetched ${banks.length} Nigerian banks`);
+    console.log(`âœ… Fetched ${banks.length} Nigerian banks`);
 
     res.status(200).json({
       success: true,
@@ -4144,16 +4489,15 @@ export const getNigerianBanks = async (req, res) => {
       message: `${banks.length} banks available`,
     });
   } catch (error) {
-    console.error('❌ Get banks error:', error);
+    console.error("âŒ Get banks error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch banks',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to fetch banks",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
- 
 /**
  * @desc    Setup company bank account (simplified - no bank code needed)
  * @route   POST /api/payments/company/setup-bank-account
@@ -4162,24 +4506,24 @@ export const getNigerianBanks = async (req, res) => {
 export const setupCompanyBankAccount = async (req, res) => {
   try {
     const companyUser = req.user;
-    
-    if (companyUser.role !== 'company_admin') {
+
+    if (companyUser.role !== "company") {
       return res.status(403).json({
         success: false,
-        message: 'Only companies can setup bank accounts',
+        message: "Only companies can setup bank accounts",
       });
     }
 
     const { accountNumber, accountName, bankCode } = req.body;
 
-    if (!accountNumber || !accountName  || !bankCode ) {
+    if (!accountNumber || !accountName || !bankCode) {
       return res.status(400).json({
         success: false,
-        message: 'Account number and account name are required',
+        message: "Account number and account name are required",
         required: {
-          accountNumber: 'Your 10-digit bank account number',
-          accountName: 'Account holder name (as registered with bank)',
-          bankCode: "code"
+          accountNumber: "Your 10-digit bank account number",
+          accountName: "Account holder name (as registered with bank)",
+          bankCode: "code",
         },
       });
     }
@@ -4188,7 +4532,7 @@ export const setupCompanyBankAccount = async (req, res) => {
     if (!/^\d{10}$/.test(accountNumber)) {
       return res.status(400).json({
         success: false,
-        message: 'Account number must be exactly 10 digits',
+        message: "Account number must be exactly 10 digits",
       });
     }
 
@@ -4196,13 +4540,13 @@ export const setupCompanyBankAccount = async (req, res) => {
     if (!company) {
       return res.status(404).json({
         success: false,
-        message: 'Company not found',
+        message: "Company not found",
       });
     }
 
-    console.log('🏦 Setting up bank account (no bank code needed)');
-    console.log('   Account:', accountNumber);
-    console.log('   Name:', accountName);
+    console.log("ðŸ¦ Setting up bank account (no bank code needed)");
+    console.log("   Account:", accountNumber);
+    console.log("   Name:", accountName);
 
     // Save account details
     company.bankAccount = {
@@ -4217,31 +4561,31 @@ export const setupCompanyBankAccount = async (req, res) => {
 
     await company.save();
 
-    console.log('✅ Bank account saved');
+    console.log("âœ… Bank account saved");
 
     res.status(200).json({
       success: true,
-      message: 'Bank account setup successfully',
+      message: "Bank account setup successfully",
       data: {
         accountNumber: accountNumber,
         accountName: accountName,
         bankCode: bankCode,
         verified: false,
-        note: 'Bank will be auto-detected when first settlement is made',
+        note: "Bank will be auto-detected when first settlement is made",
         nextSteps: [
-          'Bank account is saved',
-          'Bank name will be detected automatically by Paystack',
-          'First settlement will verify the account',
-          'Future settlements will use this account',
+          "Bank account is saved",
+          "Bank name will be detected automatically by Flutterwave",
+          "First settlement will verify the account",
+          "Future settlements will use this account",
         ],
       },
     });
   } catch (error) {
-    console.error('❌ Setup bank account error:', error);
+    console.error("âŒ Setup bank account error:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to setup bank account',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: "Failed to setup bank account",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -4265,32 +4609,40 @@ async function ensureCompanyBankCode(company) {
     if (!company.bankAccount?.accountNumber || !company.bankAccount?.bankName) {
       return {
         success: false,
-        error: 'Company bank account not configured',
+        error: "Company bank account not configured",
       };
     }
 
-    console.log('🔍 Auto-resolving bank code for:', company.bankAccount.bankName);
+    console.log(
+      "ðŸ” Auto-resolving bank code for:",
+      company.bankAccount.bankName,
+    );
 
     // Fetch bank list
     const banksResult = await getBankList();
     if (!banksResult.success) {
       return {
         success: false,
-        error: 'Failed to fetch bank list',
+        error: "Failed to fetch bank list",
       };
     }
 
     // Find bank by name
-    const bank = banksResult.data.find(b => 
-      b.name.toLowerCase().includes(company.bankAccount.bankName.toLowerCase()) ||
-      company.bankAccount.bankName.toLowerCase().includes(b.name.toLowerCase())
+    const bank = banksResult.data.find(
+      (b) =>
+        b.name
+          .toLowerCase()
+          .includes(company.bankAccount.bankName.toLowerCase()) ||
+        company.bankAccount.bankName
+          .toLowerCase()
+          .includes(b.name.toLowerCase()),
     );
 
     if (!bank) {
       return {
         success: false,
         error: `Bank "${company.bankAccount.bankName}" not found in Paystack`,
-        hint: 'Company should update bank details via /api/payments/company/setup-bank-account',
+        hint: "Company should update bank details via /api/payments/company/setup-bank-account",
       };
     }
 
@@ -4299,7 +4651,7 @@ async function ensureCompanyBankCode(company) {
     company.bankAccount.bankName = bank.name; // Use Paystack's official name
     await company.save();
 
-    console.log(`✅ Bank code auto-resolved: ${bank.code} (${bank.name})`);
+    console.log(`âœ… Bank code auto-resolved: ${bank.code} (${bank.name})`);
 
     return {
       success: true,
@@ -4319,23 +4671,26 @@ async function ensureCompanyBankCode(company) {
  * @route   POST /api/payments/refund/:paymentId
  * @access  Private (Internal use - called from cancelDelivery)
  */
-export const refundPayment = async (paymentId, reason = 'Delivery cancelled') => {
+export const refundPayment = async (
+  paymentId,
+  reason = "Delivery cancelled",
+) => {
   try {
-    console.log(`💸 [REFUND] Initiating refund for payment ${paymentId}`);
+    console.log(`ðŸ’¸ [REFUND] Initiating refund for payment ${paymentId}`);
 
     const payment = await Payment.findById(paymentId);
-    
+
     if (!payment) {
-      console.error('❌ Payment not found for refund');
+      console.error("âŒ Payment not found for refund");
       return {
         success: false,
-        error: 'Payment not found',
+        error: "Payment not found",
       };
     }
 
     // Check if already refunded
-    if (payment.refund?.status === 'refunded') {
-      console.log('⚠️ Payment already refunded');
+    if (payment.refund?.status === "refunded") {
+      console.log("âš ï¸ Payment already refunded");
       return {
         success: true,
         alreadyRefunded: true,
@@ -4345,99 +4700,163 @@ export const refundPayment = async (paymentId, reason = 'Delivery cancelled') =>
     }
 
     // Check if payment can be refunded
-    if (payment.status !== 'successful') {
-      console.log(`⚠️ Payment status ${payment.status} - no refund needed`);
+    if (payment.status !== "successful") {
+      console.log(`âš ï¸ Payment status ${payment.status} - no refund needed`);
       return {
         success: true,
         noRefundNeeded: true,
-        reason: 'Payment was not successful',
+        reason: "Payment was not successful",
       };
     }
 
     // Check payment method
-    if (payment.paymentMethod === 'cash') {
-      console.log('💵 Cash payment - no refund needed');
+    if (payment.paymentMethod === "cash") {
+      console.log("ðŸ’µ Cash payment - no refund needed");
       return {
         success: true,
         noRefundNeeded: true,
-        reason: 'Cash payment - no refund needed',
+        reason: "Cash payment - no refund needed",
       };
     }
 
-    // ✅ Initiate Paystack refund
+    // âœ… Initiate Flutterwave refund
     try {
-      const response = await paystackAxios.post('/refund', {
-        transaction: payment.paystackReference,
-        amount: Math.round(payment.amount * 100), // Convert to kobo
-        currency: 'NGN',
-        customer_note: reason,
-        merchant_note: `Refund for delivery cancellation - ${reason}`,
+      // Need the flw_ref stored during payment for Flutterwave refunds
+      const flwRef = payment.webhookData?.flw_ref || payment.metadata?.flwRef;
+
+      if (!flwRef) {
+        throw new Error(
+          "flw_ref not found â€” cannot process refund automatically",
+        );
+      }
+
+      const refundResult = await initiateRefund({
+        flwRef,
+        amount: payment.amount,
+        comments: reason,
       });
 
-      if (response.data.status === true) {
-        // Update payment with refund details
+      if (refundResult.success) {
         payment.refund = {
-          status: 'refunded',
-          refundId: response.data.data.id || response.data.data.transaction?.id,
+          status: "refunded",
+          refundId: refundResult.data.refundId,
           amount: payment.amount,
           refundedAt: new Date(),
-          reason: reason,
-          paystackResponse: response.data.data,
+          reason,
         };
-
-        payment.status = 'refunded';
-        
-        // Add to audit log
+        payment.status = "refunded";
         payment.auditLog.push({
-          action: 'refunded',
+          action: "refunded",
           timestamp: new Date(),
           details: {
-            refundId: payment.refund.refundId,
+            refundId: refundResult.data.refundId,
             amount: payment.amount,
-            reason: reason,
+            reason,
           },
         });
-
-        payment.markModified('refund');
+        payment.markModified("refund");
         await payment.save();
 
-        console.log(`✅ Refund successful - Refund ID: ${payment.refund.refundId}`);
-
+        console.log(
+          `âœ… Refund successful - Refund ID: ${refundResult.data.refundId}`,
+        );
         return {
           success: true,
-          refundId: payment.refund.refundId,
+          refundId: refundResult.data.refundId,
           amount: payment.amount,
           refundedAt: payment.refund.refundedAt,
         };
       } else {
-        throw new Error(response.data.message || 'Refund failed');
+        throw new Error(refundResult.message || "Refund failed");
       }
     } catch (refundError) {
-      console.error('❌ Paystack refund error:', refundError.response?.data || refundError.message);
+      console.error("âŒ Flutterwave refund error:", refundError.message);
 
-      // Mark as refund pending
       payment.refund = {
-        status: 'pending',
+        status: "pending",
         amount: payment.amount,
         requestedAt: new Date(),
-        reason: reason,
-        error: refundError.response?.data?.message || refundError.message,
+        reason,
+        error: refundError.message,
       };
-      payment.markModified('refund');
+      payment.markModified("refund");
       await payment.save();
 
       return {
         success: false,
-        error: refundError.response?.data?.message || 'Refund initiation failed',
+        error: refundError.message || "Refund initiation failed",
         refundPending: true,
         requiresManualRefund: true,
       };
     }
   } catch (error) {
-    console.error('❌ Refund error:', error);
+    console.error("âŒ Refund error:", error);
     return {
       success: false,
       error: error.message,
     };
   }
 };
+
+/**
+ * ============================================================
+ * MOBILE-FIRST HELPERS - Unified Response Formatting
+ * ============================================================
+ */
+
+function generatePaymentReference() {
+  return `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+}
+
+function formatTransferResponse(payment, delivery) {
+  const bankDetails = payment.metadata?.bankTransferDetails;
+
+  const isInstant = bankDetails?.type === "flutterwave_virtual" || bankDetails?.type === "dedicated_virtual";
+  const estimatedTime = isInstant ? "Instant (< 30 sec)" : "5-15 minutes";
+
+  return {
+    paymentId: payment._id,
+    reference: payment.paystackReference,
+    amount: payment.amount,
+    amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+    paymentType: "transfer",
+    status: "pending_transfer",
+    bankAccount: {
+      bankName: bankDetails?.bankName,
+      accountNumber: bankDetails?.accountNumber,
+      accountName: bankDetails?.accountName,
+      narration: bankDetails?.narration || "Not required",
+    },
+    timeframe: {
+      estimated: estimatedTime,
+      type: bankDetails?.type,
+    },
+    instructions: [
+      "Open your banking app",
+      `Transfer exactly ₦${payment.amount?.toLocaleString()}`,
+      "Return here — payment confirms automatically",
+    ],
+    polling: {
+      url: `/api/payments/status/${payment.paystackReference}`,
+      intervalSeconds: 5,
+      timeoutMinutes: 30,
+    },
+    breakdown: {
+      total: payment.amount,
+      platformFee: payment.platformFee,
+      companyAmount: payment.companyAmount,
+    },
+  };
+}
+function formatPaymentSuccessResponse(payment, delivery) {
+  return {
+    paymentId: payment._id,
+    reference: payment.paystackReference,
+    amount: payment.amount,
+    amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+    status: "paid",
+    paidAt: payment.paidAt,
+    deliveryId: delivery._id,
+    message: "Ready to find a driver",
+  };
+}

@@ -137,6 +137,8 @@ const deliverySchema = new mongoose.Schema({
       type: String,
       default: "pending",
     },
+    reference: String,
+    paidAt: Date,
   },
 
   // Status
@@ -177,6 +179,7 @@ const deliverySchema = new mongoose.Schema({
   assignedAt: Date,
   pickedUpAt: Date,
   deliveredAt: Date,
+  completedAt: Date,
   cancelledAt: Date,
 
   // Rating
