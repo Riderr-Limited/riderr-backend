@@ -920,19 +920,22 @@ export const startDelivery = async (req, res) => {
       });
     }
 
-    // Verify payment is still secured
-    const payment = await Payment.findOne({
-      deliveryId: delivery._id,
-      status: 'successful',
-    }).session(session);
+    // Verify payment is secured (skip check for cash payments)
+    const isCashDelivery = delivery.payment?.method === 'cash';
+    if (!isCashDelivery) {
+      const payment = await Payment.findOne({
+        deliveryId: delivery._id,
+        status: 'successful',
+      }).session(session);
 
-    if (!payment) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Payment not found or not confirmed",
-      });
+      if (!payment) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Payment not found or not confirmed",
+        });
+      }
     }
 
     delivery.status = "picked_up";
@@ -2543,6 +2546,8 @@ export const createDeliveryRequest = async (req, res) => {
 
       payment: {
         method: paymentMethod || "cash",
+        // cash: pending (pay on delivery)
+        // card/transfer: pending_payment (must pay before rider can accept)
         status: paymentMethod === "cash" ? "pending" : "pending_payment",
       },
 
@@ -2553,8 +2558,6 @@ export const createDeliveryRequest = async (req, res) => {
     await delivery.save();
 
     console.log(`✅ Delivery created: ${delivery._id} (${delivery.referenceId})`);
-    console.log(`📍 Pickup: ${resolvedPickupAddress}`);
-    console.log(`📍 Dropoff: ${resolvedDropoffAddress}`);
 
     await sendNotification({
       userId: customer._id,
@@ -2563,6 +2566,64 @@ export const createDeliveryRequest = async (req, res) => {
         delivery.referenceId
       ),
     });
+
+    // ─── AUTO-INITIALIZE PAYMENT FOR CARD / TRANSFER ───────────────────
+    let paymentData = null;
+
+    if (paymentMethod && paymentMethod !== "cash") {
+      try {
+        const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
+        const totalAmount = fareDetails.totalFare;
+        const platformFee = Math.round((totalAmount * PLATFORM_FEE_PCT) / 100);
+        const companyAmount = totalAmount - platformFee;
+        const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+
+        const payment = new Payment({
+          deliveryId: delivery._id,
+          customerId: customer._id,
+          amount: totalAmount,
+          currency: "NGN",
+          gateway: "flutterwave",
+          gatewayReference: reference,
+          paystackReference: reference,
+          status: "pending",
+          paymentMethod: paymentMethod === "transfer" ? "bank_transfer" : "card",
+          companyAmount,
+          platformFee,
+          paymentType: "escrow",
+          metadata: {
+            customerEmail: customer.email,
+            customerName: customer.name,
+            platform: "in-app",
+          },
+        });
+
+        await payment.save();
+
+        delivery.payment.reference = reference;
+        await delivery.save();
+
+        paymentData = {
+          paymentId: payment._id,
+          reference,
+          amount: totalAmount,
+          amountFormatted: `₦${totalAmount.toLocaleString()}`,
+          paymentMethod,
+          breakdown: {
+            total: totalAmount,
+            platformFee,
+            companyAmount,
+          },
+          // Card: app shows card form and calls /api/payments/charge-card
+          // Transfer: app shows bank details and polls /api/payments/status/:reference
+          nextAction: paymentMethod === "transfer" ? "show_bank_details" : "show_card_form",
+        };
+
+        console.log(`💳 Payment record created: ${reference} (${paymentMethod})`);
+      } catch (paymentError) {
+        console.error("⚠️ Payment init failed (delivery still created):", paymentError.message);
+      }
+    }
 
     const nearbyDrivers = await Driver.find({
       isOnline: true,
@@ -2657,11 +2718,19 @@ export const createDeliveryRequest = async (req, res) => {
           fare: delivery.fare,
           estimatedDistanceKm: delivery.estimatedDistanceKm,
           estimatedDurationMin: delivery.estimatedDurationMin,
+          payment: delivery.payment,
           createdAt: delivery.createdAt,
-          nearbyDriversCount: driversNearPickup.length,
         },
-        message: driversNearPickup.length > 0
-          ? `${driversNearPickup.length} nearby driver${driversNearPickup.length !== 1 ? 's' : ''} notified!`
+        // null for cash — app goes straight to "waiting for rider"
+        // present for card/transfer — app must complete payment first
+        payment: paymentData,
+        requiresPayment: paymentData !== null,
+        message: paymentData
+          ? paymentMethod === "transfer"
+            ? "Please complete bank transfer to confirm your delivery"
+            : "Please complete card payment to confirm your delivery"
+          : driversNearPickup.length > 0
+          ? `${driversNearPickup.length} nearby driver${driversNearPickup.length !== 1 ? "s" : ""} notified!`
           : "Request created. Searching for available drivers...",
       },
     });

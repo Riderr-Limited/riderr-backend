@@ -1,25 +1,25 @@
 import axios from "axios";
 import crypto from "crypto";
 
-const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
+const getSecretKey = () => process.env.FLW_SECRET_KEY;
 const FLW_PUBLIC_KEY = process.env.FLW_PUBLIC_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || "https://riderr-backend.onrender.com";
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
-if (!FLW_SECRET_KEY || FLW_SECRET_KEY.includes("your_")) {
+if (!process.env.FLW_SECRET_KEY || process.env.FLW_SECRET_KEY.includes("your_")) {
   console.warn("⚠️  FLW_SECRET_KEY not set — Flutterwave calls will fail");
 }
 
 const flwAxios = axios.create({
   baseURL: "https://api.flutterwave.com/v3",
   headers: {
-    Authorization: `Bearer ${FLW_SECRET_KEY}`,
     "Content-Type": "application/json",
   },
   timeout: 30000,
 });
 
 flwAxios.interceptors.request.use((config) => {
+  config.headers['Authorization'] = `Bearer ${getSecretKey()}`;
   console.log(`📤 Flutterwave → ${config.method?.toUpperCase()} ${config.url}`);
   return config;
 });
@@ -325,8 +325,8 @@ export const createDedicatedVirtualAccount = async (accountData) => {
       is_permanent: false,
       bvn: accountData.bvn || process.env.PLATFORM_BVN || "",
       tx_ref: txRef,
-      amount: accountData.metadata?.amount,
-      narration: `Riderr payment - ${txRef}`,
+      amount: accountData.amount || accountData.metadata?.amount,
+      narration: `Riderr Payment`,
     });
 
     if (response.data.status === "success") {
@@ -335,7 +335,7 @@ export const createDedicatedVirtualAccount = async (accountData) => {
         success: true,
         data: {
           accountNumber: d.account_number,
-          accountName: d.account_name,
+          accountName: process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
           bankName: d.bank_name,
           bankCode: "",
           reference: txRef,

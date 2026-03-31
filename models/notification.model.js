@@ -488,7 +488,7 @@ function getTimeAgo(date) {
 }
 
 // ========== PRE-SAVE MIDDLEWARE ==========
-NotificationSchema.pre('save', function(next) {
+NotificationSchema.pre('save', async function() {
   // Set default expiresAt for time-sensitive notifications
   if (!this.expiresAt && this.isHighPriority) {
     this.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days for high priority
@@ -499,7 +499,6 @@ NotificationSchema.pre('save', function(next) {
     this.message = this.message.substring(0, 497) + '...';
   }
   
-  next();
 });
 
 const Notification = mongoose.model("Notification", NotificationSchema);

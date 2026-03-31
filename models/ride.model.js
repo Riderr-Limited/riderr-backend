@@ -371,7 +371,7 @@ RideSchema.virtual('finalFare').get(function() {
 });
 
 // ========== PRE-SAVE MIDDLEWARE ==========
-RideSchema.pre('save', function(next) {
+RideSchema.pre('save', async function() {
   // Generate reference ID if not exists
   if (this.isNew && !this.referenceId) {
     this.referenceId = `RIDE-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
@@ -388,7 +388,6 @@ RideSchema.pre('save', function(next) {
     this.payment.paidAt = new Date();
   }
 
-  next();
 });
 
 // ========== INSTANCE METHODS ==========

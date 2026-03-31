@@ -290,19 +290,14 @@ paymentSchema.statics.getPlatformEarnings = async function (
 
 // ✅ FIXED: next() was commented out — this caused every payment.save()
 // to hang forever and never resolve, breaking the entire payment flow.
-paymentSchema.pre("save", function (next) {
-  // Auto-calculate split if amount changed and platformFee not set
+paymentSchema.pre("save", async function () {
   if (this.isModified("amount") && !this.platformFee) {
     this.platformFee = Math.round((this.amount * 10) / 100);
     this.companyAmount = this.amount - this.platformFee;
   }
-
-  // Store subaccount in escrowDetails
   if (this.metadata?.companySubaccount && !this.escrowDetails?.subaccountCode) {
     this.escrowDetails.subaccountCode = this.metadata.companySubaccount;
   }
-
-  next();
 });
 
 const Payment = mongoose.model("Payment", paymentSchema);

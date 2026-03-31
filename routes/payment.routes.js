@@ -25,6 +25,7 @@ import {
   getDriverEarningsSummary,
   getNigerianBanks,
   setupCompanyBankAccount,
+  getPaymentForDelivery,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -75,6 +76,7 @@ router.post('/driver-payments/:paymentId/mark-settled',              authenticat
 // ============================================================
 router.get('/banks', getNigerianBanks);
 router.post('/company/setup-bank-account', authenticate, setupCompanyBankAccount);
+router.get('/for-delivery/:deliveryId', authenticate, getPaymentForDelivery);
 
 // ============================================================
 // 7. DYNAMIC ROUTE — /:paymentId must ALWAYS be last

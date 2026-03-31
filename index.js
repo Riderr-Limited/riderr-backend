@@ -106,6 +106,7 @@ const startServer = async () => {
           "https://www.riderr.ng",
           "https://riderrr.vercel.app",
           "https://riderr-backend.onrender.com",
+          "http://10.44.168.181:5000",
           process.env.FRONTEND_URL,
           process.env.CLIENT_URL,
         ].filter(Boolean),

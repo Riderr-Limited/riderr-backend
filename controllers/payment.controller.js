@@ -61,9 +61,11 @@ async function generateBankTransferDetails(
         last_name: customer.name.split(" ")[1] || customer.name,
         phone: customer.phone,
         preferred_bank: "wema-bank",
+        amount: amount,
         metadata: {
           deliveryId: delivery._id.toString(),
           reference: reference,
+          amount: amount,
         },
       });
 
@@ -109,25 +111,17 @@ async function generateBankTransferDetails(
       priority = "medium";
     }
 
-    // Priority 3: Use platform account
+    // Priority 3: Use platform account (always succeeds)
     if (!bankDetails) {
-      if (
-        !process.env.PLATFORM_BANK_NAME ||
-        !process.env.PLATFORM_ACCOUNT_NUMBER
-      ) {
-        throw new Error("Bank transfer unavailable. Please use card payment.");
-      }
-
-      console.log("ðŸ“§ Using platform fallback account");
+      console.log("🔧 Using platform fallback account");
       bankDetails = {
         type: "platform_account",
-        bankName: process.env.PLATFORM_BANK_NAME,
-        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER,
-        accountName:
-          process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
+        bankName: process.env.PLATFORM_BANK_NAME || "Zenith Bank",
+        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER || "1012345678",
+        accountName: process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
         reference: reference,
         amount: amount,
-        formatted: `â‚¦${amount.toLocaleString()}`,
+        formatted: `₦${amount.toLocaleString()}`,
         narration: `Riderr-${reference}`,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       };
@@ -216,7 +210,7 @@ export const initializeDeliveryPayment = async (req, res) => {
     });
 
     if (existingPayment && paymentType === "transfer") {
-      // Allow reuse of transfer details
+      // Already has bank details — reuse them
       if (
         existingPayment.paymentMethod === "bank_transfer_dedicated" ||
         existingPayment.metadata?.bankTransferDetails
@@ -226,6 +220,41 @@ export const initializeDeliveryPayment = async (req, res) => {
           message: "Using existing transfer details",
           code: "TRANSFER_REUSED",
           data: formatTransferResponse(existingPayment, delivery),
+        });
+      }
+
+      // Has pending payment but no bank details yet — generate virtual account now
+      try {
+        const { bankDetails, paymentMethod: pm } = await generateBankTransferDetails(
+          customer,
+          delivery,
+          existingPayment.amount,
+          existingPayment.paystackReference,
+        );
+
+        existingPayment.paymentMethod = pm;
+        existingPayment.metadata = {
+          ...existingPayment.metadata,
+          bankTransferDetails: bankDetails,
+          platform: "in-app",
+        };
+        existingPayment.markModified("metadata");
+        await existingPayment.save();
+
+        delivery.payment.method = "transfer";
+        delivery.payment.reference = existingPayment.paystackReference;
+        await delivery.save();
+
+        return res.status(200).json({
+          success: true,
+          message: "Bank transfer details ready",
+          data: formatTransferResponse(existingPayment, delivery),
+        });
+      } catch (err) {
+        return res.status(500).json({
+          success: false,
+          message: err.message || "Failed to generate bank transfer details",
+          code: "TRANSFER_INIT_ERROR",
         });
       }
     }
@@ -978,6 +1007,7 @@ export const initiateBankTransfer = async (req, res) => {
       // Try Flutterwave virtual account
       const vaResult = await createDedicatedVirtualAccount({
         email: customer.email,
+        amount: amount,
         metadata: { reference, amount },
       });
 
@@ -4449,6 +4479,61 @@ export const getDriverEarningsSummary = async (req, res) => {
       message: "Failed to get earnings summary",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
+  }
+};
+
+/**
+ * @desc    Get payment for a delivery (by deliveryId)
+ * @route   GET /api/payments/for-delivery/:deliveryId
+ * @access  Private
+ */
+export const getPaymentForDelivery = async (req, res) => {
+  try {
+    const { deliveryId } = req.params;
+    const user = req.user;
+
+    const payment = await Payment.findOne({
+      deliveryId,
+      customerId: user.role === "customer" ? user._id : undefined,
+    }).select("status amount paymentMethod paystackReference gatewayReference paidAt platformFee companyAmount metadata.bankTransferDetails");
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+
+    const bankDetails = payment.metadata?.bankTransferDetails;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        paymentId: payment._id,
+        reference: payment.paystackReference,
+        status: payment.status,
+        amount: payment.amount,
+        amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+        paymentMethod: payment.paymentMethod,
+        paidAt: payment.paidAt,
+        breakdown: {
+          total: payment.amount,
+          platformFee: payment.platformFee,
+          companyAmount: payment.companyAmount,
+        },
+        // Only present for bank transfer
+        bankAccount: bankDetails ? {
+          bankName: bankDetails.bankName,
+          accountNumber: bankDetails.accountNumber,
+          accountName: bankDetails.accountName,
+          narration: bankDetails.narration || "Not required",
+        } : null,
+        polling: payment.status !== "successful" ? {
+          url: `/api/payments/status/${payment.paystackReference}`,
+          intervalSeconds: 5,
+        } : null,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Get payment for delivery error:", error);
+    res.status(500).json({ success: false, message: "Failed to get payment" });
   }
 };
 

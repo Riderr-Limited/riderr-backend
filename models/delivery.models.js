@@ -218,7 +218,7 @@ deliverySchema.index({ createdAt: -1 });
 deliverySchema.index({ 'rejectedByDrivers.driverId': 1 });
 
 // Generate reference ID before saving
-deliverySchema.pre("save", function (next) {
+deliverySchema.pre("save", async function () {
   if (!this.referenceId) {
     this.referenceId = `RID-${Date.now()}-${crypto
       .randomBytes(3)
@@ -226,7 +226,7 @@ deliverySchema.pre("save", function (next) {
       .toUpperCase()}`;
   }
   this.updatedAt = new Date();
- });
+});
 
 const Delivery = mongoose.model("Delivery", deliverySchema);
 

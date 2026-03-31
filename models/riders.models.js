@@ -352,7 +352,7 @@ DriverSchema.virtual('completionRate').get(function() {
 });
 
 // ========== PRE-SAVE MIDDLEWARE ==========
-DriverSchema.pre('save', function(next) {
+DriverSchema.pre('save', async function() {
   // Update location from lat/lng if provided
   if (this.isModified('lat') || this.isModified('lng')) {
     if (this.lng && this.lat) {

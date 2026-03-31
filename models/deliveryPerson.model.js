@@ -121,9 +121,8 @@ deliveryPersonSchema.index({ 'currentLocation.lat': 1, 'currentLocation.lng': 1 
 deliveryPersonSchema.index({ isOnline: 1, isAvailable: 1 });
 
 // Pre-save middleware
-deliveryPersonSchema.pre('save', function(next) {
+deliveryPersonSchema.pre('save', async function() {
   this.updatedAt = new Date();
-  next();
 });
 
 // Helper function to calculate distance
