@@ -1264,9 +1264,52 @@ export const approveDriver = async (req, res) => {
  * COMPANY MANAGEMENT  
  * ========================================
  */
- 
 
- 
+/**
+ * @desc    Approve company bank details
+ * @route   PUT /api/admin/companies/:companyId/bank-details/approve
+ * @access  Private (Admin)
+ */
+export const approveBankDetails = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    if (!company.bankDetails?.accountNumber) {
+      return res.status(400).json({ success: false, message: "Company has no bank details to approve" });
+    }
+
+    company.bankDetails.verified = true;
+    company.bankDetails.verifiedAt = new Date();
+    company.bankDetails.verifiedBy = req.user._id;
+    await company.save();
+
+    const admins = await User.find({ companyId: company._id, role: "company_admin" });
+    for (const admin of admins) {
+      await sendNotification({
+        userId: admin._id,
+        title: "Bank Details Approved",
+        message: "Your company bank details have been verified and approved",
+        type: "bank_details_approved",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Bank details approved successfully",
+      data: company.bankDetails,
+    });
+  } catch (error) {
+    console.error("Approve bank details error:", error);
+    res.status(500).json({ success: false, message: "Failed to approve bank details" });
+  }
+};
+
+
 
 /**
  * @desc    Get all companies

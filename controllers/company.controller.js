@@ -14,7 +14,7 @@ export const getCompanyProfile = async (req, res) => {
     const user = req.user;
 
     // Only company admins can access company profile
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can access company profile",
@@ -106,7 +106,7 @@ export const updateCompanyProfile = async (req, res) => {
     const updateData = req.body;
 
     // Only company admins can update company profile
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({
@@ -249,7 +249,7 @@ export const updateCompanySettings = async (req, res) => {
     const settings = req.body;
 
     // Only company admins can update settings
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can update settings",
@@ -325,7 +325,7 @@ export const uploadCompanyDocument = async (req, res) => {
     const file = req.file;
 
     // Only company admins can upload documents
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can upload documents",
@@ -418,7 +418,7 @@ export const getCompanyDrivers = async (req, res) => {
     const user = req.user;
 
     // Only company admins can access drivers
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can access drivers",
@@ -508,7 +508,7 @@ export const getCompanyStats = async (req, res) => {
     const user = req.user;
 
     // Only company admins can access stats
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can access statistics",
@@ -578,7 +578,7 @@ export const requestCompanyVerification = async (req, res) => {
     const user = req.user;
 
     // Only company admins can request verification
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can request verification",
@@ -675,7 +675,7 @@ export const getCompanyNotifications = async (req, res) => {
     const user = req.user;
 
     // Only company admins can access notifications
-    if (user.role !== "company_admin") {
+    if (!['company_admin','company'].includes(user.role)) {
       return res.status(403).json({
         success: false,
         message: "Only company administrators can access notifications",

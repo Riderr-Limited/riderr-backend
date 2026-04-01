@@ -26,6 +26,10 @@ import {
   getNigerianBanks,
   setupCompanyBankAccount,
   getPaymentForDelivery,
+  verifyAccountNumber,
+  getCompanyBankAccount,
+  updateCompanyBankAccount,
+  deleteCompanyBankAccount,
 } from '../controllers/payment.controller.js';
 
 const router = express.Router();
@@ -75,7 +79,11 @@ router.post('/driver-payments/:paymentId/mark-settled',              authenticat
 // 6. UTILITY ROUTES (must be before dynamic /:paymentId)
 // ============================================================
 router.get('/banks', getNigerianBanks);
+router.get('/verify-account', authenticate, verifyAccountNumber);
+router.get('/company/bank-account', authenticate, getCompanyBankAccount);
 router.post('/company/setup-bank-account', authenticate, setupCompanyBankAccount);
+router.put('/company/bank-account', authenticate, updateCompanyBankAccount);
+router.delete('/company/bank-account', authenticate, deleteCompanyBankAccount);
 router.get('/for-delivery/:deliveryId', authenticate, getPaymentForDelivery);
 
 // ============================================================

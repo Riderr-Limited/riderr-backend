@@ -252,10 +252,9 @@ contactPhone: {
       accountNumber: String,
       bankName: String,
       bankCode: String,
-      verified: {
-        type: Boolean,
-        default: false
-      }
+      verified: { type: Boolean, default: false },
+      verifiedAt: Date,
+      verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
     },
     // Inside Company schema
 paystackRecipientCode: {
@@ -316,7 +315,7 @@ CompanySchema.pre('save', async function() {
     this.slug = slug;
   }
   
-  // Update location from lat/lng if provided
+    // Update location from lat/lng if provided
   if (this.isModified('lat') || this.isModified('lng')) {
     if (this.lng && this.lat) {
       this.location = {

@@ -17,59 +17,58 @@ const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001',
-      'https://riderr.ng',
-      'https://www.riderr.ng',
-      'https://riderrr.vercel.app',
-      'https://api.riderr.vercel.app',
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:3001",
+      "https://riderr.ng",
+      "https://www.riderr.ng",
+      "https://riderrr.vercel.app",
+      "https://api.riderr.vercel.app",
       "https://api.riderrr.vercel.app",
       "https://api.riderr.ng/api",
       "https://riderr-backend.onrender.com/api",
-                "https://riderr-backend.onrender.com",
+      "https://riderr-backend.onrender.com",
+      "http://10.44.168.181:5000",
 
       // Add your actual deployed backend URL
       process.env.FRONTEND_URL,
-      process.env.CLIENT_URL
+      process.env.CLIENT_URL,
     ].filter(Boolean);
-    
+
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'Accept',
-    'Origin',
-    'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+    "Access-Control-Request-Method",
+    "Access-Control-Request-Headers",
   ],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400 // 24 hours
+  exposedHeaders: ["Content-Range", "X-Content-Range"],
+  maxAge: 86400, // 24 hours
 };
 
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
 // Handle preflight OPTIONS requests explicitly
- 
+
 /**
  * Security Middleware
  */
 app.use(helmet());
 app.set("trust proxy", true);
-
-
 
 /**
  * Body Parser Middleware
@@ -94,19 +93,19 @@ if (process.env.NODE_ENV === "development") {
 /**
  * Health check endpoint
  */
-app.get('/api/health', (req, res) => {
+app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'Server is healthy',
+    message: "Server is healthy",
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
   });
 });
 
 /**
  * Debug endpoint for deployment
  */
-app.get('/api/debug', (req, res) => {
+app.get("/api/debug", (req, res) => {
   res.json({
     success: true,
     environment: process.env.NODE_ENV,
@@ -114,38 +113,38 @@ app.get('/api/debug', (req, res) => {
     frontendUrl: process.env.FRONTEND_URL,
     backendUrl: process.env.BACKEND_URL,
     corsOrigins: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'https://riderr.ng',
-      'https://www.riderr.ng',
-      'https://riderrr.vercel.app',
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://riderr.ng",
+      "https://www.riderr.ng",
+      "https://riderrr.vercel.app",
       process.env.FRONTEND_URL,
-      process.env.CLIENT_URL
+      process.env.CLIENT_URL,
     ].filter(Boolean),
     requestOrigin: req.headers.origin,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
 /**
  * Test endpoint
  */
-app.get('/api/test-cors', (req, res) => {
+app.get("/api/test-cors", (req, res) => {
   res.json({
     success: true,
-    message: 'CORS is working!',
+    message: "CORS is working!",
     origin: req.headers.origin,
-    method: req.method
+    method: req.method,
   });
 });
 
-app.post('/api/test-cors', (req, res) => {
-  console.log('Test CORS POST received:', req.body);
+app.post("/api/test-cors", (req, res) => {
+  console.log("Test CORS POST received:", req.body);
   res.json({
     success: true,
-    message: 'POST request successful',
+    message: "POST request successful",
     data: req.body,
-    origin: req.headers.origin
+    origin: req.headers.origin,
   });
 });
 
@@ -177,7 +176,6 @@ app.get("/", (req, res) => {
 /**
  * 404 Handler
  */
- 
 
 /**
  * Global Error Handler
@@ -185,12 +183,12 @@ app.get("/", (req, res) => {
 app.use((err, req, res, next) => {
   console.error("❌ Error:", err);
 
-  if (err.message === 'Not allowed by CORS') {
+  if (err.message === "Not allowed by CORS") {
     return res.status(403).json({
       success: false,
-      message: 'Origin not allowed by CORS',
+      message: "Origin not allowed by CORS",
       origin: req.headers.origin,
-      allowedOrigins: ['http://localhost:3000', 'http://localhost:3001']
+      allowedOrigins: ["http://localhost:3000", "http://localhost:3001"],
     });
   }
 

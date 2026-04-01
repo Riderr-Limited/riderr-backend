@@ -4155,7 +4155,7 @@ export const markCashPaymentAsSettled = async (req, res) => {
   try {
     const companyUser = req.user;
 
-    if (companyUser.role !== "company") {
+    if (!['company','company_admin'].includes(companyUser.role)) {
       return res.status(403).json({
         success: false,
         message: "Only companies can mark payments as settled",
@@ -4584,6 +4584,199 @@ export const getNigerianBanks = async (req, res) => {
 };
 
 /**
+ * @desc    Get company bank account details
+ * @route   GET /api/payments/company/bank-account
+ * @access  Private (Company)
+ */
+export const getCompanyBankAccount = async (req, res) => {
+  try {
+    const company = await Company.findById(req.user.companyId)
+      .select('name bankAccount paystackRecipientCode');
+
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const hasAccount = !!company.bankAccount?.accountNumber;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isSetup: hasAccount,
+        bankAccount: hasAccount ? {
+          accountNumber: `****${company.bankAccount.accountNumber.slice(-4)}`,
+          accountNumberFull: company.bankAccount.accountNumber,
+          accountName: company.bankAccount.accountName,
+          bankCode: company.bankAccount.bankCode,
+          bankName: company.bankAccount.bankName || null,
+          verified: company.bankAccount.verified || false,
+          verifiedAt: company.bankAccount.verifiedAt || null,
+        } : null,
+        setupStatus: !hasAccount
+          ? 'not_setup'
+          : !company.bankAccount.verified
+          ? 'saved_unverified'
+          : 'verified',
+        message: !hasAccount
+          ? 'No bank account set up. Add one to receive payments.'
+          : !company.bankAccount.verified
+          ? 'Bank account saved. Will be verified on first settlement.'
+          : 'Bank account verified and ready to receive payments.',
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get company bank account error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get bank account' });
+  }
+};
+
+/**
+ * @desc    Update company bank account
+ * @route   PUT /api/payments/company/bank-account
+ * @access  Private (Company)
+ */
+export const updateCompanyBankAccount = async (req, res) => {
+  try {
+    const companyUser = req.user;
+
+    if (!['company','company_admin'].includes(companyUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only companies can update bank accounts' });
+    }
+
+    const { accountNumber, accountName, bankCode } = req.body;
+
+    if (!accountNumber || !accountName || !bankCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'accountNumber, accountName and bankCode are required',
+      });
+    }
+
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({ success: false, message: 'Account number must be exactly 10 digits' });
+    }
+
+    const company = await Company.findById(companyUser.companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    // Get bank name from bank list
+    const banksResult = await getBankList();
+    const bank = banksResult.success
+      ? banksResult.data.find(b => b.code === bankCode)
+      : null;
+
+    company.bankAccount = {
+      accountNumber,
+      accountName,
+      bankCode,
+      bankName: bank?.name || company.bankAccount?.bankName || null,
+      verified: false,
+      verifiedAt: null,
+    };
+    // Reset recipient code so it gets recreated with new account
+    company.paystackRecipientCode = null;
+    await company.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Bank account updated successfully',
+      data: {
+        accountNumber: `****${accountNumber.slice(-4)}`,
+        accountName,
+        bankCode,
+        bankName: bank?.name || null,
+        verified: false,
+        setupStatus: 'saved_unverified',
+      },
+    });
+  } catch (error) {
+    console.error('❌ Update company bank account error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update bank account' });
+  }
+};
+
+/**
+ * @desc    Delete / remove company bank account
+ * @route   DELETE /api/payments/company/bank-account
+ * @access  Private (Company)
+ */
+export const deleteCompanyBankAccount = async (req, res) => {
+  try {
+    const companyUser = req.user;
+
+    if (!['company','company_admin'].includes(companyUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only companies can remove bank accounts' });
+    }
+
+    const company = await Company.findById(companyUser.companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    company.bankAccount = undefined;
+    company.paystackRecipientCode = null;
+    await company.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Bank account removed successfully',
+      data: { isSetup: false, setupStatus: 'not_setup' },
+    });
+  } catch (error) {
+    console.error('❌ Delete company bank account error:', error);
+    res.status(500).json({ success: false, message: 'Failed to remove bank account' });
+  }
+};
+
+/**
+ * @desc    Verify bank account number (server-side, secret key never exposed)
+ * @route   GET /api/payments/verify-account?accountNumber=0123456789&bankCode=057
+ * @access  Private
+ */
+export const verifyAccountNumber = async (req, res) => {
+  try {
+    const { accountNumber, bankCode } = req.query;
+
+    if (!accountNumber || !bankCode) {
+      return res.status(400).json({
+        success: false,
+        message: "accountNumber and bankCode are required",
+      });
+    }
+
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "Account number must be exactly 10 digits",
+      });
+    }
+
+    const { resolveAccountNumber } = await import("../utils/paymentGateway.js");
+    const result = await resolveAccountNumber(accountNumber, bankCode);
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message || "Could not verify account. Check account number and bank.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        accountName: result.data.accountName,
+        accountNumber: result.data.accountNumber,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Verify account error:", error);
+    res.status(500).json({ success: false, message: "Failed to verify account" });
+  }
+};
+
+/**
  * @desc    Setup company bank account (simplified - no bank code needed)
  * @route   POST /api/payments/company/setup-bank-account
  * @access  Private (Company)
@@ -4592,7 +4785,7 @@ export const setupCompanyBankAccount = async (req, res) => {
   try {
     const companyUser = req.user;
 
-    if (companyUser.role !== "company") {
+    if (!['company','company_admin'].includes(companyUser.role)) {
       return res.status(403).json({
         success: false,
         message: "Only companies can setup bank accounts",

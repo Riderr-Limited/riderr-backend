@@ -23,6 +23,7 @@ import {
   getCompanyById,
   updateCompany,
   approveCompany,
+  approveBankDetails,
 
   // Delivery Management
   getAllDeliveries,
@@ -126,6 +127,9 @@ router.put("/companies/:companyId", updateCompany);
 
 // PUT /api/admin/companies/:companyId/approve - Approve/Reject company
 router.put("/companies/:companyId/approve", approveCompany);
+
+// PUT /api/admin/companies/:companyId/bank-details/approve - Approve bank details
+router.put("/companies/:companyId/bank-details/approve", approveBankDetails);
 
 /**
  * ========================================
