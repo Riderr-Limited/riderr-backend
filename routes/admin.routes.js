@@ -48,7 +48,7 @@ import {
 } from "../controllers/admin.controller.js";
 
 // Import middleware - using correct function names from auth.middleware.js
-import { protect, authorize } from "../middleware/auth.middleware.js";
+import { protect, authorize } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 

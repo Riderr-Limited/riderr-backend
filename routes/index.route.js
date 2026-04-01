@@ -13,6 +13,7 @@ import voiceCallRoutes from "./voiceCall.routes.js";
 import supportTicketRoutes from "./supportTicket.routes.js";
 import adminChatRoutes from "./adminChat.routes.js";
 import contactRoutes from "./contact.routes.js";
+import adminRoutes from "./admin.routes.js";
 
 const router = express.Router();
 
@@ -62,6 +63,9 @@ router.use("/notifications", notificationRoutes);
 router.use("/chat", chatRoutes);
 router.use("/voice-call", voiceCallRoutes);
 router.use("/v1/support", supportTicketRoutes);
+
+// Admin routes
+router.use("/admin", adminRoutes);
 
 // Admin chat routes
 router.use("/admin-chat", adminChatRoutes);
