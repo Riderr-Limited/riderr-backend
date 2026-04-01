@@ -32,6 +32,8 @@ const corsOptions = {
       "https://riderr-backend.onrender.com/api",
       "https://riderr-backend.onrender.com",
       "http://10.44.168.181:5000",
+      "https://logiq-admin-riderr.riderr.ng",
+      "https://admin-rider.vercel.app",
 
       // Add your actual deployed backend URL
       process.env.FRONTEND_URL,
