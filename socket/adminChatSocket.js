@@ -30,7 +30,7 @@ export default function adminChatSocket(io) {
         if (!user) return cb && cb({ error: "User not found" });
         if (!message) return cb && cb({ error: "Message required" });
 
-        const isAdmin = user.role === "System Admin";
+        const isAdmin = user.role === "admin";
         const chatUserId = isAdmin ? targetUserId : senderId;
 
         if (isAdmin && !targetUserId) {
