@@ -2,24 +2,49 @@ import axios from "axios";
 import crypto from "crypto";
 
 const getSecretKey = () => process.env.FLW_SECRET_KEY;
+const getClientId = () => process.env.FLW_CLIENT_ID;
+const getClientSecret = () => process.env.FLW_CLIENT_SECRET;
 const FLW_PUBLIC_KEY = process.env.FLW_PUBLIC_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || "https://riderr-backend.onrender.com";
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
-if (!process.env.FLW_SECRET_KEY || process.env.FLW_SECRET_KEY.includes("your_")) {
-  console.warn("⚠️  FLW_SECRET_KEY not set — Flutterwave calls will fail");
+// Detect which auth mode to use
+const isV4 = () => !!(process.env.FLW_CLIENT_ID && process.env.FLW_CLIENT_SECRET);
+
+if (!process.env.FLW_SECRET_KEY && !process.env.FLW_CLIENT_SECRET) {
+  console.warn("⚠️  No Flutterwave credentials set — API calls will fail");
 }
 
 const flwAxios = axios.create({
   baseURL: "https://api.flutterwave.com/v3",
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers: { "Content-Type": "application/json" },
   timeout: 30000,
 });
 
-flwAxios.interceptors.request.use((config) => {
-  config.headers['Authorization'] = `Bearer ${getSecretKey()}`;
+// V4 token cache
+let v4TokenCache = { token: null, expiresAt: 0 };
+
+async function getV4Token() {
+  if (v4TokenCache.token && Date.now() < v4TokenCache.expiresAt) {
+    return v4TokenCache.token;
+  }
+  const res = await axios.post("https://auth.flutterwave.com/v1/token", {
+    client_id: getClientId(),
+    client_secret: getClientSecret(),
+    grant_type: "client_credentials",
+  });
+  v4TokenCache.token = res.data.data?.access_token || res.data.access_token;
+  v4TokenCache.expiresAt = Date.now() + (res.data.data?.expires_in || 3600) * 1000 - 60000;
+  return v4TokenCache.token;
+}
+
+flwAxios.interceptors.request.use(async (config) => {
+  if (isV4()) {
+    const token = await getV4Token();
+    config.headers['Authorization'] = `Bearer ${token}`;
+  } else {
+    config.headers['Authorization'] = `Bearer ${getSecretKey()}`;
+  }
   console.log(`📤 Flutterwave → ${config.method?.toUpperCase()} ${config.url}`);
   return config;
 });
