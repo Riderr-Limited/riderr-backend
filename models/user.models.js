@@ -28,8 +28,7 @@ const UserSchema = new mongoose.Schema(
       validate: {
         validator: validator.isEmail,
         message: "Please provide a valid email address"
-      },
-      index: true
+      }
     },
 
     phone: {
@@ -37,7 +36,6 @@ const UserSchema = new mongoose.Schema(
       required: [true, "Phone number is required"],
       unique: true,
       trim: true,
-      index: true,
       validate: {
         validator: function(value) {
           return /^(\+234|0)[7-9][0-1]\d{8}$/.test(value.replace(/[\s\-\(\)]/g, ''));
@@ -74,8 +72,7 @@ const UserSchema = new mongoose.Schema(
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Driver",
-      default: null,
-      index: true
+      default: null
     },
 
     // Account status

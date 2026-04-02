@@ -280,11 +280,9 @@ paystackRecipientCode: {
 );
 
 // Indexes for better query performance
-CompanySchema.index({ location: '2dsphere' }); // For geospatial queries
+CompanySchema.index({ location: '2dsphere' });
 CompanySchema.index({ status: 1, isActive: 1 });
 CompanySchema.index({ city: 1, status: 1 });
-CompanySchema.index({ contactEmail: 1 });
-CompanySchema.index({ businessLicense: 1 });
 
 // Virtual for driver count
 CompanySchema.virtual('driverCount', {

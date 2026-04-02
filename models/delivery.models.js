@@ -7,7 +7,6 @@ const deliverySchema = new mongoose.Schema({
     type: String,
     unique: true,
     required: true,
-    index: true,
   },
 
   // ✅ driver 

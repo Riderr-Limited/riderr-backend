@@ -177,7 +177,6 @@ const paymentSchema = new mongoose.Schema(
 );
 
 // Indexes
-paymentSchema.index({ paystackReference: 1 });
 paymentSchema.index({ createdAt: -1 });
 paymentSchema.index({ "escrowDetails.subaccountCode": 1 });
 paymentSchema.index({ paymentType: 1, status: 1 });
