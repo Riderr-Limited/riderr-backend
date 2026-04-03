@@ -432,6 +432,7 @@ export const initiateTransfer = async (transferData) => {
   try {
     // Always use V3 secret key — V4 OAuth tokens don't support payouts
     console.log("🔑 Secret key prefix:", process.env.FLW_SECRET_KEY?.substring(0, 10));
+    console.log("🔑 Secret key length:", process.env.FLW_SECRET_KEY?.length);
     console.log("📦 Transfer payload:", JSON.stringify({
       account_bank: transferData.accountBank,
       account_number: transferData.accountNumber,
