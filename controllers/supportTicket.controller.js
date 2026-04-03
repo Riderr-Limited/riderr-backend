@@ -37,7 +37,7 @@ export const createSupportTicket = async (req, res) => {
 export const getTickets = async (req, res) => {
   try {
     const userId = req.user._id;
-    const isAdmin = req.user.role === "System Admin";
+    const isAdmin = req.user.role === "admin";
     const { status } = req.query;
 
     const query = isAdmin ? {} : { user: userId };
@@ -58,7 +58,7 @@ export const getTicketById = async (req, res) => {
   try {
     const { ticketId } = req.params;
     const userId = req.user._id;
-    const isAdmin = req.user.role === "System Admin";
+    const isAdmin = req.user.role === "admin";
 
     const ticket = await SupportTicket.findOne({ ticketId }).populate(
       "user",
@@ -84,7 +84,7 @@ export const getTicketMessages = async (req, res) => {
   try {
     const { ticketId } = req.params;
     const userId = req.user._id;
-    const isAdmin = req.user.role === "System Admin";
+    const isAdmin = req.user.role === "admin";
 
     const ticket = await SupportTicket.findOne({ ticketId });
     if (!ticket) {
@@ -110,7 +110,7 @@ export const updateTicketStatus = async (req, res) => {
   try {
     const { ticketId } = req.params;
     const { status } = req.body;
-    const isAdmin = req.user.role === "System Admin";
+    const isAdmin = req.user.role === "admin";
 
     if (!isAdmin) {
       return res.status(403).json({ success: false, message: "Admin only" });

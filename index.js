@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { setServers } from 'dns';
+setServers(['8.8.8.8', '8.8.4.4']);
 import { createServer } from "http";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
@@ -14,6 +16,8 @@ import adminChatSocket from "./socket/adminChatSocket.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express"; 
+
+
 
 
  const __filename = fileURLToPath(import.meta.url);

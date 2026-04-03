@@ -17,6 +17,7 @@ import {
   getDriverById,
   updateDriver,
   approveDriver,
+  deleteDriver,
 
   // Company Management
   getAllCompanies,
@@ -24,12 +25,14 @@ import {
   updateCompany,
   approveCompany,
   approveBankDetails,
+  deleteCompany,
 
   // Delivery Management
   getAllDeliveries,
   getDeliveryById,
   updateDeliveryStatus,
   assignDriver,
+  deleteDelivery,
 
   // Payment Management
   getAllPayments,
@@ -110,6 +113,9 @@ router.put("/drivers/:driverId", updateDriver);
 // PUT /api/admin/drivers/:driverId/approve - Approve/Reject driver
 router.put("/drivers/:driverId/approve", approveDriver);
 
+// DELETE /api/admin/drivers/:driverId - Delete/deactivate driver
+router.delete("/drivers/:driverId", deleteDriver);
+
 /**
  * ========================================
  * COMPANY MANAGEMENT ROUTES
@@ -131,6 +137,9 @@ router.put("/companies/:companyId/approve", approveCompany);
 // PUT /api/admin/companies/:companyId/bank-details/approve - Approve bank details
 router.put("/companies/:companyId/bank-details/approve", approveBankDetails);
 
+// DELETE /api/admin/companies/:companyId - Delete/suspend company
+router.delete("/companies/:companyId", deleteCompany);
+
 /**
  * ========================================
  * DELIVERY MANAGEMENT ROUTES
@@ -148,6 +157,9 @@ router.put("/deliveries/:deliveryId/status", updateDeliveryStatus);
 
 // PUT /api/admin/deliveries/:deliveryId/assign-driver - Assign driver
 router.put("/deliveries/:deliveryId/assign-driver", assignDriver);
+
+// DELETE /api/admin/deliveries/:deliveryId - Delete/cancel delivery
+router.delete("/deliveries/:deliveryId", deleteDelivery);
 
 /**
  * ========================================

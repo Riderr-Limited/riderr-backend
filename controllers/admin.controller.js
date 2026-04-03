@@ -1198,6 +1198,69 @@ export const updateDriver = async (req, res) => {
 };
 
 /**
+ * @desc    Delete driver (soft or permanent)
+ * @route   DELETE /api/admin/drivers/:driverId
+ * @access  Private (Admin)
+ */
+export const deleteDriver = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { driverId } = req.params;
+    const { permanent = false } = req.body;
+
+    const driver = await Driver.findById(driverId).populate("userId").session(session);
+    if (!driver) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Driver not found" });
+    }
+
+    if (permanent) {
+      await Driver.findByIdAndDelete(driverId).session(session);
+      if (driver.userId) {
+        await User.findByIdAndUpdate(driver.userId._id, {
+          isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: req.user._id,
+        }, { session });
+      }
+    } else {
+      await Driver.findByIdAndUpdate(driverId, {
+        $set: { isActive: false, isOnline: false, isAvailable: false },
+      }, { session });
+      if (driver.userId) {
+        await User.findByIdAndUpdate(driver.userId._id, {
+          isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: req.user._id,
+        }, { session });
+      }
+    }
+
+    await session.commitTransaction();
+
+    if (driver.userId) {
+      await sendNotification({
+        userId: driver.userId._id,
+        title: "Account Deactivated",
+        message: "Your driver account has been deactivated by an administrator",
+        type: "driver",
+        subType: "driver_suspended",
+        priority: "urgent",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: permanent ? "Driver permanently deleted" : "Driver deactivated successfully",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Delete driver error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete driver" });
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
  * @desc    Approve/Reject driver application
  * @route   PUT /api/admin/drivers/:driverId/approve
  * @access  Private (Admin)
@@ -1264,6 +1327,73 @@ export const approveDriver = async (req, res) => {
  * COMPANY MANAGEMENT  
  * ========================================
  */
+
+/**
+ * @desc    Delete company (soft or permanent)
+ * @route   DELETE /api/admin/companies/:companyId
+ * @access  Private (Admin)
+ */
+export const deleteCompany = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { companyId } = req.params;
+    const { permanent = false } = req.body;
+
+    const company = await Company.findById(companyId).session(session);
+    if (!company) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    const admins = await User.find({ companyId, role: "company_admin" }).select("_id");
+
+    if (permanent) {
+      await Driver.deleteMany({ companyId }).session(session);
+      await User.updateMany({ companyId }, {
+        $set: { isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: req.user._id },
+      }, { session });
+      await Company.findByIdAndDelete(companyId).session(session);
+    } else {
+      await Company.findByIdAndUpdate(companyId, {
+        $set: { status: "suspended" },
+      }, { session });
+      await Driver.updateMany({ companyId }, {
+        $set: { isActive: false, isOnline: false, isAvailable: false },
+      }, { session });
+      await User.updateMany({ companyId }, {
+        $set: { isActive: false },
+      }, { session });
+    }
+
+    await session.commitTransaction();
+
+    for (const admin of admins) {
+      await sendNotification({
+        userId: admin._id,
+        title: permanent ? "Company Deleted" : "Company Suspended",
+        message: permanent
+          ? "Your company has been permanently deleted by an administrator"
+          : "Your company has been suspended by an administrator",
+        type: "company",
+        subType: "company_suspended",
+        priority: "urgent",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: permanent ? "Company permanently deleted" : "Company suspended successfully",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Delete company error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete company" });
+  } finally {
+    session.endSession();
+  }
+};
 
 /**
  * @desc    Approve company bank details
@@ -1740,6 +1870,89 @@ export const getDeliveryById = async (req, res) => {
       success: false,
       message: "Failed to get delivery details",
     });
+  }
+};
+
+/**
+ * @desc    Delete delivery (soft or permanent)
+ * @route   DELETE /api/admin/deliveries/:deliveryId
+ * @access  Private (Admin)
+ */
+export const deleteDelivery = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { deliveryId } = req.params;
+    const { permanent = false, reason } = req.body;
+
+    const delivery = await Delivery.findById(deliveryId)
+      .populate("customerId", "_id name")
+      .populate({ path: "driverId", populate: { path: "userId", select: "_id" } })
+      .session(session);
+
+    if (!delivery) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Delivery not found" });
+    }
+
+    const activeStatuses = ["driver_assigned", "picked_up", "in_transit"];
+    if (activeStatuses.includes(delivery.status)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete a delivery with status '${delivery.status}'. Cancel it first.`,
+      });
+    }
+
+    if (permanent) {
+      await Delivery.findByIdAndDelete(deliveryId).session(session);
+    } else {
+      delivery.status = "cancelled";
+      delivery.cancelledAt = new Date();
+      delivery.cancellationReason = reason || "Deleted by admin";
+      delivery.isDeleted = true;
+      delivery.deletedAt = new Date();
+      delivery.deletedBy = req.user._id;
+      await delivery.save({ session });
+    }
+
+    await session.commitTransaction();
+
+    if (delivery.customerId) {
+      await sendNotification({
+        userId: delivery.customerId._id,
+        title: "Delivery Cancelled",
+        message: `Your delivery has been cancelled by an administrator.${reason ? ` Reason: ${reason}` : ""}`,
+        type: "delivery",
+        subType: "delivery_cancelled",
+        priority: "high",
+        data: { deliveryId: delivery._id },
+      });
+    }
+
+    if (delivery.driverId?.userId) {
+      await sendNotification({
+        userId: delivery.driverId.userId._id,
+        title: "Delivery Cancelled",
+        message: "A delivery assigned to you has been cancelled by an administrator",
+        type: "delivery",
+        subType: "delivery_cancelled",
+        priority: "high",
+        data: { deliveryId: delivery._id },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: permanent ? "Delivery permanently deleted" : "Delivery cancelled and deleted successfully",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Delete delivery error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete delivery" });
+  } finally {
+    session.endSession();
   }
 };
 

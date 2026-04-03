@@ -37,7 +37,7 @@ export default function supportSocket(io) {
     socket.on("agent_join", async ({ ticketId }, cb) => {
       try {
         const user = await User.findById(socket.user.userId);
-        if (!user || user.role !== "System Admin")
+        if (!user || user.role !== "admin")
           return cb && cb({ error: "Unauthorized" });
         if (!ticketId) return cb && cb({ error: "Ticket ID required" });
         socket.join(ticketId);

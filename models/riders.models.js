@@ -6,8 +6,7 @@ const DriverSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User ID is required"],
-      unique: true,
-      index: true
+      unique: true
     },
 
     companyId: {
@@ -58,8 +57,7 @@ const DriverSchema = new mongoose.Schema(
       required: [true, "Plate number is required"],
       unique: true,
       uppercase: true,
-      trim: true,
-      index: true
+      trim: true
     },
 
     // Availability & Status

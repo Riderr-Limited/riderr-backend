@@ -1,45 +1,21 @@
-// controllers/notification.controller.js
-
-import Notification from "../models/notificaton.models.js";
-import { markNotificationAsRead, markAllNotificationsAsRead, getUnreadCount } from "../utils/notification.js";
+import Notification from "../models/notification.model.js";
+import User from "../models/user.models.js";
+import { getUnreadCount } from "../utils/notification.js";
 
 /**
- * @desc    Get user's notifications
- * @route   GET /api/notifications
- * @access  Private
+ * @desc  Get notifications for the logged-in user
+ * @route GET /api/notifications
+ * @access Private
  */
-// controllers/notification.controller.js
-
 export const getNotifications = async (req, res) => {
   try {
-    const user = req.user;
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
-
-    // Build query - include personal AND company notifications if user is company admin
-    const query = {
-      $or: [
-        // Personal notifications
-        { userId: user._id },
-        // Company notifications (if user is a company admin)
-        ...(user.role === 'company' || user.companyId ? [
-          { 
-            type: 'company',
-            $or: [
-              { userId: user._id }, // Direct company notifications to user
-              { 'data.companyId': user.companyId }, // Company-wide notifications
-              { 'data.companyId': user._id }, // If companyId is the user's ID
-            ]
-          }
-        ] : [])
-      ]
-    };
-
-    // Add unread filter if needed
-    if (unreadOnly === 'true') {
-      query.isRead = false;
-    }
-
+    const { page = 1, limit = 20, unreadOnly, type, priority } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const query = { userId: req.user._id };
+    if (unreadOnly === "true") query.read = false;
+    if (type) query.type = type;
+    if (priority) query.priority = priority;
 
     const [notifications, total, unreadCount] = await Promise.all([
       Notification.find(query)
@@ -48,10 +24,10 @@ export const getNotifications = async (req, res) => {
         .limit(parseInt(limit))
         .lean(),
       Notification.countDocuments(query),
-      getUnreadCount(user._id), // You might need to update this too
+      getUnreadCount(req.user._id),
     ]);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: notifications,
       pagination: {
@@ -60,211 +36,199 @@ export const getNotifications = async (req, res) => {
         page: parseInt(page),
         limit: parseInt(limit),
         pages: Math.ceil(total / parseInt(limit)),
+        hasNextPage: parseInt(page) * parseInt(limit) < total,
+        hasPrevPage: parseInt(page) > 1,
       },
     });
   } catch (error) {
-    console.error("❌ Get notifications error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get notifications",
-    });
+    console.error("❌ getNotifications error:", error);
+    return res.status(500).json({ success: false, message: "Failed to get notifications" });
   }
 };
 
 /**
- * @desc    Get unread notification count
- * @route   GET /api/notifications/unread-count
- * @access  Private
+ * @desc  Get unread notification count
+ * @route GET /api/notifications/unread-count
+ * @access Private
  */
 export const getUnreadNotificationCount = async (req, res) => {
   try {
     const count = await getUnreadCount(req.user._id);
-
-    res.status(200).json({
-      success: true,
-      data: { count },
-    });
+    return res.status(200).json({ success: true, data: { count } });
   } catch (error) {
-    console.error("❌ Get unread count error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get unread count",
-    });
+    console.error("❌ getUnreadNotificationCount error:", error);
+    return res.status(500).json({ success: false, message: "Failed to get unread count" });
   }
 };
 
 /**
- * @desc    Mark notification as read
- * @route   PUT /api/notifications/:notificationId/read
- * @access  Private
+ * @desc  Get a single notification by ID
+ * @route GET /api/notifications/:notificationId
+ * @access Private
+ */
+export const getNotificationById = async (req, res) => {
+  try {
+    const notification = await Notification.findOne({
+      _id: req.params.notificationId,
+      userId: req.user._id,
+    });
+
+    if (!notification) {
+      return res.status(404).json({ success: false, message: "Notification not found" });
+    }
+
+    return res.status(200).json({ success: true, data: notification });
+  } catch (error) {
+    console.error("❌ getNotificationById error:", error);
+    return res.status(500).json({ success: false, message: "Failed to get notification" });
+  }
+};
+
+/**
+ * @desc  Mark a single notification as read
+ * @route PUT /api/notifications/:notificationId/read
+ * @access Private
  */
 export const markAsRead = async (req, res) => {
   try {
-    const { notificationId } = req.params;
-    const user = req.user;
-
-    const notification = await Notification.findOne({
-      _id: notificationId,
-      userId: user._id,
-    });
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.notificationId, userId: req.user._id },
+      { $set: { read: true, readAt: new Date() } },
+      { new: true }
+    );
 
     if (!notification) {
-      return res.status(404).json({
-        success: false,
-        message: "Notification not found",
-      });
+      return res.status(404).json({ success: false, message: "Notification not found" });
     }
 
-    await markNotificationAsRead(notificationId);
-
-    res.status(200).json({
-      success: true,
-      message: "Notification marked as read",
-    });
+    return res.status(200).json({ success: true, message: "Notification marked as read", data: notification });
   } catch (error) {
-    console.error("❌ Mark as read error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to mark notification as read",
-    });
+    console.error("❌ markAsRead error:", error);
+    return res.status(500).json({ success: false, message: "Failed to mark as read" });
   }
 };
 
 /**
- * @desc    Mark all notifications as read
- * @route   PUT /api/notifications/read-all
- * @access  Private
+ * @desc  Mark a single notification as clicked
+ * @route PUT /api/notifications/:notificationId/click
+ * @access Private
+ */
+export const markAsClicked = async (req, res) => {
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.notificationId, userId: req.user._id },
+      { $set: { clicked: true, clickedAt: new Date(), read: true, readAt: new Date() } },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({ success: false, message: "Notification not found" });
+    }
+
+    return res.status(200).json({ success: true, data: notification });
+  } catch (error) {
+    console.error("❌ markAsClicked error:", error);
+    return res.status(500).json({ success: false, message: "Failed to mark as clicked" });
+  }
+};
+
+/**
+ * @desc  Mark all notifications as read
+ * @route PUT /api/notifications/read-all
+ * @access Private
  */
 export const markAllAsRead = async (req, res) => {
   try {
-    await markAllNotificationsAsRead(req.user._id);
+    const result = await Notification.updateMany(
+      { userId: req.user._id, read: false },
+      { $set: { read: true, readAt: new Date() } }
+    );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "All notifications marked as read",
+      data: { updatedCount: result.modifiedCount },
     });
   } catch (error) {
-    console.error("❌ Mark all as read error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to mark all notifications as read",
-    });
+    console.error("❌ markAllAsRead error:", error);
+    return res.status(500).json({ success: false, message: "Failed to mark all as read" });
   }
 };
 
 /**
- * @desc    Delete notification
- * @route   DELETE /api/notifications/:notificationId
- * @access  Private
+ * @desc  Delete a single notification
+ * @route DELETE /api/notifications/:notificationId
+ * @access Private
  */
 export const deleteNotification = async (req, res) => {
   try {
-    const { notificationId } = req.params;
-    const user = req.user;
-
     const notification = await Notification.findOneAndDelete({
-      _id: notificationId,
-      userId: user._id,
+      _id: req.params.notificationId,
+      userId: req.user._id,
     });
 
     if (!notification) {
-      return res.status(404).json({
-        success: false,
-        message: "Notification not found",
-      });
+      return res.status(404).json({ success: false, message: "Notification not found" });
     }
 
-    res.status(200).json({
-      success: true,
-      message: "Notification deleted successfully",
-    });
+    return res.status(200).json({ success: true, message: "Notification deleted" });
   } catch (error) {
-    console.error("❌ Delete notification error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete notification",
-    });
+    console.error("❌ deleteNotification error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete notification" });
   }
 };
 
 /**
- * @desc    Delete all read notifications
- * @route   DELETE /api/notifications/clear-read
- * @access  Private
+ * @desc  Delete all read notifications for the user
+ * @route DELETE /api/notifications/clear-read
+ * @access Private
  */
 export const clearReadNotifications = async (req, res) => {
   try {
     const result = await Notification.deleteMany({
       userId: req.user._id,
-      isRead: true,
+      read: true,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: `${result.deletedCount} notifications cleared`,
       data: { deletedCount: result.deletedCount },
     });
   } catch (error) {
-    console.error("❌ Clear read notifications error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to clear notifications",
-    });
+    console.error("❌ clearReadNotifications error:", error);
+    return res.status(500).json({ success: false, message: "Failed to clear notifications" });
   }
 };
 
 /**
- * @desc    Update push notification token
- * @route   PUT /api/notifications/push-token
- * @access  Private
+ * @desc  Register / update push notification token
+ * @route PUT /api/notifications/push-token
+ * @access Private
  */
 export const updatePushToken = async (req, res) => {
   try {
     const { token, platform } = req.body;
 
     if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: "Push token is required",
-      });
+      return res.status(400).json({ success: false, message: "Push token is required" });
     }
 
     const user = await User.findById(req.user._id);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Update push token
     user.pushToken = token;
-    
-    // Add to device tokens array if not already present
-    if (!user.deviceTokens) {
-      user.deviceTokens = [];
-    }
-    
-    if (!user.deviceTokens.includes(token)) {
-      user.deviceTokens.push(token);
-    }
-
-    // Store platform info
-    if (platform) {
-      user.devicePlatform = platform; // 'ios' or 'android'
-    }
+    if (!user.deviceTokens) user.deviceTokens = [];
+    if (!user.deviceTokens.includes(token)) user.deviceTokens.push(token);
+    if (platform) user.devicePlatform = platform;
 
     await user.save();
 
-    res.status(200).json({
-      success: true,
-      message: "Push token updated successfully",
-    });
+    return res.status(200).json({ success: true, message: "Push token updated" });
   } catch (error) {
-    console.error("❌ Update push token error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update push token",
-    });
+    console.error("❌ updatePushToken error:", error);
+    return res.status(500).json({ success: false, message: "Failed to update push token" });
   }
 };
