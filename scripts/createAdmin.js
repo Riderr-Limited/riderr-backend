@@ -10,12 +10,14 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const ask = (q) => new Promise((res) => rl.question(q, res));
 
 const run = async () => {
-  const name     = await ask("Name:     ");
-  const email    = await ask("Email:    ");
-  const phone    = await ask("Phone:    ");
-  const password = await ask("Password: ");
+  // Collect all inputs BEFORE connecting to DB to avoid mongoose warnings interrupting prompts
+  const name     = (await ask("Name:     ")).trim();
+  const email    = (await ask("Email:    ")).trim();
+  const phone    = (await ask("Phone:    ")).trim();
+  const password = (await ask("Password: ")).trim();
   rl.close();
 
+  console.log("\nConnecting to database...");
   await mongoose.connect(process.env.MONGODB_URL);
 
   const existing = await User.findOne({ email });
