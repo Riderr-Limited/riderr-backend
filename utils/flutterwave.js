@@ -430,16 +430,27 @@ export const createTransferRecipient = async ({ accountName, accountNumber, bank
 // ─────────────────────────────────────────────────────────────
 export const initiateTransfer = async (transferData) => {
   try {
-    const response = await flwAxios.post("/transfers", {
-      account_bank: transferData.accountBank,
-      account_number: transferData.accountNumber,
-      amount: transferData.amount,
-      narration: transferData.reason || "Riderr settlement",
-      currency: "NGN",
-      reference: transferData.reference,
-      beneficiary_name: transferData.beneficiaryName,
-      callback_url: transferData.callback_url,
-    });
+    // Always use V3 secret key — V4 OAuth tokens don't support payouts
+    const response = await axios.post(
+      "https://api.flutterwave.com/v3/transfers",
+      {
+        account_bank: transferData.accountBank,
+        account_number: transferData.accountNumber,
+        amount: transferData.amount,
+        narration: transferData.reason || "Riderr settlement",
+        currency: "NGN",
+        reference: transferData.reference,
+        beneficiary_name: transferData.beneficiaryName,
+        callback_url: transferData.callback_url,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+      }
+    );
 
     if (response.data.status === "success") {
       const d = response.data.data;
