@@ -900,23 +900,21 @@ export const startDelivery = async (req, res) => {
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       driverId: driver._id,
+      status: "assigned",
     }).session(session);
 
     if (!delivery) {
       await session.abortTransaction();
       session.endSession();
+      // Check if delivery exists but belongs to another driver
+      const anyDelivery = await Delivery.findById(deliveryId);
       return res.status(404).json({
         success: false,
-        message: "Delivery not found or not assigned to this driver",
-      });
-    }
-
-    if (delivery.status !== "assigned") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot start delivery from status: ${delivery.status}`,
+        message: anyDelivery
+          ? anyDelivery.driverId?.toString() !== driver._id.toString()
+            ? "This delivery is not assigned to you"
+            : `Cannot start delivery from status: ${anyDelivery.status}`
+          : "Delivery not found",
       });
     }
 
@@ -1022,23 +1020,20 @@ export const completeDelivery = async (req, res) => {
     const delivery = await Delivery.findOne({
       _id: deliveryId,
       driverId: driver._id,
+      status: "picked_up",
     }).session(session);
 
     if (!delivery) {
       await session.abortTransaction();
       session.endSession();
+      const anyDelivery = await Delivery.findById(deliveryId);
       return res.status(404).json({
         success: false,
-        message: "Delivery not found",
-      });
-    }
-
-    if (delivery.status !== "picked_up") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot complete delivery from status: ${delivery.status}`,
+        message: anyDelivery
+          ? anyDelivery.driverId?.toString() !== driver._id.toString()
+            ? "This delivery is not assigned to you"
+            : `Cannot complete delivery from status: ${anyDelivery.status}`
+          : "Delivery not found",
       });
     }
 
@@ -1131,9 +1126,31 @@ export const getDriverActiveDelivery = async (req, res) => {
       });
     }
 
-    const delivery = await Delivery.findById(driver.currentDeliveryId)
-      .populate("customerId", "name phone avatarUrl rating")
-      .lean();
+    // First try currentDeliveryId, then fall back to querying by driverId
+    let delivery = null;
+    if (driver.currentDeliveryId) {
+      delivery = await Delivery.findById(driver.currentDeliveryId)
+        .populate("customerId", "name phone avatarUrl rating")
+        .lean();
+    }
+
+    // Fallback: find active delivery assigned to this driver
+    if (!delivery) {
+      delivery = await Delivery.findOne({
+        driverId: driver._id,
+        status: { $in: ["assigned", "picked_up"] },
+      })
+        .populate("customerId", "name phone avatarUrl rating")
+        .sort({ assignedAt: -1 })
+        .lean();
+
+      // Sync currentDeliveryId if found
+      if (delivery) {
+        driver.currentDeliveryId = delivery._id;
+        driver.isAvailable = false;
+        await driver.save();
+      }
+    }
 
     if (!delivery) {
       driver.currentDeliveryId = null;
@@ -2668,6 +2685,8 @@ export const createDeliveryRequest = async (req, res) => {
     console.log(`🚗 Notifying ${driversNearPickup.length} nearby drivers`);
 
     for (const driver of driversNearPickup) {
+      if (!driver.userId) continue;
+
       let driverLat, driverLng;
       
       if (

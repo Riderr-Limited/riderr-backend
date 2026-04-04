@@ -250,10 +250,16 @@ const DriverSchema = new mongoose.Schema(
       enum: ['english', 'yoruba', 'igbo', 'hausa', 'pidgin']
     }],
 
-    // Current Trip Reference
+    // Current Trip/Delivery Reference
     currentTripId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Ride",
+      default: null
+    },
+
+    currentDeliveryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Delivery",
       default: null
     },
 
