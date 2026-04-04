@@ -1,49 +1,47 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
-import dotenv from "dotenv";
+import readline from "readline";
 import User from "../models/user.models.js";
+import dotenv from "dotenv";
 
 dotenv.config();
 
-const ADMIN = {
-  name: "Riderr Super Admin",
-  email: "admin@riderr.ng",
-  phone: "+2348000000001",
-  password: "Riderr@Admin2025",
-  role: "admin",
-  isVerified: true,
-  isActive: true,
-};
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const ask = (q) => new Promise((res) => rl.question(q, res));
 
-const createAdmin = async () => {
-  try {
-    await mongoose.connect(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017/riderr_db");
-    console.log("🔗 Connected to database");
+const run = async () => {
+  // Collect all inputs BEFORE connecting to DB to avoid mongoose warnings interrupting prompts
+  const name     = (await ask("Name:     ")).trim();
+  const email    = (await ask("Email:    ")).trim();
+  const phone    = (await ask("Phone:    ")).trim();
+  const password = (await ask("Password: ")).trim();
+  rl.close();
 
-    const existing = await User.findOne({ email: ADMIN.email });
-    if (existing) {
-      console.log("⚠️  Admin already exists:", ADMIN.email);
-      return;
-    }
+  console.log("\nConnecting to database...");
+  await mongoose.connect(process.env.MONGODB_URL);
 
-    const hashedPassword = await bcrypt.hash(ADMIN.password, 10);
-
-    await User.create({ ...ADMIN, password: hashedPassword });
-
-    console.log("\n✅ Super Admin created successfully!");
-    console.log("================================");
-    console.log("  Email   :", ADMIN.email);
-    console.log("  Password:", ADMIN.password);
-    console.log("  Role    :", ADMIN.role);
-    console.log("================================");
-    console.log("⚠️  Change the password after first login!\n");
-  } catch (error) {
-    console.error("❌ Error:", error.message);
-    process.exit(1);
-  } finally {
-    await mongoose.disconnect();
-    console.log("🔌 Disconnected from database");
+  const existing = await User.findOne({ $or: [{ email }, { phone }] });
+  if (existing) {
+    console.log(`⚠️  User with that email or phone already exists.`);
+    process.exit(0);
   }
+
+  const admin = await User.create({
+    name,
+    email,
+    phone,
+    password: await bcrypt.hash(password, 10),
+    role: "admin",
+    isVerified: true,
+    isActive: true,
+  });
+
+  console.log(`\n✅ Super Admin created: ${admin.name} <${admin.email}>`);
+  console.log("⚠️  Change the password after first login!");
+  await mongoose.disconnect();
 };
 
-createAdmin();
+run().catch((err) => {
+  console.error("❌", err.message);
+  process.exit(1);
+});

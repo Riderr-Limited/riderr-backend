@@ -1652,7 +1652,7 @@ async function settlePaymentToCompany(payment, company) {
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // STEP 2 & 3: Create recipient (Paystack) or transfer directly (Flutterwave)
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    const transferReference = `SETTLE-${payment.paystackReference}`;
+    const transferReference = `SETTLE-${payment.paystackReference}-${Date.now()}`;
     const provider = getGatewayProvider();
 
     if (provider === "flutterwave") {
