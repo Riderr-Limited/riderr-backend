@@ -3,9 +3,29 @@ import Delivery from "../models/delivery.models.js";
 import Ride from "../models/ride.model.js";
 import User from "../models/user.models.js";
 import crypto from "crypto";
+import { RtcTokenBuilder, RtcRole } from "agora-token";
 
 // Store signaling messages temporarily
 const signalingMessages = new Map();
+
+// Generate Agora RTC token
+function generateAgoraToken(channelName, uid) {
+  const appId = process.env.AGORA_APP_ID;
+  const appCertificate = process.env.AGORA_APP_CERTIFICATE;
+  const expirationInSeconds = 3600; // 1 hour
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  const privilegeExpiredTs = currentTimestamp + expirationInSeconds;
+
+  return RtcTokenBuilder.buildTokenWithUid(
+    appId,
+    appCertificate,
+    channelName,
+    uid,
+    RtcRole.PUBLISHER,
+    expirationInSeconds,
+    privilegeExpiredTs
+  );
+}
 
 // Helper: resolve caller/receiver from delivery or ride
 async function resolveParties(contextType, contextId, callerId) {
@@ -75,9 +95,27 @@ export const initiateVoiceCall = async (req, res) => {
 
     const caller = await User.findById(callerId).select("name avatarUrl");
 
+    // Generate Agora tokens for both parties
+    // Use deliveryId/rideId as channel name, numeric uid from ObjectId
+    const channelName = contextId.toString();
+    const callerUid = Math.abs(callerId.toString().slice(-8).split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % 100000;
+    const receiverUid = Math.abs(receiverId.toString().slice(-8).split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % 100000;
+    const callerToken = generateAgoraToken(channelName, callerUid);
+    const receiverToken = generateAgoraToken(channelName, receiverUid);
+
     res.status(201).json({
       success: true,
-      data: { callId, status: "initiated", receiver: receiverId },
+      data: {
+        callId,
+        status: "initiated",
+        receiver: receiverId,
+        agora: {
+          appId: process.env.AGORA_APP_ID,
+          channel: channelName,
+          token: callerToken,
+          uid: callerUid,
+        },
+      },
     });
 
     const io = req.app.get("io");
@@ -87,6 +125,12 @@ export const initiateVoiceCall = async (req, res) => {
         deliveryId,
         rideId,
         caller: { id: callerId, name: caller.name, avatarUrl: caller.avatarUrl },
+        agora: {
+          appId: process.env.AGORA_APP_ID,
+          channel: channelName,
+          token: receiverToken,
+          uid: receiverUid,
+        },
       });
     }
   } catch (error) {
