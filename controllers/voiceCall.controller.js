@@ -1,64 +1,70 @@
 import VoiceCall from "../models/voiceCall.model.js";
 import Delivery from "../models/delivery.models.js";
+import Ride from "../models/ride.model.js";
 import User from "../models/user.models.js";
 import crypto from "crypto";
 
 // Store signaling messages temporarily
 const signalingMessages = new Map();
 
+// Helper: resolve caller/receiver from delivery or ride
+async function resolveParties(contextType, contextId, callerId) {
+  if (contextType === "delivery") {
+    const delivery = await Delivery.findById(contextId)
+      .populate("driverId", "userId")
+      .select("customerId driverId status");
+    if (!delivery) return null;
+    const isCustomer = delivery.customerId.toString() === callerId.toString();
+    const isDriver = delivery.driverId?.userId?.toString() === callerId.toString();
+    if (!isCustomer && !isDriver) return null;
+    return {
+      receiverId: isCustomer ? delivery.driverId.userId : delivery.customerId,
+      contextDoc: delivery,
+    };
+  } else {
+    const ride = await Ride.findById(contextId).select("customerId driverId status");
+    if (!ride) return null;
+    const isCustomer = ride.customerId?.toString() === callerId.toString();
+    const isDriver = ride.driverId?.toString() === callerId.toString();
+    if (!isCustomer && !isDriver) return null;
+    return {
+      receiverId: isCustomer ? ride.driverId : ride.customerId,
+      contextDoc: ride,
+    };
+  }
+}
+
 /**
  * Initiate voice call
  */
 export const initiateVoiceCall = async (req, res) => {
   try {
-    const { deliveryId } = req.params;
+    const { deliveryId, rideId } = req.params;
+    const contextType = rideId ? "ride" : "delivery";
+    const contextId = rideId || deliveryId;
     const callerId = req.user._id;
 
-    // Get delivery and verify access
-    const delivery = await Delivery.findById(deliveryId)
-      .populate("driverId", "userId")
-      .select("customerId driverId status");
-
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found",
-      });
+    const parties = await resolveParties(contextType, contextId, callerId);
+    if (!parties) {
+      return res.status(404).json({ success: false, message: "Not found or access denied" });
     }
 
-    // Verify user is part of this delivery
-    const isCustomer = delivery.customerId.toString() === callerId.toString();
-    const isDriver = delivery.driverId?.userId?.toString() === callerId.toString();
-
-    if (!isCustomer && !isDriver) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied",
-      });
-    }
-
-    // Determine receiver
-    const receiverId = isCustomer 
-      ? delivery.driverId.userId 
-      : delivery.customerId;
+    const { receiverId } = parties;
 
     // Check for existing active call
     const existingCall = await VoiceCall.findOne({
-      deliveryId,
+      [`${contextType}Id`]: contextId,
       status: { $in: ["initiated", "ringing", "answered"] },
     });
 
     if (existingCall) {
-      return res.status(400).json({
-        success: false,
-        message: "Call already in progress",
-      });
+      return res.status(400).json({ success: false, message: "Call already in progress" });
     }
 
-    // Create call record
     const callId = `CALL-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     const voiceCall = new VoiceCall({
-      deliveryId,
+      deliveryId: contextType === "delivery" ? contextId : undefined,
+      rideId: contextType === "ride" ? contextId : undefined,
       callId,
       caller: callerId,
       receiver: receiverId,
@@ -67,37 +73,25 @@ export const initiateVoiceCall = async (req, res) => {
 
     await voiceCall.save();
 
-    // Get caller info for notification
     const caller = await User.findById(callerId).select("name avatarUrl");
 
     res.status(201).json({
       success: true,
-      data: {
-        callId,
-        status: "initiated",
-        receiver: receiverId,
-      },
+      data: { callId, status: "initiated", receiver: receiverId },
     });
 
-    // Emit to receiver via Socket.IO (handled in socket file)
     const io = req.app.get("io");
     if (io) {
       io.to(`user_${receiverId}`).emit("incoming_voice_call", {
         callId,
         deliveryId,
-        caller: {
-          id: callerId,
-          name: caller.name,
-          avatarUrl: caller.avatarUrl,
-        },
+        rideId,
+        caller: { id: callerId, name: caller.name, avatarUrl: caller.avatarUrl },
       });
     }
   } catch (error) {
     console.error("Initiate voice call error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to initiate call",
-    });
+    res.status(500).json({ success: false, message: "Failed to initiate call" });
   }
 };
 

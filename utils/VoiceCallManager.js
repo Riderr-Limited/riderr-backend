@@ -39,8 +39,10 @@ class VoiceCallManager {
   }
 
   // Initiate voice call
-  async initiateCall(deliveryId) {
+  async initiateCall(deliveryId, callId, receiverId) {
     try {
+      this.currentCall = { callId, deliveryId, otherUserId: receiverId };
+
       // Get user media
       this.localStream = await this.getUserMedia();
       
@@ -77,7 +79,7 @@ class VoiceCallManager {
       this.currentCall = { callId };
       
       // Answer via API
-      const response = await fetch(`/api/voice/voice-calls/${callId}/answer`, {
+      const response = await fetch(`/api/voice-call/voice-calls/${callId}/answer`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.getToken()}`,
@@ -100,7 +102,7 @@ class VoiceCallManager {
     try {
       if (this.currentCall) {
         // End via API
-        await fetch(`/api/voice/voice-calls/${this.currentCall.callId}/end`, {
+        await fetch(`/api/voice-call/voice-calls/${this.currentCall.callId}/end`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${this.getToken()}`

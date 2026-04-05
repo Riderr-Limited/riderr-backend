@@ -4,7 +4,11 @@ const voiceCallSchema = new mongoose.Schema({
   deliveryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Delivery",
-    required: true,
+    index: true,
+  },
+  rideId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Ride",
     index: true,
   },
   callId: {

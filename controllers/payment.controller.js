@@ -1337,6 +1337,15 @@ export const completeAndSettlePayment = async (req, res) => {
     if (!delivery) {
       await session.abortTransaction();
       session.endSession();
+      // Check if delivery exists but belongs to another customer
+      const exists = await Delivery.findById(deliveryId).select("customerId status").lean();
+      if (exists) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: this delivery does not belong to your account",
+          code: "DELIVERY_ACCESS_DENIED",
+        });
+      }
       return res.status(404).json({
         success: false,
         message: "Delivery not found",
@@ -1361,9 +1370,15 @@ export const completeAndSettlePayment = async (req, res) => {
     if (!payment) {
       await session.abortTransaction();
       session.endSession();
+      // Check actual payment status for better error message
+      const anyPayment = await Payment.findOne({ deliveryId: delivery._id }).select("status").lean();
       return res.status(404).json({
         success: false,
-        message: "Payment not found or not successful",
+        message: anyPayment
+          ? `Payment is not yet confirmed. Current status: ${anyPayment.status}. Please wait for payment verification.`
+          : "No payment found for this delivery",
+        code: anyPayment ? "PAYMENT_NOT_CONFIRMED" : "PAYMENT_NOT_FOUND",
+        paymentStatus: anyPayment?.status,
       });
     }
 
