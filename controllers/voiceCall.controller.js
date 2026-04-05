@@ -3,7 +3,8 @@ import Delivery from "../models/delivery.models.js";
 import Ride from "../models/ride.model.js";
 import User from "../models/user.models.js";
 import crypto from "crypto";
-import { RtcTokenBuilder, RtcRole } from "agora-token";
+import pkg from "agora-token";
+const { RtcTokenBuilder, RtcRole } = pkg;
 
 // Store signaling messages temporarily
 const signalingMessages = new Map();
