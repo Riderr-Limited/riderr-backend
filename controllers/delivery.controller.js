@@ -3360,8 +3360,7 @@ export const getNearbyDrivers = async (req, res) => {
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
-      isActive: true,
-      approvalStatus: 'approved',
+      isSuspended: { $ne: true },
       currentDeliveryId: null,
     })
       .populate('userId', 'name phone avatarUrl rating totalRatings')
