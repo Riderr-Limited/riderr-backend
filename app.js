@@ -105,6 +105,18 @@ app.get("/api/health", (req, res) => {
 });
 
 /**
+ * Temporary: Get server outbound IP (for Flutterwave whitelisting - REMOVE AFTER USE)
+ */
+app.get("/api/my-ip", async (req, res) => {
+  const https = await import("https");
+  https.get("https://api.ipify.org?format=json", (resp) => {
+    let data = "";
+    resp.on("data", (chunk) => (data += chunk));
+    resp.on("end", () => res.json(JSON.parse(data)));
+  }).on("error", (err) => res.status(500).json({ error: err.message }));
+});
+
+/**
  * Debug endpoint for deployment
  */
 app.get("/api/debug", (req, res) => {
