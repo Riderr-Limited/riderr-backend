@@ -10,7 +10,8 @@ import {
   getCustomerDeliveries,
   getDriverActiveDelivery,
   rateDelivery,
-  addTip
+  addTip,
+  getNearbyDrivers
 } from '../controllers/newDelivery.controller.js';
 
 const router = express.Router();
@@ -73,5 +74,9 @@ router.post('/:deliveryId/rate', rateDelivery);
 // POST /api/deliveries/:deliveryId/tip
 // Body: { amount }
 router.post('/:deliveryId/tip', addTip);
+
+// Get nearby drivers for delivery
+// GET /api/deliveries/nearby-drivers?lat=&lng=&radius=&vehicleType=
+router.get('/nearby-drivers', getNearbyDrivers);
 
 export default router;

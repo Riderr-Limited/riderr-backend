@@ -539,8 +539,19 @@ export const toggleDriverOnlineStatus = async (req, res) => {
         driver.lastOnlineStart = null;
       }
     } else {
+      driver.isAvailable = true;
       driver.canAcceptDeliveries = true;
       driver.lastOnlineStart = new Date();
+      // Clear stale delivery reference so driver shows as available
+      if (driver.currentDeliveryId) {
+        const activeDelivery = await Delivery.findOne({
+          _id: driver.currentDeliveryId,
+          status: { $in: ['assigned', 'picked_up'] }
+        });
+        if (!activeDelivery) {
+          driver.currentDeliveryId = null;
+        }
+      }
     }
 
     await driver.save();

@@ -649,6 +649,63 @@ export const rateDelivery = async (req, res) => {
   }
 };
 
+// Get nearby drivers for delivery
+export const getNearbyDrivers = async (req, res) => {
+  try {
+    const { lat, lng, radius = 10000, vehicleType } = req.query;
+
+    if (!lat || !lng) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude are required' });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const maxDistanceKm = parseFloat(radius) / 1000;
+
+    const query = {
+      isOnline: true,
+      isSuspended: { $ne: true },
+      'location.coordinates': { $exists: true }
+    };
+
+    if (vehicleType) query.vehicleType = vehicleType;
+
+    const drivers = await Driver.find(query).populate('userId', 'name phone avatarUrl');
+    console.log(`🔍 Nearby drivers query found ${drivers.length} online drivers`);
+
+    const nearby = drivers
+      .map(driver => {
+        const [driverLng, driverLat] = driver.location.coordinates;
+        const distance = calculateDistance(latitude, longitude, driverLat, driverLng);
+        return { driver, distance };
+      })
+      .filter(({ distance }) => distance <= maxDistanceKm)
+      .sort((a, b) => a.distance - b.distance)
+      .map(({ driver, distance }) => ({
+        _id: driver._id,
+        userId: driver.userId,
+        vehicleType: driver.vehicleType,
+        vehicleMake: driver.vehicleMake,
+        vehicleModel: driver.vehicleModel,
+        vehicleColor: driver.vehicleColor,
+        plateNumber: driver.plateNumber,
+        rating: driver.rating,
+        location: {
+          lat: driver.location.coordinates[1],
+          lng: driver.location.coordinates[0]
+        },
+        distance: parseFloat(distance.toFixed(2)),
+        distanceText: `${distance.toFixed(1)} km away`,
+        estimatedArrival: Math.ceil(distance * 3)
+      }));
+
+    res.status(200).json({ success: true, count: nearby.length, data: nearby });
+  } catch (error) {
+    console.error('Get nearby drivers error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // Add tip to delivery
 export const addTip = async (req, res) => {
   try {
