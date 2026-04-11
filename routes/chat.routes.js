@@ -1,3 +1,9 @@
+/**
+ * @swagger
+ * tags:
+ *   name: Chat
+ *   description: Delivery chat between customer and driver
+ */
 import express from "express";
 import { body } from "express-validator";
 import {
@@ -29,18 +35,51 @@ const messageValidation = [
     .withMessage("Invalid message type"),
 ];
 
-// Routes
+/**
+ * @swagger
+ * /chat/{deliveryId}/messages:
+ *   get:
+ *     tags: [Chat]
+ *     summary: Get chat history for a delivery
+ *     parameters:
+ *       - in: path
+ *         name: deliveryId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chat messages
+ */
 router.get("/:deliveryId/messages", canAccessDeliveryChat, getChatHistory);
-router.post(
-  "/:deliveryId/message",
-  canAccessDeliveryChat,
-  messageValidation,
-  sendMessage,
-);
+
+/**
+ * @swagger
+ * /chat/{deliveryId}/message:
+ *   post:
+ *     tags: [Chat]
+ *     summary: Send a message in a delivery chat
+ *     parameters:
+ *       - in: path
+ *         name: deliveryId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [message]
+ *             properties:
+ *               message: { type: string, maxLength: 500 }
+ *               messageType: { type: string, enum: [text, image, location], default: text }
+ *     responses:
+ *       201:
+ *         description: Message sent
+ */
+router.post("/:deliveryId/message", canAccessDeliveryChat, messageValidation, sendMessage);
 router.put("/:deliveryId/read", canAccessDeliveryChat, markMessagesAsRead);
 router.get("/unread/count", getUnreadCount);
-
-// Voice call integration
 router.post("/:deliveryId/voice-call", canAccessDeliveryChat, initiateVoiceCallFromChat);
 
 export default router;

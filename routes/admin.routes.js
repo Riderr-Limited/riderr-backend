@@ -1,3 +1,9 @@
+/**
+ * @swagger
+ * tags:
+ *   name: Admin
+ *   description: Admin-only management endpoints
+ */
 import express from "express";
 import {
   // Dashboard & Analytics
@@ -65,145 +71,185 @@ router.use(authorize("admin")); // Only admins can access these routes
  * ========================================
  */
 
-// GET /api/admin/dashboard - Get dashboard overview
+// GET /api/admin/dashboard
+/**
+ * @swagger
+ * /admin/dashboard:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get dashboard overview
+ *     responses:
+ *       200:
+ *         description: Dashboard data
+ */
 router.get("/dashboard", getDashboardOverview);
 
-// GET /api/admin/analytics - Get platform analytics
+/**
+ * @swagger
+ * /admin/analytics:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get platform analytics
+ *     responses:
+ *       200:
+ *         description: Analytics data
+ */
 router.get("/analytics", getPlatformAnalytics);
 
 /**
- * ========================================
- * USER MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/users:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all users
+ *     parameters:
+ *       - in: query
+ *         name: role
+ *         schema: { type: string, enum: [customer, driver, company_admin, admin] }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Users list
  */
-
-// GET /api/admin/users - Get all users with filtering
 router.get("/users", getAllUsers);
-
-// GET /api/admin/users/:userId - Get user details
 router.get("/users/:userId", getUserById);
-
-// PUT /api/admin/users/:userId - Update user
 router.put("/users/:userId", updateUser);
-
-// PUT /api/admin/users/:userId/suspend - Suspend/Unsuspend user
 router.put("/users/:userId/suspend", suspendUser);
-
-// DELETE /api/admin/users/:userId - Delete user
 router.delete("/users/:userId", deleteUser);
-
-// POST /api/admin/users/:userId/reset-password - Reset user password
 router.post("/users/:userId/reset-password", resetUserPassword);
 
 /**
- * ========================================
- * DRIVER MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/drivers:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all drivers
+ *     responses:
+ *       200:
+ *         description: Drivers list
  */
-
-// GET /api/admin/drivers - Get all drivers
 router.get("/drivers", getAllDrivers);
-
-// GET /api/admin/drivers/:driverId - Get driver details
 router.get("/drivers/:driverId", getDriverById);
-
-// PUT /api/admin/drivers/:driverId - Update driver
 router.put("/drivers/:driverId", updateDriver);
-
-// PUT /api/admin/drivers/:driverId/approve - Approve/Reject driver
 router.put("/drivers/:driverId/approve", approveDriver);
-
-// DELETE /api/admin/drivers/:driverId - Delete/deactivate driver
 router.delete("/drivers/:driverId", deleteDriver);
 
 /**
- * ========================================
- * COMPANY MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/companies:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all companies
+ *     responses:
+ *       200:
+ *         description: Companies list
  */
-
-// GET /api/admin/companies - Get all companies
 router.get("/companies", getAllCompanies);
-
-// GET /api/admin/companies/:companyId - Get company details
 router.get("/companies/:companyId", getCompanyById);
-
-// PUT /api/admin/companies/:companyId - Update company
 router.put("/companies/:companyId", updateCompany);
-
-// PUT /api/admin/companies/:companyId/approve - Approve/Reject company
 router.put("/companies/:companyId/approve", approveCompany);
-
-// PUT /api/admin/companies/:companyId/bank-details/approve - Approve bank details
 router.put("/companies/:companyId/bank-details/approve", approveBankDetails);
-
-// DELETE /api/admin/companies/:companyId - Delete/suspend company
 router.delete("/companies/:companyId", deleteCompany);
 
 /**
- * ========================================
- * DELIVERY MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/deliveries:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all deliveries
+ *     responses:
+ *       200:
+ *         description: Deliveries list
  */
-
-// GET /api/admin/deliveries - Get all deliveries
 router.get("/deliveries", getAllDeliveries);
-
-// GET /api/admin/deliveries/:deliveryId - Get delivery details
 router.get("/deliveries/:deliveryId", getDeliveryById);
-
-// PUT /api/admin/deliveries/:deliveryId/status - Update delivery status
 router.put("/deliveries/:deliveryId/status", updateDeliveryStatus);
-
-// PUT /api/admin/deliveries/:deliveryId/assign-driver - Assign driver
 router.put("/deliveries/:deliveryId/assign-driver", assignDriver);
-
-// DELETE /api/admin/deliveries/:deliveryId - Delete/cancel delivery
 router.delete("/deliveries/:deliveryId", deleteDelivery);
 
 /**
- * ========================================
- * PAYMENT MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/payments:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all payments
+ *     responses:
+ *       200:
+ *         description: Payments list
  */
-
-// GET /api/admin/payments - Get all payments
 router.get("/payments", getAllPayments);
-
-// GET /api/admin/payments/:paymentId - Get payment details
 router.get("/payments/:paymentId", getPaymentById);
-
-// POST /api/admin/payments/:paymentId/refund - Issue refund
 router.post("/payments/:paymentId/refund", issueRefund);
 
 /**
- * ========================================
- * SUPPORT TICKET MANAGEMENT ROUTES
- * ========================================
+ * @swagger
+ * /admin/support-tickets:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get all support tickets
+ *     responses:
+ *       200:
+ *         description: Support tickets
  */
-
-// GET /api/admin/support-tickets - Get all support tickets
 router.get("/support-tickets", getAllSupportTickets);
-
-// GET /api/admin/support-tickets/:ticketId - Get ticket details
 router.get("/support-tickets/:ticketId", getSupportTicketById);
-
-// PUT /api/admin/support-tickets/:ticketId - Update ticket
 router.put("/support-tickets/:ticketId", updateSupportTicket);
 
 /**
- * ========================================
- * SYSTEM CONFIGURATION ROUTES
- * ========================================
+ * @swagger
+ * /admin/system/stats:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Get system statistics
+ *     responses:
+ *       200:
+ *         description: System stats
  */
-
-// GET /api/admin/system/stats - Get system statistics
 router.get("/system/stats", getSystemStats);
 
-// POST /api/admin/notifications/bulk - Send bulk notification
+/**
+ * @swagger
+ * /admin/notifications/bulk:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Send bulk notification to users
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [title, message, targetRole]
+ *             properties:
+ *               title: { type: string }
+ *               message: { type: string }
+ *               targetRole: { type: string, enum: [all, customer, driver, company_admin] }
+ *     responses:
+ *       200:
+ *         description: Notifications sent
+ */
 router.post("/notifications/bulk", sendBulkNotification);
 
-// GET /api/admin/export/:dataType - Export data
+/**
+ * @swagger
+ * /admin/export/{dataType}:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Export data as CSV/JSON
+ *     parameters:
+ *       - in: path
+ *         name: dataType
+ *         required: true
+ *         schema: { type: string, enum: [users, drivers, deliveries, payments] }
+ *     responses:
+ *       200:
+ *         description: Exported data
+ */
 router.get("/export/:dataType", exportData);
 
 export default router;

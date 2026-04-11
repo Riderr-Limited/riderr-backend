@@ -3,6 +3,8 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import mongoSanitize from "express-mongo-sanitize";
+import swaggerUi from "swagger-ui-express";
+import swaggerSpec from "./config/swagger.js";
 import apiRoutes from "./routes/index.route.js";
 import newDriverRoutes from "./routes/newDriver.routes.js";
 import newDeliveryRoutes from "./routes/newDelivery.routes.js";
@@ -161,6 +163,12 @@ app.post("/api/test-cors", (req, res) => {
     origin: req.headers.origin,
   });
 });
+
+/**
+ * API Docs
+ */
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+app.get("/api/docs.json", (req, res) => res.json(swaggerSpec));
 
 /**
  * API Routes

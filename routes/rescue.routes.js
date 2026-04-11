@@ -1,3 +1,9 @@
+/**
+ * @swagger
+ * tags:
+ *   name: Rescue
+ *   description: Driver rescue & delivery reassignment
+ */
 import express from "express";
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import {
@@ -21,70 +27,91 @@ const router = express.Router();
  * @access  Private (Driver)
  * @body    { reason, details, currentLat, currentLng }
  */
-router.post(
-  "/deliveries/:deliveryId/request-help",
-protect, authorize("driver"),
-  requestDriverHelp
-);
+/**
+ * @swagger
+ * /rescue/deliveries/{deliveryId}/request-help:
+ *   post:
+ *     tags: [Rescue]
+ *     summary: Driver requests rescue help
+ *     parameters:
+ *       - in: path
+ *         name: deliveryId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string }
+ *               details: { type: string }
+ *               currentLat: { type: number }
+ *               currentLng: { type: number }
+ *     responses:
+ *       200:
+ *         description: Rescue request sent
+ */
+router.post("/deliveries/:deliveryId/request-help", protect, authorize("driver"), requestDriverHelp);
 
 /**
- * @route   GET /api/deliveries/:deliveryId/rescue-status
- * @desc    Driver polls the status of their rescue request
- * @access  Private (Driver)
+ * @swagger
+ * /rescue/deliveries/{deliveryId}/rescue-status:
+ *   get:
+ *     tags: [Rescue]
+ *     summary: Get rescue request status (driver)
+ *     parameters:
+ *       - in: path
+ *         name: deliveryId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Rescue status
  */
-router.get(
-  "/deliveries/:deliveryId/rescue-status",
-   protect,authorize("driver"),
-  getRescueRequestStatus
-);
-
-// ─── COMPANY ROUTES ───────────────────────────────────────────────────────────
-
-/**
- * @route   GET /api/company/rescue-requests
- * @desc    Company gets all pending rescue requests from their drivers
- * @access  Private (Company, Company Admin)
- */
-router.get(
-  "/company/rescue-requests",
-  protect, authorize("company", "company_admin"),
-  getCompanyRescueRequests
-);
+router.get("/deliveries/:deliveryId/rescue-status", protect, authorize("driver"), getRescueRequestStatus);
 
 /**
- * @route   GET /api/company/available-drivers
- * @desc    Get available drivers for reassignment (optionally sorted by proximity to deliveryId)
- * @access  Private (Company, Company Admin)
- * @query   ?deliveryId=xxx
+ * @swagger
+ * /rescue/company/rescue-requests:
+ *   get:
+ *     tags: [Rescue]
+ *     summary: Get all pending rescue requests (company_admin)
+ *     responses:
+ *       200:
+ *         description: Rescue requests list
  */
-router.get(
-  "/company/available-drivers",
-   protect, authorize("company", "company_admin"),
-  getAvailableDriversForReassignment
-);
+router.get("/company/rescue-requests", protect, authorize("company", "company_admin"), getCompanyRescueRequests);
+router.get("/company/available-drivers", protect, authorize("company", "company_admin"), getAvailableDriversForReassignment);
 
 /**
- * @route   POST /api/company/deliveries/:deliveryId/reassign
- * @desc    Company reassigns a delivery to a different driver
- * @access  Private (Company, Company Admin)
- * @body    { newDriverId, note }
+ * @swagger
+ * /rescue/company/deliveries/{deliveryId}/reassign:
+ *   post:
+ *     tags: [Rescue]
+ *     summary: Reassign delivery to another driver (company_admin)
+ *     parameters:
+ *       - in: path
+ *         name: deliveryId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newDriverId]
+ *             properties:
+ *               newDriverId: { type: string }
+ *               note: { type: string }
+ *     responses:
+ *       200:
+ *         description: Delivery reassigned
  */
-router.post(
-  "/company/deliveries/:deliveryId/reassign",
-  protect, authorize("company", "company_admin"),
-  reassignDelivery
-);
-
-/**
- * @route   POST /api/company/deliveries/:deliveryId/dismiss-rescue
- * @desc    Company dismisses rescue request (driver continues)
- * @access  Private (Company, Company Admin)
- * @body    { note }
- */
-router.post(
-  "/company/deliveries/:deliveryId/dismiss-rescue",
-  protect, authorize("company", "company_admin"),
-  dismissRescueRequest
-);
+router.post("/company/deliveries/:deliveryId/reassign", protect, authorize("company", "company_admin"), reassignDelivery);
+router.post("/company/deliveries/:deliveryId/dismiss-rescue", protect, authorize("company", "company_admin"), dismissRescueRequest);
 
 export default router;

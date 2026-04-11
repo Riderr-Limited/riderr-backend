@@ -1,3 +1,9 @@
+/**
+ * @swagger
+ * tags:
+ *   name: Deliveries (v2)
+ *   description: Delivery management (mounted at /api/deliveries)
+ */
 import express from 'express';
 import {
   createDelivery,
@@ -18,65 +24,57 @@ const router = express.Router();
 
 // ========== CREATE DELIVERY ==========
 
-// Create new delivery (Customer)
-// POST /api/deliveries
-// Body: { customerId, companyId, customerName, customerPhone, recipientName, recipientPhone, pickup, dropoff, itemDetails, vehicleType, paymentMethod }
+/**
+ * @swagger
+ * /deliveries:
+ *   post:
+ *     tags: [Deliveries (v2)]
+ *     summary: Create a new delivery
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [customerId, companyId, pickup, dropoff, itemDetails, vehicleType]
+ *             properties:
+ *               customerId: { type: string }
+ *               companyId: { type: string }
+ *               customerName: { type: string }
+ *               customerPhone: { type: string }
+ *               recipientName: { type: string }
+ *               recipientPhone: { type: string }
+ *               pickup:
+ *                 type: object
+ *                 properties:
+ *                   address: { type: string }
+ *                   lat: { type: number }
+ *                   lng: { type: number }
+ *               dropoff:
+ *                 type: object
+ *                 properties:
+ *                   address: { type: string }
+ *                   lat: { type: number }
+ *                   lng: { type: number }
+ *               itemDetails: { type: string }
+ *               vehicleType: { type: string, enum: [bike, car, van, truck] }
+ *               paymentMethod: { type: string, enum: [cash, card, wallet] }
+ *     responses:
+ *       201:
+ *         description: Delivery created
+ */
 router.post('/', createDelivery);
-
-// ========== DRIVER ACTIONS ==========
-
-// Accept delivery (Driver)
-// POST /api/deliveries/:deliveryId/accept
-// Body: { driverId }
 router.post('/:deliveryId/accept', acceptDelivery);
-
-// Mark delivery as picked up (Driver)
-// POST /api/deliveries/:deliveryId/pickup
-// Body: { driverId }
 router.post('/:deliveryId/pickup', pickupDelivery);
-
-// Complete delivery (Driver)
-// POST /api/deliveries/:deliveryId/complete
-// Body: { driverId, proofOfDelivery }
 router.post('/:deliveryId/complete', completeDelivery);
-
-// Cancel delivery (Customer or Driver)
-// POST /api/deliveries/:deliveryId/cancel
-// Body: { cancelledBy, reason }
 router.post('/:deliveryId/cancel', cancelDelivery);
-
-// ========== TRACKING & QUERIES ==========
-
-// Track delivery with real-time driver location (Customer)
-// GET /api/deliveries/:deliveryId/track
 router.get('/:deliveryId/track', trackDelivery);
-
-// Get delivery by reference ID
-// GET /api/deliveries/reference/:referenceId
 router.get('/reference/:referenceId', getDeliveryByReference);
-
-// Get customer's deliveries
-// GET /api/deliveries/customer/:customerId?status=delivered&limit=50&page=1
 router.get('/customer/:customerId', getCustomerDeliveries);
-
-// Get driver's active delivery
-// GET /api/deliveries/driver/:driverId/active
 router.get('/driver/:driverId/active', getDriverActiveDelivery);
-
-// ========== RATING & REVIEW ==========
-
-// Rate delivery (Customer)
-// POST /api/deliveries/:deliveryId/rate
-// Body: { rating, review }
 router.post('/:deliveryId/rate', rateDelivery);
-
-// Add tip to delivery (Customer)
-// POST /api/deliveries/:deliveryId/tip
-// Body: { amount }
 router.post('/:deliveryId/tip', addTip);
-
-// Get nearby drivers for delivery
-// GET /api/deliveries/nearby-drivers?lat=&lng=&radius=&vehicleType=
 router.get('/nearby-drivers', getNearbyDrivers);
 
 export default router;
