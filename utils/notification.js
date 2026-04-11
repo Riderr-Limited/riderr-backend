@@ -1,5 +1,8 @@
 import Notification from "../models/notification.model.js";
 import User from "../models/user.models.js";
+import Expo from "expo-server-sdk";
+
+const expo = new Expo();
 
 /**
  * Save notification to DB and optionally send push
@@ -31,10 +34,19 @@ export const sendNotification = async ({
     });
 
     if (sendPush) {
-      const user = await User.findById(userId).select("pushToken deviceTokens");
-      const token = user?.pushToken || user?.deviceTokens?.[0];
-      if (token) {
-        await sendPushNotification({ token, title, body: message, data });
+      const user = await User.findById(userId).select("pushToken deviceTokens notificationSettings");
+      const tokens = [
+        ...(user?.pushToken ? [user.pushToken] : []),
+        ...(user?.deviceTokens || []),
+      ].filter((t, i, arr) => arr.indexOf(t) === i); // dedupe
+
+      if (tokens.length && user?.notificationSettings?.pushEnabled !== false) {
+        await sendPushNotification({ tokens, title, body: message, data: { ...data, notificationId: notification._id.toString() } });
+
+        await Notification.findByIdAndUpdate(notification._id, {
+          "deliveryMethods.push.sent": true,
+          "deliveryMethods.push.sentAt": new Date(),
+        });
       }
     }
 
@@ -45,14 +57,39 @@ export const sendNotification = async ({
   }
 };
 
-const sendPushNotification = async ({ token, title, body, data }) => {
+const sendPushNotification = async ({ tokens, title, body, data = {} }) => {
   try {
-    // Plug in FCM / APNs here
-    console.log(`📱 Push → ${title}`);
-    return true;
+    const validTokens = tokens.filter(t => Expo.isExpoPushToken(t));
+    if (!validTokens.length) return;
+
+    const messages = validTokens.map(token => ({
+      to: token,
+      sound: "default",
+      title,
+      body,
+      data,
+    }));
+
+    const chunks = expo.chunkPushNotifications(messages);
+    const tickets = [];
+
+    for (const chunk of chunks) {
+      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      tickets.push(...ticketChunk);
+    }
+
+    // Log any errors from Expo
+    tickets.forEach((ticket, i) => {
+      if (ticket.status === "error") {
+        console.error(`❌ Push error for token ${validTokens[i]}:`, ticket.message);
+        // If token is invalid, it should be removed from the user — handle in cleanup
+      }
+    });
+
+    return tickets;
   } catch (error) {
     console.error("❌ Push error:", error);
-    return false;
+    return null;
   }
 };
 

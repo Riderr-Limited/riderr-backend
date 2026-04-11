@@ -16,14 +16,17 @@ const router = express.Router();
 
 router.use(protect);
 
-router.get("/", getNotifications);
+// Static routes first — before any /:param routes
 router.get("/unread-count", getUnreadNotificationCount);
-router.get("/:notificationId", getNotificationById);
 router.put("/read-all", markAllAsRead);
+router.put("/push-token", updatePushToken);
+router.delete("/clear-read", clearReadNotifications);
+
+// Param routes
+router.get("/", getNotifications);
+router.get("/:notificationId", getNotificationById);
 router.put("/:notificationId/read", markAsRead);
 router.put("/:notificationId/click", markAsClicked);
-router.delete("/clear-read", clearReadNotifications);
 router.delete("/:notificationId", deleteNotification);
-router.put("/push-token", updatePushToken);
 
 export default router;
