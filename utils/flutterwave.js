@@ -1,5 +1,25 @@
 import axios from "axios";
 import crypto from "crypto";
+import { createCipheriv } from "crypto";
+
+/**
+ * Flutterwave 3DES-24 encryption required for inline card charges
+ * https://developer.flutterwave.com/docs/collecting-payments/inline
+ */
+function encryptPayload(payload) {
+  const secretKey = getSecretKey();
+  // Flutterwave uses the last 24 chars of the secret key as the 3DES key
+  const encryptionKey = secretKey.substring(secretKey.length - 24);
+  const cipher = createCipheriv(
+    "des-ede3",
+    Buffer.from(encryptionKey, "utf8"),
+    "",
+  );
+  const text = JSON.stringify(payload);
+  let encrypted = cipher.update(text, "utf8", "base64");
+  encrypted += cipher.final("base64");
+  return encrypted;
+}
 
 const getSecretKey = () => process.env.FLW_SECRET_KEY;
 const getClientId = () => process.env.FLW_CLIENT_ID;
@@ -172,7 +192,7 @@ export const chargeCard = async (chargeData) => {
       chargeData.metadata?.reference ||
       `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
-    const payload = {
+    const rawPayload = {
       card_number: chargeData.card.number,
       cvv: chargeData.card.cvv,
       expiry_month: chargeData.card.expiry_month,
@@ -188,10 +208,14 @@ export const chargeCard = async (chargeData) => {
 
     // Include PIN if provided (Nigerian cards)
     if (chargeData.card.pin) {
-      payload.authorization = { mode: "pin", pin: chargeData.card.pin };
+      rawPayload.authorization = { mode: "pin", pin: chargeData.card.pin };
     }
 
-    const response = await flwAxios.post("/charges?type=card", payload);
+    // Flutterwave requires 3DES-24 encrypted payload for card charges
+    const encryptedPayload = encryptPayload(rawPayload);
+    const response = await flwAxios.post("/charges?type=card", {
+      client: encryptedPayload,
+    });
 
     if (response.data.status === "success") {
       const d = response.data.data;
@@ -259,9 +283,12 @@ export const chargeCard = async (chargeData) => {
 // ─────────────────────────────────────────────────────────────
 export const submitPin = async (pinData) => {
   try {
-    const response = await flwAxios.post("/charges?type=card", {
+    const rawPayload = {
       authorization: { mode: "pin", pin: pinData.pin },
       flw_ref: pinData.reference,
+    };
+    const response = await flwAxios.post("/charges?type=card", {
+      client: encryptPayload(rawPayload),
     });
 
     if (response.data.status === "success") {
