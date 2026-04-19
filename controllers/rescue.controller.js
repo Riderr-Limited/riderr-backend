@@ -324,32 +324,33 @@ export const reassignDelivery = async (req, res) => {
       });
     }
 
-    // ── Fetch new driver (must belong to same company) ──────────────────────
-    const newDriver = await Driver.findOne({
-      _id: newDriverId,
-      companyId: user.companyId,
-      isOnline: true,
-     })
+    // ── Fetch new driver (by Driver._id or User._id) ────────────────────────
+    let newDriver = await Driver.findById(newDriverId)
       .populate("userId", "name phone avatarUrl rating")
       .session(session);
 
     if (!newDriver) {
+      newDriver = await Driver.findOne({ userId: newDriverId })
+        .populate("userId", "name phone avatarUrl rating")
+        .session(session);
+    }
+
+    if (!newDriver) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({
-        success: false,
-        message:
-          "New driver not found or not available. Ensure they are online and available.",
-      });
+      return res.status(404).json({ success: false, message: "Driver not found" });
+    }
+
+    if (!newDriver.isOnline) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, message: "Driver is offline. Ask them to go online first." });
     }
 
     if (newDriver.currentDeliveryId) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Selected driver already has an active delivery",
-      });
+      return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
     }
 
     // ── Free the old driver ─────────────────────────────────────────────────

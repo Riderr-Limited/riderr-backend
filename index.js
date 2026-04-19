@@ -12,6 +12,7 @@ import { setupDeliverySocket } from "./socket/deliverySocket.js";
 import { setupVoiceCallSocket } from "./socket/voiceCallSocket.js";
 import supportSocket from "./socket/supportSocket.js";
 import adminChatSocket from "./socket/adminChatSocket.js";
+import startAutoExpireJob from "./jobs/autoExpireDeliveries.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
@@ -130,6 +131,9 @@ const startServer = async () => {
     console.log(
       "✅ Socket.IO initialized and all socket namespaces setup complete",
     );
+
+    // Start background jobs
+    startAutoExpireJob();
 
     // Start the server
     httpServer.listen(PORT, "0.0.0.0", () => {

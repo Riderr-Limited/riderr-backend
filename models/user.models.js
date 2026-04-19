@@ -7,8 +7,7 @@ const UserSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: ["customer", "company_admin", "driver", "admin"],
-      required: [true, "Role is required"],
-      index: true
+      required: [true, "Role is required"]
     },
 
     name: { 
@@ -65,8 +64,7 @@ const UserSchema = new mongoose.Schema(
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
-      default: null,
-      index: true
+      default: null
     },
 
     driverId: {
@@ -78,20 +76,17 @@ const UserSchema = new mongoose.Schema(
     // Account status
     isVerified: {
       type: Boolean,
-      default: false,
-      index: true
+      default: false
     },
 
     isActive: {
       type: Boolean,
-      default: true,
-      index: true
+      default: true
     },
 
     isDeleted: {
       type: Boolean,
-      default: false,
-      index: true
+      default: false
     },
 
     // Authentication

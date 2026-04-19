@@ -2563,10 +2563,13 @@ export const createDeliveryRequest = async (req, res) => {
 
       payment: {
         method: paymentMethod || "cash",
-        // cash: pending (pay on delivery)
-        // card/transfer: pending_payment (must pay before rider can accept)
         status: paymentMethod === "cash" ? "pending" : "pending_payment",
       },
+
+      // Auto-cancel after 5 min if non-cash payment not completed
+      paymentExpiresAt: paymentMethod && paymentMethod !== "cash"
+        ? new Date(Date.now() + 5 * 60 * 1000)
+        : null,
 
       status: "created",
     };
@@ -3568,10 +3571,51 @@ export const getNearbyDrivers = async (req, res) => {
  
 
 /**
- * @desc    Cancel delivery with automatic refund
- * @route   POST /api/deliveries/:deliveryId/cancel
- * @access  Private (Customer, Driver, Admin)
+ * @desc    Customer deletes (soft-deletes) their own delivery
+ * @route   DELETE /api/deliveries/:deliveryId
+ * @access  Private (Customer)
  */
+export const deleteDelivery = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { deliveryId } = req.params;
+
+    const delivery = await Delivery.findOne({
+      _id: deliveryId,
+      customerId: customer._id,
+    });
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery not found',
+      });
+    }
+
+    // Only allow deleting cancelled/completed deliveries
+    const deletableStatuses = ['cancelled', 'completed', 'delivered', 'failed'];
+    if (!deletableStatuses.includes(delivery.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete an active delivery. Cancel it first. Current status: ${delivery.status}`,
+      });
+    }
+
+    await Delivery.findByIdAndDelete(deliveryId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Delivery deleted successfully',
+    });
+  } catch (error) {
+    console.error('❌ Delete delivery error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete delivery',
+    });
+  }
+};
+
 export const cancelDeliveryWithRefund = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();

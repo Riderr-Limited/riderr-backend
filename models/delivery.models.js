@@ -175,6 +175,18 @@ const deliverySchema = new mongoose.Schema({
     }
   ],
 
+  // Auto-cancel: set when delivery is created with non-cash payment
+  paymentExpiresAt: {
+    type: Date,
+    default: null,
+  },
+
+  cancelledBy: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    role: String,
+    reason: String,
+  },
+
   // Timestamps
   assignedAt: Date,
   pickedUpAt: Date,

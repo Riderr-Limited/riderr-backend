@@ -19,6 +19,7 @@ import {
   rateDelivery,
   getDeliveryUpdates,
   getCompanyDeliveries,
+  deleteDelivery,
 } from '../controllers/delivery.controller.js';
 import { updateDriverLocation } from '../controllers/driver.controller.js';
 import { protect, authorize } from '../middlewares/auth.middleware.js';
@@ -229,6 +230,12 @@ router.post('/:deliveryId/complete', protect, authorize('driver'), completeDeliv
 router.get('/:deliveryId', protect, getDeliveryDetails);
 router.get('/:deliveryId/track', protect, trackDelivery);
 router.get('/:deliveryId/updates', protect, getDeliveryUpdates);
+<<<<<<< Updated upstream
+=======
+router.post('/:deliveryId/cancel', protect, cancelDeliveryWithRefund); // ✅ Single route
+router.post('/:deliveryId/rate', protect, authorize('customer'), rateDelivery);
+router.delete('/:deliveryId', protect, authorize('customer'), deleteDelivery);
+>>>>>>> Stashed changes
 
 /**
  * @swagger
