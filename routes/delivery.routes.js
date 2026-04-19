@@ -230,12 +230,9 @@ router.post('/:deliveryId/complete', protect, authorize('driver'), completeDeliv
 router.get('/:deliveryId', protect, getDeliveryDetails);
 router.get('/:deliveryId/track', protect, trackDelivery);
 router.get('/:deliveryId/updates', protect, getDeliveryUpdates);
-<<<<<<< Updated upstream
-=======
 router.post('/:deliveryId/cancel', protect, cancelDeliveryWithRefund); // ✅ Single route
 router.post('/:deliveryId/rate', protect, authorize('customer'), rateDelivery);
 router.delete('/:deliveryId', protect, authorize('customer'), deleteDelivery);
->>>>>>> Stashed changes
 
 /**
  * @swagger
