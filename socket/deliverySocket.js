@@ -464,6 +464,25 @@ export const setupDeliverySocket = (io) => {
           message: chatMessage,
           deliveryId,
         });
+
+        // Push notification to receiver (in case they're not in the chat room)
+        try {
+          const { sendNotification, NotificationTemplates } = await import("../utils/notification.js");
+          const messagePreview = messageType === "text"
+            ? (message.length > 50 ? message.substring(0, 50) + "..." : message)
+            : messageType === "location" ? "Shared a location" : "Sent an image";
+
+          await sendNotification({
+            userId: receiverId,
+            ...NotificationTemplates.NEW_CHAT_MESSAGE(
+              chatMessage.senderId.name,
+              deliveryId,
+              messagePreview
+            ),
+          });
+        } catch (notifErr) {
+          console.error("Push notification error:", notifErr.message);
+        }
       } catch (error) {
         console.error("Send chat message error:", error);
         socket.emit("chat:error", { message: "Failed to send message" });

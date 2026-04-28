@@ -1,6 +1,8 @@
 import SupportTicket from "../models/supportTicket.model.js";
 import ChatMessage from "../models/chatMessage.model.js";
 import { validationResult } from "express-validator";
+import { sendNotification, NotificationTemplates } from "../utils/notification.js";
+import User from "../models/user.models.js";
 
 function generateTicketId() {
   return "TKT-" + Math.random().toString(36).substr(2, 5).toUpperCase();
@@ -25,6 +27,12 @@ export const createSupportTicket = async (req, res) => {
       title,
       description,
       ticketId: generateTicketId(),
+    });
+
+    // Notify user their ticket was created
+    await sendNotification({
+      userId,
+      ...NotificationTemplates.SUPPORT_TICKET_CREATED(ticket.ticketId),
     });
 
     return res.status(201).json({ success: true, data: ticket });
@@ -129,6 +137,12 @@ export const updateTicketStatus = async (req, res) => {
     if (!ticket) {
       return res.status(404).json({ success: false, message: "Ticket not found" });
     }
+
+    // Notify the ticket owner of status change
+    await sendNotification({
+      userId: ticket.user._id,
+      ...NotificationTemplates.SUPPORT_TICKET_UPDATED(ticket.ticketId, status),
+    });
 
     return res.status(200).json({ success: true, data: ticket });
   } catch (error) {

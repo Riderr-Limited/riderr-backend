@@ -324,4 +324,99 @@ export const NotificationTemplates = {
     message: "Your account has been updated by an administrator",
     data: { updatedFields: fields },
   }),
+
+  CUSTOMER_CANCELLED: (deliveryId, reason) => ({
+    type: "delivery", subType: "delivery_cancelled",
+    title: "🚫 Delivery Cancelled",
+    message: `The customer has cancelled the delivery. Reason: ${reason}`,
+    data: { deliveryId, reason },
+    priority: "high",
+  }),
+
+  // ── Ride ──────────────────────────────────────────────
+  RIDE_ACCEPTED: (rideId, driverName) => ({
+    type: "delivery", subType: "delivery_accepted",
+    title: "🚗 Driver On The Way!",
+    message: `${driverName} has accepted your ride and is heading to your pickup location`,
+    data: { rideId, driverName },
+    actionUrl: `/rides/${rideId}`, actionLabel: "Track Ride",
+    priority: "high",
+  }),
+
+  RIDE_ARRIVED: (rideId, driverName) => ({
+    type: "delivery", subType: "delivery_accepted",
+    title: "📍 Driver Arrived!",
+    message: `${driverName} has arrived at your pickup location`,
+    data: { rideId, driverName },
+    actionUrl: `/rides/${rideId}`, actionLabel: "View Ride",
+    priority: "high",
+  }),
+
+  RIDE_STARTED: (rideId) => ({
+    type: "delivery", subType: "delivery_picked_up",
+    title: "🚀 Ride Started",
+    message: "Your ride has started. Enjoy your trip!",
+    data: { rideId },
+    actionUrl: `/rides/${rideId}`, actionLabel: "Track Ride",
+  }),
+
+  RIDE_COMPLETED: (rideId, fare) => ({
+    type: "delivery", subType: "delivery_completed",
+    title: "🎉 Ride Completed!",
+    message: `Your ride has been completed. Total fare: ₦${fare.toLocaleString()}. Please rate your experience!`,
+    data: { rideId, fare, requestRating: true },
+    actionUrl: `/rides/${rideId}`, actionLabel: "Rate Ride",
+    priority: "high",
+  }),
+
+  RIDE_CANCELLED: (rideId, cancelledBy, reason) => ({
+    type: "delivery", subType: "delivery_cancelled",
+    title: "❌ Ride Cancelled",
+    message: `Your ride has been cancelled by the ${cancelledBy}.${reason ? ` Reason: ${reason}` : ""}`,
+    data: { rideId, cancelledBy, reason },
+    priority: "high",
+  }),
+
+  NEW_RIDE_REQUEST: (rideId, pickupAddress) => ({
+    type: "delivery", subType: "delivery_request",
+    title: "🚗 New Ride Request",
+    message: `New ride request from ${pickupAddress}`,
+    data: { rideId, pickupAddress },
+    actionUrl: `/driver/rides/${rideId}`, actionLabel: "View Request",
+    priority: "high",
+  }),
+
+  // ── Chat ──────────────────────────────────────────────
+  NEW_CHAT_MESSAGE: (senderName, deliveryId, preview) => ({
+    type: "system", subType: "alert",
+    title: `💬 ${senderName}`,
+    message: preview || "You have a new message",
+    data: { deliveryId, senderName },
+    actionUrl: `/deliveries/${deliveryId}/chat`, actionLabel: "View Message",
+  }),
+
+  // ── Support ───────────────────────────────────────────
+  SUPPORT_TICKET_CREATED: (ticketId) => ({
+    type: "support", subType: "alert",
+    title: "🎫 Support Ticket Created",
+    message: `Your support ticket #${ticketId} has been created. We'll get back to you shortly.`,
+    data: { ticketId },
+    actionUrl: `/support/${ticketId}`, actionLabel: "View Ticket",
+  }),
+
+  SUPPORT_TICKET_UPDATED: (ticketId, status) => ({
+    type: "support", subType: "alert",
+    title: "🎫 Support Ticket Updated",
+    message: `Your support ticket #${ticketId} status has been updated to: ${status}`,
+    data: { ticketId, status },
+    actionUrl: `/support/${ticketId}`, actionLabel: "View Ticket",
+  }),
+
+  SUPPORT_NEW_MESSAGE: (ticketId, senderName) => ({
+    type: "support", subType: "alert",
+    title: `💬 New message on ticket #${ticketId}`,
+    message: `${senderName} replied to your support ticket`,
+    data: { ticketId, senderName },
+    actionUrl: `/support/${ticketId}`, actionLabel: "View Reply",
+  }),
 };

@@ -2,6 +2,7 @@ import ChatMessage from "../models/chat.model.js";
 import VoiceCall from "../models/voiceCall.model.js";
 import { validationResult } from "express-validator";
 import crypto from "crypto";
+import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 
 /**
  * Get chat history for a delivery
@@ -74,6 +75,20 @@ export const sendMessage = async (req, res) => {
 
     // Populate sender info for response
     await chatMessage.populate("senderId", "name avatarUrl role");
+
+    // Send push notification to receiver
+    const messagePreview = messageType === 'text' 
+      ? (message.length > 50 ? message.substring(0, 50) + '...' : message)
+      : messageType === 'location' ? 'Shared a location' : 'Sent an image';
+
+    await sendNotification({
+      userId: receiverId,
+      ...NotificationTemplates.NEW_CHAT_MESSAGE(
+        chatMessage.senderId.name,
+        deliveryId,
+        messagePreview
+      ),
+    });
 
     res.status(201).json({
       success: true,

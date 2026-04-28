@@ -3,6 +3,7 @@ import User from "../models/user.models.js";
 import Driver from "../models/riders.models.js"; 
 import Company from "../models/company.models.js";
 import mongoose from "mongoose";
+import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 
 /**
  * Calculate fare based on distance and vehicle type
@@ -123,6 +124,25 @@ export const createRide = async (req, res) => {
     });
 
     await ride.save();
+
+    // Notify nearby drivers
+    const nearbyDrivers = await Driver.find({
+      isOnline: true,
+      isAvailable: true,
+      isActive: true,
+      approvalStatus: "approved",
+      vehicleType,
+      currentDeliveryId: null,
+    }).populate("userId", "_id");
+
+    for (const driver of nearbyDrivers) {
+      if (driver.userId) {
+        await sendNotification({
+          userId: driver.userId._id,
+          ...NotificationTemplates.NEW_RIDE_REQUEST(ride._id, pickupAddress),
+        });
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -400,6 +420,12 @@ export const acceptRide = async (req, res) => {
     ride.acceptedAt = new Date();
     await ride.save();
 
+    // Notify customer
+    await sendNotification({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_ACCEPTED(ride._id, driverUser.name),
+    });
+
     // Populate data
     await ride.populate([
       { path: 'customerId', select: 'name phone' },
@@ -455,6 +481,12 @@ export const arriveAtPickup = async (req, res) => {
     ride.arrivedAt = new Date();
     await ride.save();
 
+    // Notify customer
+    await sendNotification({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_ARRIVED(ride._id, driverUser.name),
+    });
+
     res.status(200).json({
       success: true,
       message: "Driver arrived at pickup location",
@@ -503,6 +535,12 @@ export const startRide = async (req, res) => {
     ride.status = 'started';
     ride.startedAt = new Date();
     await ride.save();
+
+    // Notify customer
+    await sendNotification({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_STARTED(ride._id),
+    });
 
     res.status(200).json({
       success: true,
@@ -572,6 +610,12 @@ export const completeRide = async (req, res) => {
     await driver.save({ session });
 
     await session.commitTransaction();
+
+    // Notify customer ride is complete
+    await sendNotification({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_COMPLETED(ride._id, ride.actualFare),
+    });
 
     // Populate data
     await ride.populate([
@@ -680,6 +724,22 @@ export const cancelRide = async (req, res) => {
     }
 
     await session.commitTransaction();
+
+    // Notify the other party about cancellation
+    if (cancelledBy === 'customer' && ride.driverId) {
+      const driver = await Driver.findById(ride.driverId).populate('userId', '_id');
+      if (driver?.userId) {
+        await sendNotification({
+          userId: driver.userId._id,
+          ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'customer', reason),
+        });
+      }
+    } else if (cancelledBy === 'driver') {
+      await sendNotification({
+        userId: ride.customerId,
+        ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'driver', reason),
+      });
+    }
 
     res.status(200).json({
       success: true,

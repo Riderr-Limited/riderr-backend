@@ -2726,6 +2726,24 @@ export const createDeliveryRequest = async (req, res) => {
       });
     }
 
+    // Also emit socket event so drivers get real-time ping even if push is delayed
+    const io = req.app.get("io");
+    if (io) {
+      for (const driver of driversNearPickup) {
+        if (driver.userId) {
+          io.to(`user_${driver.userId._id}`).emit("delivery:new_request", {
+            deliveryId: delivery._id,
+            referenceId: delivery.referenceId,
+            pickup: delivery.pickup,
+            dropoff: delivery.dropoff,
+            fare: delivery.fare,
+            payment: delivery.payment,
+            itemDetails: delivery.itemDetails,
+          });
+        }
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: "Delivery request created successfully",
