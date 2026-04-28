@@ -1270,7 +1270,7 @@ export const rejectDelivery = async (req, res) => {
   try {
     const driverUser = req.user;
     const { deliveryId } = req.params;
-    const { reason } = req.body;
+    const { reason } = req.body || {};
 
     if (driverUser.role !== "driver") {
       return res.status(403).json({
