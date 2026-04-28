@@ -1332,8 +1332,9 @@ export const rejectDelivery = async (req, res) => {
     await delivery.save();
 
     // Update driver stats
-    driver.totalRequests = (driver.totalRequests || 0) + 1;
-    await driver.save();
+    await Driver.findByIdAndUpdate(driver._id, {
+      $inc: { totalRequests: 1 }
+    });
 
     console.log(`✅ Rejection recorded for delivery ${deliveryId}`);
     console.log(`   Total rejections: ${delivery.rejectedByDrivers.length}`);
@@ -1348,11 +1349,12 @@ export const rejectDelivery = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Reject delivery error:", error);
+    console.error("❌ Reject delivery error:", error.message);
+    console.error("❌ Reject delivery stack:", error.stack);
     res.status(500).json({
       success: false,
       message: "Failed to reject delivery",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: error.message,
     });
   }
 };

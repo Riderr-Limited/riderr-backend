@@ -251,6 +251,22 @@ const DriverSchema = new mongoose.Schema(
     }],
 
     // Current Trip/Delivery Reference
+    totalRequests: {
+      type: Number,
+      default: 0
+    },
+
+    acceptedRequests: {
+      type: Number,
+      default: 0
+    },
+
+    currentLocation: {
+      lat: Number,
+      lng: Number,
+      updatedAt: Date
+    },
+
     currentTripId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Ride",
