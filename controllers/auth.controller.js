@@ -145,7 +145,7 @@ export const signUp = async (req, res) => {
           companyPhone,
         } = req.body;
 
-        if (!companyName || !city || !state || !businessLicense || !taxId) {
+        if (!companyName || !city || !state || !businessLicense) {
           throw new Error("COMPANY_DETAILS_REQUIRED");
         }
 

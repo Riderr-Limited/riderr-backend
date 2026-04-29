@@ -26,8 +26,7 @@ const CompanySchema = new mongoose.Schema(
     },
     
     taxId: {
-      type: String,
-      required: [true, "Tax ID is required"]
+      type: String
     },
     
     address: {
