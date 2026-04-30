@@ -2,6 +2,7 @@
 
 > Uses **Agora RTC** for audio + **Socket.IO** for call signaling (ring, answer, reject, end).
 > The `VoiceCallManager.js` / WebRTC approach is **deprecated** — use this doc only.
+
 ---
 
 ## 1. Install & Configure
