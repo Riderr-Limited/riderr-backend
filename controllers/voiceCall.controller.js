@@ -6,14 +6,10 @@ import crypto from "crypto";
 import pkg from "agora-token";
 const { RtcTokenBuilder, RtcRole } = pkg;
 
-// Store signaling messages temporarily
-const signalingMessages = new Map();
-
-// Generate Agora RTC token
 function generateAgoraToken(channelName, uid) {
   const appId = process.env.AGORA_APP_ID;
   const appCertificate = process.env.AGORA_APP_CERTIFICATE;
-  const expirationInSeconds = 3600; // 1 hour
+  const expirationInSeconds = 3600;
   const currentTimestamp = Math.floor(Date.now() / 1000);
   const privilegeExpiredTs = currentTimestamp + expirationInSeconds;
 
@@ -28,7 +24,18 @@ function generateAgoraToken(channelName, uid) {
   );
 }
 
-// Helper: resolve caller/receiver from delivery or ride
+function uidFromObjectId(objectId) {
+  return (
+    Math.abs(
+      objectId
+        .toString()
+        .slice(-8)
+        .split("")
+        .reduce((a, c) => a + c.charCodeAt(0), 0)
+    ) % 100000
+  );
+}
+
 async function resolveParties(contextType, contextId, callerId) {
   if (contextType === "delivery") {
     const delivery = await Delivery.findById(contextId)
@@ -36,14 +43,17 @@ async function resolveParties(contextType, contextId, callerId) {
       .select("customerId driverId status");
     if (!delivery) return null;
     const isCustomer = delivery.customerId.toString() === callerId.toString();
-    const isDriver = delivery.driverId?.userId?.toString() === callerId.toString();
+    const isDriver =
+      delivery.driverId?.userId?.toString() === callerId.toString();
     if (!isCustomer && !isDriver) return null;
     return {
       receiverId: isCustomer ? delivery.driverId.userId : delivery.customerId,
       contextDoc: delivery,
     };
   } else {
-    const ride = await Ride.findById(contextId).select("customerId driverId status");
+    const ride = await Ride.findById(contextId).select(
+      "customerId driverId status"
+    );
     if (!ride) return null;
     const isCustomer = ride.customerId?.toString() === callerId.toString();
     const isDriver = ride.driverId?.toString() === callerId.toString();
@@ -55,9 +65,6 @@ async function resolveParties(contextType, contextId, callerId) {
   }
 }
 
-/**
- * Initiate voice call
- */
 export const initiateVoiceCall = async (req, res) => {
   try {
     const { deliveryId, rideId } = req.params;
@@ -67,22 +74,31 @@ export const initiateVoiceCall = async (req, res) => {
 
     const parties = await resolveParties(contextType, contextId, callerId);
     if (!parties) {
-      return res.status(404).json({ success: false, message: "Not found or access denied" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Not found or access denied" });
     }
 
     const { receiverId } = parties;
 
-    // Check for existing active call
     const existingCall = await VoiceCall.findOne({
       [`${contextType}Id`]: contextId,
       status: { $in: ["initiated", "ringing", "answered"] },
     });
 
     if (existingCall) {
-      return res.status(400).json({ success: false, message: "Call already in progress" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Call already in progress" });
     }
 
     const callId = `CALL-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const channelName = contextId.toString();
+    const callerUid = uidFromObjectId(callerId);
+    const receiverUid = uidFromObjectId(receiverId);
+    const callerToken = generateAgoraToken(channelName, callerUid);
+    const receiverToken = generateAgoraToken(channelName, receiverUid);
+
     const voiceCall = new VoiceCall({
       deliveryId: contextType === "delivery" ? contextId : undefined,
       rideId: contextType === "ride" ? contextId : undefined,
@@ -90,19 +106,12 @@ export const initiateVoiceCall = async (req, res) => {
       caller: callerId,
       receiver: receiverId,
       status: "initiated",
+      agoraChannel: channelName,
     });
 
     await voiceCall.save();
 
     const caller = await User.findById(callerId).select("name avatarUrl");
-
-    // Generate Agora tokens for both parties
-    // Use deliveryId/rideId as channel name, numeric uid from ObjectId
-    const channelName = contextId.toString();
-    const callerUid = Math.abs(callerId.toString().slice(-8).split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % 100000;
-    const receiverUid = Math.abs(receiverId.toString().slice(-8).split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % 100000;
-    const callerToken = generateAgoraToken(channelName, callerUid);
-    const receiverToken = generateAgoraToken(channelName, receiverUid);
 
     res.status(201).json({
       success: true,
@@ -140,9 +149,6 @@ export const initiateVoiceCall = async (req, res) => {
   }
 };
 
-/**
- * Answer voice call
- */
 export const answerVoiceCall = async (req, res) => {
   try {
     const { callId } = req.params;
@@ -161,20 +167,12 @@ export const answerVoiceCall = async (req, res) => {
       });
     }
 
-    // Update call status
     call.status = "answered";
     call.answeredAt = new Date();
     await call.save();
 
-    res.json({
-      success: true,
-      data: {
-        callId,
-        status: "answered",
-      },
-    });
+    res.json({ success: true, data: { callId, status: "answered" } });
 
-    // Notify caller via Socket.IO
     const io = req.app.get("io");
     if (io) {
       io.to(`user_${call.caller}`).emit("call_answered", {
@@ -184,16 +182,10 @@ export const answerVoiceCall = async (req, res) => {
     }
   } catch (error) {
     console.error("Answer voice call error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to answer call",
-    });
+    res.status(500).json({ success: false, message: "Failed to answer call" });
   }
 };
 
-/**
- * End voice call
- */
 export const endVoiceCall = async (req, res) => {
   try {
     const { callId } = req.params;
@@ -206,37 +198,27 @@ export const endVoiceCall = async (req, res) => {
     });
 
     if (!call) {
-      return res.status(404).json({
-        success: false,
-        message: "Call not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Call not found" });
     }
 
-    // Calculate duration if call was answered
     const endTime = new Date();
-    const duration = call.answeredAt 
+    const duration = call.answeredAt
       ? Math.floor((endTime - call.answeredAt) / 1000)
       : 0;
 
-    // Update call record
     call.status = call.answeredAt ? "ended" : "missed";
     call.endedAt = endTime;
     call.duration = duration;
     await call.save();
 
-    res.json({
-      success: true,
-      data: {
-        callId,
-        status: call.status,
-        duration,
-      },
-    });
+    res.json({ success: true, data: { callId, status: call.status, duration } });
 
-    // Notify other party via Socket.IO
-    const otherUserId = call.caller.toString() === userId.toString() 
-      ? call.receiver 
-      : call.caller;
+    const otherUserId =
+      call.caller.toString() === userId.toString()
+        ? call.receiver
+        : call.caller;
 
     const io = req.app.get("io");
     if (io) {
@@ -248,103 +230,44 @@ export const endVoiceCall = async (req, res) => {
     }
   } catch (error) {
     console.error("End voice call error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to end call",
-    });
+    res.status(500).json({ success: false, message: "Failed to end call" });
   }
 };
 
-/**
- * Get call history for delivery
- */
 export const getCallHistory = async (req, res) => {
   try {
     const { deliveryId } = req.params;
     const userId = req.user._id;
 
-    // Verify access to delivery
     const delivery = await Delivery.findById(deliveryId)
       .populate("driverId", "userId")
       .select("customerId driverId");
 
     if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Delivery not found" });
     }
 
     const isCustomer = delivery.customerId.toString() === userId.toString();
-    const isDriver = delivery.driverId?.userId?.toString() === userId.toString();
+    const isDriver =
+      delivery.driverId?.userId?.toString() === userId.toString();
 
     if (!isCustomer && !isDriver) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied",
-      });
+      return res.status(403).json({ success: false, message: "Access denied" });
     }
 
-    // Get call history
     const calls = await VoiceCall.find({ deliveryId })
       .populate("caller", "name avatarUrl")
       .populate("receiver", "name avatarUrl")
       .sort({ createdAt: -1 })
       .limit(20);
 
-    res.json({
-      success: true,
-      data: calls,
-    });
+    res.json({ success: true, data: calls });
   } catch (error) {
     console.error("Get call history error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get call history",
-    });
-  }
-};
-
-/**
- * Send signaling message for WebRTC
- */
-export const sendSignalingMessage = async (req, res) => {
-  try {
-    const { callId } = req.params;
-    const message = req.body;
-    
-    if (!signalingMessages.has(callId)) {
-      signalingMessages.set(callId, []);
-    }
-    
-    signalingMessages.get(callId).push(message);
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Send signaling message error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to send signaling message",
-    });
-  }
-};
-
-/**
- * Get signaling messages for WebRTC
- */
-export const getSignalingMessages = async (req, res) => {
-  try {
-    const { callId } = req.params;
-    const messages = signalingMessages.get(callId) || [];
-    
-    // Clear messages after sending
-    signalingMessages.set(callId, []);
-    
-    res.json(messages);
-  } catch (error) {
-    console.error("Get signaling messages error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get signaling messages",
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to get call history" });
   }
 };

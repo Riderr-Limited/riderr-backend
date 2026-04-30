@@ -33,6 +33,9 @@ const voiceCallSchema = new mongoose.Schema({
     default: "initiated",
     index: true,
   },
+  agoraChannel: {
+    type: String,
+  },
   // Call duration in seconds
   duration: {
     type: Number,
