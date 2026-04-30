@@ -135,6 +135,9 @@ const startServer = async () => {
     // Start background jobs
     startAutoExpireJob();
 
+    // Store io instance BEFORE server starts so controllers can access it
+    app.set("io", io);
+
     // Start the server
     httpServer.listen(PORT, "0.0.0.0", () => {
       console.log("\n" + "=".repeat(60));
@@ -146,9 +149,6 @@ const startServer = async () => {
       console.log(`📁 Uploads available at: http://localhost:${PORT}/uploads`);
       console.log(`📞 Voice calls enabled with WebRTC`);
     });
-
-    // Store io instance for controllers
-    app.set("io", io);
 
     // Handle server errors
     httpServer.on("error", (error) => {

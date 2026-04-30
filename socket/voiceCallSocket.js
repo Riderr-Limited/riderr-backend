@@ -2,8 +2,16 @@ import VoiceCall from "../models/voiceCall.model.js";
 
 export const setupVoiceCallSocket = (io) => {
   io.on("connection", (socket) => {
-    socket.on("user:join_voice_room", (userId) => {
+    // Auto-join user room from handshake auth so the room is always available
+    const userId =
+      socket.handshake.auth?.userId || socket.handshake.query?.userId;
+    if (userId) {
       socket.join(`user_${userId}`);
+    }
+
+    // Keep manual join as fallback
+    socket.on("user:join_voice_room", (uid) => {
+      socket.join(`user_${uid}`);
     });
 
     socket.on("call:reject", async ({ callId }) => {
