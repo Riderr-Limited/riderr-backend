@@ -766,6 +766,54 @@ export const getCompanyNotifications = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get all active companies (public - for customer to pick a company)
+ * @route   GET /api/companies
+ * @access  Private (any authenticated user)
+ */
+export const getActiveCompanies = async (req, res) => {
+  try {
+    const { city, search, page = 1, limit = 20 } = req.query;
+
+    const query = { status: "active", isActive: true, isDeleted: false };
+
+    if (city) query.city = new RegExp(city, "i");
+    if (search) {
+      query.$or = [
+        { name: new RegExp(search, "i") },
+        { city: new RegExp(search, "i") },
+        { lga:  new RegExp(search, "i") },
+      ];
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [companies, total] = await Promise.all([
+      Company.find(query)
+        .select("name slug city state lga address contactPhone logoUrl stats settings.operatingHours")
+        .sort({ name: 1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Company.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: companies,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    console.error("❌ getActiveCompanies error:", error);
+    res.status(500).json({ success: false, message: "Failed to get companies" });
+  }
+};
+
 export default {
   getCompanyProfile,
   updateCompanyProfile,
@@ -775,6 +823,7 @@ export default {
   getCompanyStats,
   requestCompanyVerification,
   getCompanyNotifications,
+  getActiveCompanies,
 };
 
  

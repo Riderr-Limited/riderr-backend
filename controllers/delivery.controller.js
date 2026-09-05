@@ -2525,7 +2525,7 @@ export const createDeliveryRequest = async (req, res) => {
       customerId: customer._id,
       customerName: customer.name,
       customerPhone: customer.phone,
-      companyId: null,
+      companyId: companyId || null,
 
       pickup: {
         address: resolvedPickupAddress || `${pickup.lat}, ${pickup.lng}`,
@@ -2652,6 +2652,7 @@ export const createDeliveryRequest = async (req, res) => {
       isActive: true,
       approvalStatus: "approved",
       currentDeliveryId: { $exists: false },
+      ...(companyId ? { companyId } : {}),
       $or: [
         { "location.coordinates": { $exists: true, $ne: [0, 0] } },
         { "currentLocation.lat": { $exists: true } },

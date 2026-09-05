@@ -16,6 +16,10 @@ import contactRoutes from "./contact.routes.js";
 import adminRoutes from "./admin.routes.js";
 import rescueRoutes from "./rescue.routes.js";
 import riderRoutes from "./rider.routes.js";
+import podRoutes from "./pod.routes.js";
+import errandRoutes from "./errand.routes.js";
+import { authenticate } from "../middlewares/auth.middleware.js";
+import { getActiveCompanies } from "../controllers/company.controller.js";
 
 const router = express.Router();
 
@@ -67,6 +71,12 @@ router.use("/voice-call", voiceCallRoutes);
 router.use("/v1/support", supportTicketRoutes);
 router.use("/rescue", rescueRoutes);
 router.use("/rider", riderRoutes);
+
+// Public companies list — for customer to pick a company before creating order
+router.get("/companies", authenticate, getActiveCompanies);
+
+router.use("/pod", podRoutes);
+router.use("/errands", errandRoutes);
 
 // Admin routes
 router.use("/admin", adminRoutes);
