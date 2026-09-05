@@ -546,10 +546,17 @@ export const listErrands = async (req, res) => {
       query.customerId = user._id;
     } else if (user.role === "company_admin") {
       // See their company errands AND unassigned REQUESTED errands directed to them
-      query.$or = [
-        { companyId: user.companyId },
-        { companyId: null, status: "REQUESTED" },
-      ];
+      if (status && status !== "all") {
+        query.$or = [
+          { companyId: user.companyId, status },
+          { companyId: null, status: "REQUESTED" },
+        ];
+      } else {
+        query.$or = [
+          { companyId: user.companyId },
+          { companyId: null, status: "REQUESTED" },
+        ];
+      }
     } else if (user.role === "driver") {
       const driver = await Driver.findOne({ userId: user._id });
       if (!driver) return res.status(404).json({ success: false, message: "Driver profile not found" });
@@ -558,7 +565,8 @@ export const listErrands = async (req, res) => {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
 
-    if (status && status !== "all") query.status = status;
+    // Apply status filter for non-company_admin roles
+    if (status && status !== "all" && !query.$or) query.status = status;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [errands, total] = await Promise.all([
