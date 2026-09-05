@@ -2689,6 +2689,59 @@ export const createDeliveryRequest = async (req, res) => {
 
     console.log(`🚗 Notifying ${driversNearPickup.length} nearby drivers`);
 
+    // ─── NO DRIVERS FOUND — return nearby companies as fallback ───────
+    if (driversNearPickup.length === 0) {
+      const allCompanies = await Company.find({
+        status: "active",
+        isActive: true,
+        isDeleted: false,
+      })
+        .select("name slug city state lga address contactPhone logoUrl location lat lng stats settings.operatingHours")
+        .lean();
+
+      // Sort companies by distance to pickup location (nearest first)
+      const companiesWithDistance = allCompanies
+        .map((company) => {
+          let companyLat, companyLng;
+
+          if (company.location?.coordinates?.length >= 2) {
+            companyLng = company.location.coordinates[0];
+            companyLat = company.location.coordinates[1];
+          } else if (company.lat && company.lng) {
+            companyLat = company.lat;
+            companyLng = company.lng;
+          } else {
+            return null;
+          }
+
+          const dist = calculateDistance(pickup.lat, pickup.lng, companyLat, companyLng);
+          return { ...company, distanceFromPickup: parseFloat(dist.toFixed(2)), distanceText: `${dist.toFixed(1)} km away` };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
+
+      return res.status(200).json({
+        success: true,
+        noDriversFound: true,
+        message: "No drivers available near your pickup location. Please select a delivery company to handle your order.",
+        data: {
+          delivery: {
+            _id: delivery._id,
+            referenceId: delivery.referenceId,
+            status: delivery.status,
+            pickup: delivery.pickup,
+            dropoff: delivery.dropoff,
+            fare: delivery.fare,
+            payment: delivery.payment,
+            createdAt: delivery.createdAt,
+          },
+          companies: companiesWithDistance,
+          nextStep: "Pick a company and resubmit with companyId",
+        },
+      });
+    }
+    // ──────────────────────────────────────────────────────────────────
+
     for (const driver of driversNearPickup) {
       if (!driver.userId) continue;
 
@@ -3933,5 +3986,105 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       message: 'Failed to cancel delivery',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
+  }
+};
+
+/**
+ * @desc    Customer assigns a company to an existing delivery (after no drivers found)
+ * @route   PATCH /api/deliveries/:deliveryId/assign-company
+ * @access  Private (Customer)
+ */
+export const assignCompanyToDelivery = async (req, res) => {
+  try {
+    const customer = req.user;
+    const { deliveryId } = req.params;
+    const { companyId } = req.body;
+
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: "companyId is required" });
+    }
+
+    const delivery = await Delivery.findOne({ _id: deliveryId, customerId: customer._id });
+    if (!delivery) {
+      return res.status(404).json({ success: false, message: "Delivery not found" });
+    }
+
+    if (delivery.status !== "created") {
+      return res.status(400).json({ success: false, message: `Cannot assign company to delivery with status: ${delivery.status}` });
+    }
+
+    const company = await Company.findOne({ _id: companyId, status: "active", isActive: true });
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found or not active" });
+    }
+
+    // Assign company and notify their drivers
+    delivery.companyId = company._id;
+    await delivery.save();
+
+    // Notify only drivers from this company
+    const companyDrivers = await Driver.find({
+      companyId: company._id,
+      isOnline: true,
+      isActive: true,
+      approvalStatus: "approved",
+      currentDeliveryId: { $exists: false },
+    }).populate("userId", "name phone avatarUrl");
+
+    const driversNearPickup = companyDrivers.filter((driver) => {
+      let driverLat, driverLng;
+      if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
+        driverLat = driver.currentLocation.lat;
+        driverLng = driver.currentLocation.lng;
+      } else if (driver.location?.coordinates?.length >= 2) {
+        driverLng = driver.location.coordinates[0];
+        driverLat = driver.location.coordinates[1];
+      } else return false;
+
+      return calculateDistance(delivery.pickup.lat, delivery.pickup.lng, driverLat, driverLng) <= 20;
+    });
+
+    for (const driver of driversNearPickup) {
+      if (!driver.userId) continue;
+      await sendNotification({
+        userId: driver.userId._id,
+        ...NotificationTemplates.NEW_DELIVERY_REQUEST(delivery._id, 0, delivery.fare.totalFare),
+      });
+    }
+
+    // Socket emit
+    const io = req.app.get("io");
+    if (io) {
+      for (const driver of driversNearPickup) {
+        if (driver.userId) {
+          io.to(`user_${driver.userId._id}`).emit("delivery:new_request", {
+            deliveryId: delivery._id,
+            referenceId: delivery.referenceId,
+            pickup: delivery.pickup,
+            dropoff: delivery.dropoff,
+            fare: delivery.fare,
+            payment: delivery.payment,
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Company assigned. ${driversNearPickup.length} driver${driversNearPickup.length !== 1 ? "s" : ""} from ${company.name} notified.`,
+      data: {
+        delivery: {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          status: delivery.status,
+          companyId: delivery.companyId,
+        },
+        company: { _id: company._id, name: company.name },
+        driversNotified: driversNearPickup.length,
+      },
+    });
+  } catch (error) {
+    console.error("❌ assignCompanyToDelivery error:", error);
+    res.status(500).json({ success: false, message: "Failed to assign company to delivery" });
   }
 };

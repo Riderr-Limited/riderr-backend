@@ -20,6 +20,7 @@ import {
   getDeliveryUpdates,
   getCompanyDeliveries,
   deleteDelivery,
+  assignCompanyToDelivery,
 } from '../controllers/delivery.controller.js';
 import { updateDriverLocation } from '../controllers/driver.controller.js';
 import { protect, authorize } from '../middlewares/auth.middleware.js';
@@ -67,6 +68,7 @@ const router = express.Router();
  *         description: Delivery request created
  */
 router.post('/request', protect, authorize('customer'), createDeliveryRequest);
+router.patch('/:deliveryId/assign-company', protect, authorize('customer'), assignCompanyToDelivery);
 
 /**
  * @swagger
