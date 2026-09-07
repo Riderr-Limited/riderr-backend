@@ -18,6 +18,7 @@ import rescueRoutes from "./rescue.routes.js";
 import riderRoutes from "./rider.routes.js";
 import podRoutes from "./pod.routes.js";
 import errandRoutes from "./errand.routes.js";
+import companyDashboardRoutes from "./companyDashboard.routes.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { getActiveCompanies } from "../controllers/company.controller.js";
 
@@ -77,6 +78,7 @@ router.get("/companies", authenticate, getActiveCompanies);
 
 router.use("/pod", podRoutes);
 router.use("/errands", errandRoutes);
+router.use("/company-dashboard", companyDashboardRoutes);
 
 // Admin routes
 router.use("/admin", adminRoutes);
