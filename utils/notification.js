@@ -1,6 +1,6 @@
 import Notification from "../models/notification.model.js";
 import User from "../models/user.models.js";
-import Expo from "expo-server-sdk";
+import { Expo } from "expo-server-sdk";
 
 const expo = new Expo();
 
@@ -79,13 +79,23 @@ const sendPushNotification = async ({ tokens, title, body, data = {} }) => {
       tickets.push(...ticketChunk);
     }
 
-    // Log any errors from Expo
+    // Handle errors and remove dead tokens
+    const deadTokens = [];
     tickets.forEach((ticket, i) => {
       if (ticket.status === "error") {
         console.error(`❌ Push error for token ${validTokens[i]}:`, ticket.message);
-        // If token is invalid, it should be removed from the user — handle in cleanup
+        if (ticket.details?.error === "DeviceNotRegistered") {
+          deadTokens.push(validTokens[i]);
+        }
       }
     });
+
+    if (deadTokens.length) {
+      await User.updateMany(
+        { $or: [{ pushToken: { $in: deadTokens } }, { deviceTokens: { $in: deadTokens } }] },
+        { $pull: { deviceTokens: { $in: deadTokens } }, $set: { pushToken: null } }
+      ).catch(err => console.error("❌ Failed to remove dead tokens:", err));
+    }
 
     return tickets;
   } catch (error) {
