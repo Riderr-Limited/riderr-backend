@@ -110,11 +110,12 @@ export const confirmPOD = async (req, res) => {
 
     // Only company_admin of the selected company or admin can confirm
     if (user.role === "company_admin") {
-      if (pod.companyId && pod.companyId.toString() !== user.companyId.toString()) {
+      const userCompanyId = user.companyId?._id || user.companyId;
+      if (pod.companyId && pod.companyId.toString() !== userCompanyId.toString()) {
         return res.status(403).json({ success: false, message: "This order was not directed to your company" });
       }
       // If no companyId set yet, claim it for this company
-      if (!pod.companyId) pod.companyId = user.companyId;
+      if (!pod.companyId) pod.companyId = userCompanyId;
     } else if (user.role !== "admin") {
       return res.status(403).json({ success: false, message: "Only company admin or admin can confirm POD orders" });
     }
@@ -485,7 +486,8 @@ export const getPODDetails = async (req, res) => {
 
     const isCustomer = user._id.toString() === pod.customerId._id.toString();
     const isAdmin = user.role === "admin";
-    const isCompanyAdmin = user.role === "company_admin" && user.companyId?.toString() === pod.companyId?._id?.toString();
+    const userCompanyId = user.companyId?._id || user.companyId;
+    const isCompanyAdmin = user.role === "company_admin" && userCompanyId?.toString() === pod.companyId?._id?.toString();
     const isMerchant = pod.merchantId && user._id.toString() === pod.merchantId._id?.toString();
 
     if (!isCustomer && !isAdmin && !isCompanyAdmin && !isMerchant) {
@@ -511,9 +513,10 @@ export const listPODOrders = async (req, res) => {
     if (user.role === "customer") {
       query.customerId = user._id;
     } else if (user.role === "company_admin") {
+      const userCompanyId = user.companyId?._id || user.companyId;
       // See both: unassigned new orders (companyId null) AND their own company orders
       query.$or = [
-        { companyId: user.companyId },
+        { companyId: userCompanyId },
         { companyId: null, status: "POD_REQUESTED" },
       ];
     } else if (user.role === "driver") {
