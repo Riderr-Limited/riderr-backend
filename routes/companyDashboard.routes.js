@@ -15,6 +15,7 @@ import {
   updateManualRecord,
   deleteManualRecord,
   getManualRecordsSummary,
+  getDriversForSelect,
 } from "../controllers/companyDashboard.controller.js";
 
 const router = express.Router();
@@ -36,6 +37,7 @@ router.get("/riders/:driverId/deliveries", getRiderDeliveries);
 router.get("/deliveries", getAllDeliveries);
 
 // Manual records
+router.get("/manual-records/drivers", getDriversForSelect);
 router.get("/manual-records/summary", getManualRecordsSummary);
 router.get("/manual-records", listManualRecords);
 router.post("/manual-records", createManualRecord);

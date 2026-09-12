@@ -411,6 +411,29 @@ export const getAllDeliveries = async (req, res) => {
 
 // ─── MANUAL RECORDS ───────────────────────────────────────────────────────────
 
+// GET /api/company-dashboard/manual-records/drivers
+export const getDriversForSelect = async (req, res) => {
+  try {
+    const drivers = await Driver.find({ companyId: req.user.companyId, isSuspended: { $ne: true } })
+      .populate("userId", "name phone")
+      .select("_id plateNumber vehicleType userId")
+      .lean();
+
+    const data = drivers.map((d) => ({
+      _id: d._id,
+      name: d.userId?.name || "Unknown",
+      phone: d.userId?.phone || "",
+      plateNumber: d.plateNumber,
+      vehicleType: d.vehicleType,
+    }));
+
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("❌ getDriversForSelect error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch drivers" });
+  }
+};
+
 // POST /api/company-dashboard/manual-records
 export const createManualRecord = async (req, res) => {
   try {
