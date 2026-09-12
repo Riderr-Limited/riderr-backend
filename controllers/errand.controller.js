@@ -116,10 +116,11 @@ export const assignRiderToErrand = async (req, res) => {
 
     // Access control
     if (user.role === "company_admin") {
-      if (errand.companyId && errand.companyId.toString() !== user.companyId.toString()) {
+      const userCompanyId = user.companyId?._id || user.companyId;
+      if (errand.companyId && errand.companyId.toString() !== userCompanyId.toString()) {
         return res.status(403).json({ success: false, message: "This errand was not directed to your company" });
       }
-      if (!errand.companyId) errand.companyId = user.companyId;
+      if (!errand.companyId) errand.companyId = userCompanyId;
     } else if (user.role !== "admin") {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
@@ -546,7 +547,8 @@ export const getErrandDetails = async (req, res) => {
 
     const isCustomer = user._id.toString() === errand.customerId._id.toString();
     const isAdmin = user.role === "admin";
-    const isCompanyAdmin = user.role === "company_admin" && user.companyId?.toString() === errand.companyId?._id?.toString();
+    const userCompanyId = user.companyId?._id || user.companyId;
+    const isCompanyAdmin = user.role === "company_admin" && userCompanyId?.toString() === errand.companyId?._id?.toString();
 
     let isDriver = false;
     if (user.role === "driver" && errand.driverId) {
@@ -577,15 +579,16 @@ export const listErrands = async (req, res) => {
     if (user.role === "customer") {
       query.customerId = user._id;
     } else if (user.role === "company_admin") {
+      const userCompanyId = user.companyId?._id || user.companyId;
       // See their company errands AND unassigned REQUESTED errands directed to them
       if (status && status !== "all") {
         query.$or = [
-          { companyId: user.companyId, status },
+          { companyId: userCompanyId, status },
           { companyId: null, status: "REQUESTED" },
         ];
       } else {
         query.$or = [
-          { companyId: user.companyId },
+          { companyId: userCompanyId },
           { companyId: null, status: "REQUESTED" },
         ];
       }
