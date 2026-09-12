@@ -444,7 +444,7 @@ export const getDriversForSelect = async (req, res) => {
 // POST /api/company-dashboard/manual-records
 export const createManualRecord = async (req, res) => {
   try {
-    const companyId = req.user.companyId;
+    const companyId = req.user.companyId?._id || req.user.companyId;
     const {
       driverId, serviceType, customServiceLabel,
       description, pickupAddress, dropoffAddress,
@@ -461,13 +461,12 @@ export const createManualRecord = async (req, res) => {
       return res.status(400).json({ success: false, message: "customServiceLabel is required when serviceType is OTHER" });
     }
 
-    // Validate driver belongs to this company
-    let driverName, driverPhone;
+    let driverName, driverPhone, driverDoc;
     if (driverId) {
-      const driver = await Driver.findOne({ _id: driverId, companyId }).populate("userId", "name phone");
-      if (!driver) return res.status(404).json({ success: false, message: "Rider not found in your company" });
-      driverName = driver.userId?.name;
-      driverPhone = driver.userId?.phone;
+      driverDoc = await Driver.findOne({ _id: driverId, companyId }).populate("userId", "name phone email avatarUrl");
+      if (!driverDoc) return res.status(404).json({ success: false, message: "Rider not found in your company" });
+      driverName = driverDoc.userId?.name;
+      driverPhone = driverDoc.userId?.phone;
     }
 
     const record = new ManualRecord({
@@ -493,7 +492,12 @@ export const createManualRecord = async (req, res) => {
 
     await record.save();
 
-    res.status(201).json({ success: true, message: "Manual record created", data: record });
+    const populated = await ManualRecord.findById(record._id)
+      .populate({ path: "driverId", select: "plateNumber vehicleType vehicleColor vehicleMake vehicleModel approvalStatus isOnline", populate: { path: "userId", select: "name phone email avatarUrl" } })
+      .populate("companyId", "name contactEmail contactPhone")
+      .populate("recordedBy", "name email");
+
+    res.status(201).json({ success: true, message: "Manual record created", data: populated });
   } catch (error) {
     console.error(" createManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to create manual record" });
@@ -503,7 +507,7 @@ export const createManualRecord = async (req, res) => {
 // GET /api/company-dashboard/manual-records
 export const listManualRecords = async (req, res) => {
   try {
-    const companyId = req.user.companyId;
+    const companyId = req.user.companyId?._id || req.user.companyId;
     const { serviceType, driverId, paymentStatus, status, page = 1, limit = 10, startDate, endDate } = req.query;
 
     const query = { companyId };
@@ -516,7 +520,9 @@ export const listManualRecords = async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [records, total] = await Promise.all([
       ManualRecord.find(query)
-        .populate("driverId", "plateNumber vehicleType")
+        .populate({ path: "driverId", select: "plateNumber vehicleType vehicleColor vehicleMake vehicleModel approvalStatus isOnline", populate: { path: "userId", select: "name phone email avatarUrl" } })
+        .populate("companyId", "name contactEmail contactPhone")
+        .populate("recordedBy", "name email")
         .sort({ deliveryDate: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -538,9 +544,11 @@ export const listManualRecords = async (req, res) => {
 // GET /api/company-dashboard/manual-records/:recordId
 export const getManualRecord = async (req, res) => {
   try {
-    const record = await ManualRecord.findOne({ _id: req.params.recordId, companyId: req.user.companyId })
-      .populate("driverId", "plateNumber vehicleType userId")
-      .populate("recordedBy", "name");
+    const companyId = req.user.companyId?._id || req.user.companyId;
+    const record = await ManualRecord.findOne({ _id: req.params.recordId, companyId })
+      .populate({ path: "driverId", select: "plateNumber vehicleType vehicleColor vehicleMake vehicleModel approvalStatus isOnline isSuspended rating stats", populate: { path: "userId", select: "name phone email avatarUrl" } })
+      .populate("companyId", "name contactEmail contactPhone address city")
+      .populate("recordedBy", "name email phone");
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
     res.status(200).json({ success: true, data: record });
   } catch (error) {
@@ -552,18 +560,40 @@ export const getManualRecord = async (req, res) => {
 // PATCH /api/company-dashboard/manual-records/:recordId
 export const updateManualRecord = async (req, res) => {
   try {
-    const record = await ManualRecord.findOne({ _id: req.params.recordId, companyId: req.user.companyId });
+    const companyId = req.user.companyId?._id || req.user.companyId;
+    const record = await ManualRecord.findOne({ _id: req.params.recordId, companyId });
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
 
     const allowed = ["description", "pickupAddress", "dropoffAddress", "customerName", "customerPhone",
-      "deliveryFee", "amountPaid", "paymentMethod", "status", "deliveryDate", "notes", "driverId"];
+      "deliveryFee", "amountPaid", "paymentMethod", "status", "deliveryDate", "notes"];
 
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) record[field] = req.body[field];
     });
 
+    // If driverId is being updated, refresh name/phone snapshots
+    if (req.body.driverId !== undefined) {
+      if (req.body.driverId) {
+        const driver = await Driver.findOne({ _id: req.body.driverId, companyId }).populate("userId", "name phone");
+        if (!driver) return res.status(404).json({ success: false, message: "Rider not found in your company" });
+        record.driverId = driver._id;
+        record.driverName = driver.userId?.name;
+        record.driverPhone = driver.userId?.phone;
+      } else {
+        record.driverId = null;
+        record.driverName = null;
+        record.driverPhone = null;
+      }
+    }
+
     await record.save();
-    res.status(200).json({ success: true, message: "Record updated", data: record });
+
+    const populated = await ManualRecord.findById(record._id)
+      .populate({ path: "driverId", select: "plateNumber vehicleType vehicleColor vehicleMake vehicleModel approvalStatus isOnline", populate: { path: "userId", select: "name phone email avatarUrl" } })
+      .populate("companyId", "name contactEmail contactPhone")
+      .populate("recordedBy", "name email");
+
+    res.status(200).json({ success: true, message: "Record updated", data: populated });
   } catch (error) {
     console.error(" updateManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to update record" });
