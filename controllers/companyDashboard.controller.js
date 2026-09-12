@@ -449,7 +449,7 @@ export const createManualRecord = async (req, res) => {
       driverId, serviceType, customServiceLabel,
       description, pickupAddress, dropoffAddress,
       customerName, customerPhone,
-      amount, deliveryFee, amountPaid,
+      deliveryFee, amountPaid,
       paymentMethod, status, deliveryDate, notes,
     } = req.body;
 
@@ -482,7 +482,6 @@ export const createManualRecord = async (req, res) => {
       dropoffAddress,
       customerName,
       customerPhone,
-      amount: Number(amount) || 0,
       deliveryFee: Number(deliveryFee) || 0,
       amountPaid: Number(amountPaid) || 0,
       paymentMethod: paymentMethod || "CASH",
@@ -557,7 +556,7 @@ export const updateManualRecord = async (req, res) => {
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
 
     const allowed = ["description", "pickupAddress", "dropoffAddress", "customerName", "customerPhone",
-      "amount", "deliveryFee", "amountPaid", "paymentMethod", "status", "deliveryDate", "notes", "driverId"];
+      "deliveryFee", "amountPaid", "paymentMethod", "status", "deliveryDate", "notes", "driverId"];
 
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) record[field] = req.body[field];

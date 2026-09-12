@@ -32,7 +32,6 @@ const manualRecordSchema = new mongoose.Schema(
     customerPhone: String,
 
     // Financials
-    amount:        { type: Number, default: 0, min: 0 },
     deliveryFee:   { type: Number, default: 0, min: 0 },
     totalAmount:   { type: Number, default: 0, min: 0 }, // computed pre-save
 
@@ -80,7 +79,7 @@ manualRecordSchema.pre("save", function () {
   if (!this.referenceId) {
     this.referenceId = `MAN-${Date.now()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   }
-  this.totalAmount = (this.amount || 0) + (this.deliveryFee || 0);
+  this.totalAmount = this.deliveryFee || 0;
   this.balance = Math.max(0, this.totalAmount - (this.amountPaid || 0));
   if (this.balance === 0 && this.totalAmount > 0) this.paymentStatus = "PAID";
   else if (this.amountPaid > 0 && this.balance > 0) this.paymentStatus = "PARTIAL";
