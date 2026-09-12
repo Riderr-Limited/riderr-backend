@@ -414,9 +414,15 @@ export const getAllDeliveries = async (req, res) => {
 // GET /api/company-dashboard/manual-records/drivers
 export const getDriversForSelect = async (req, res) => {
   try {
-    const drivers = await Driver.find({ companyId: req.user.companyId, isSuspended: { $ne: true } })
+    const companyId = req.user.companyId?._id || req.user.companyId;
+
+    const drivers = await Driver.find({
+      companyId,
+      isActive: true,
+      isSuspended: { $ne: true },
+    })
       .populate("userId", "name phone")
-      .select("_id plateNumber vehicleType userId")
+      .select("_id plateNumber vehicleType userId approvalStatus")
       .lean();
 
     const data = drivers.map((d) => ({
@@ -425,6 +431,7 @@ export const getDriversForSelect = async (req, res) => {
       phone: d.userId?.phone || "",
       plateNumber: d.plateNumber,
       vehicleType: d.vehicleType,
+      approvalStatus: d.approvalStatus,
     }));
 
     res.status(200).json({ success: true, data });
