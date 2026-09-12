@@ -4,6 +4,7 @@ import Driver from "../models/riders.models.js";
 import User from "../models/user.models.js";
 import Company from "../models/company.models.js";
 import { sendNotification } from "../utils/notification.js";
+import { notifyCompany } from "../utils/companyNotify.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,14 @@ export const createPOD = async (req, res) => {
     addAudit(pod, "POD_CREATED", customer, "customer");
     await pod.save();
 
+    await notifyCompany(
+      pod.companyId,
+      "📦 New POD Order",
+      `New Pay-on-Delivery order from ${pod.customerName} for ${pod.product.name}.`,
+      { type: "pod_new", podId: pod._id },
+      `Hello,\n\nA new POD order has been submitted.\n\nRef: ${pod.referenceId}\nProduct: ${pod.product.name} (x${pod.product.quantity})\nCustomer: ${pod.customerName} (${pod.customerPhone})\nDropoff: ${pod.dropoff.address}\nAmount to Collect: ₦${pod.amountToCollect?.toLocaleString()}\n\nPlease confirm the order.`
+    );
+
     res.status(201).json({
       success: true,
       message: "POD order created successfully",
@@ -124,6 +133,14 @@ export const confirmPOD = async (req, res) => {
     pod.confirmedAt = new Date();
     addAudit(pod, "POD_CONFIRMED", user, user.role);
     await pod.save();
+
+    await notifyCompany(
+      pod.companyId,
+      "✅ POD Order Confirmed",
+      `POD order #${pod.referenceId} has been confirmed. Please assign a driver.`,
+      { type: "pod_confirmed", podId: pod._id },
+      `Hello,\n\nPOD order #${pod.referenceId} has been confirmed.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount to Collect: ₦${pod.amountToCollect?.toLocaleString()}\n\nPlease assign a driver.`
+    );
 
     // Notify customer
     await sendNotification({
@@ -296,6 +313,14 @@ export const recordPODPayment = async (req, res) => {
     addAudit(pod, "PAYMENT_COLLECTED", driverUser, "driver", note || `Cash collected: ₦${pod.amountToCollect}`);
     await pod.save();
 
+    await notifyCompany(
+      pod.companyId,
+      "💰 POD Payment Collected",
+      `Payment of ₦${pod.amountToCollect?.toLocaleString()} collected for POD order #${pod.referenceId}.`,
+      { type: "pod_delivered_paid", podId: pod._id },
+      `Hello,\n\nPOD order #${pod.referenceId} has been delivered and payment collected.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount Collected: ₦${pod.amountToCollect?.toLocaleString()}\nSettlement pending.`
+    );
+
     // Notify customer
     await sendNotification({
       userId: pod.customerId,
@@ -461,6 +486,14 @@ export const cancelPOD = async (req, res) => {
     pod.cancelledBy = { userId: user._id, role: user.role, reason };
     addAudit(pod, "CANCELLED", user, user.role, reason);
     await pod.save();
+
+    await notifyCompany(
+      pod.companyId,
+      "❌ POD Order Cancelled",
+      `POD order #${pod.referenceId} has been cancelled. Reason: ${reason}`,
+      { type: "pod_cancelled", podId: pod._id },
+      `Hello,\n\nPOD order #${pod.referenceId} has been cancelled.\nCancelled by: ${user.role}\nReason: ${reason}\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}`
+    );
 
     res.status(200).json({ success: true, message: "POD order cancelled", data: pod });
   } catch (error) {

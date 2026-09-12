@@ -2,6 +2,7 @@ import Errand from "../models/errand.model.js";
 import Driver from "../models/riders.models.js";
 import User from "../models/user.models.js";
 import { sendNotification } from "../utils/notification.js";
+import { notifyCompany } from "../utils/companyNotify.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,14 @@ export const createErrand = async (req, res) => {
     addAudit(errand, "ERRAND_CREATED", customer, "customer");
     await errand.save();
 
+    await notifyCompany(
+      errand.companyId,
+      "📋 New Errand Request",
+      `New errand from ${errand.customerName}: ${errand.description.substring(0, 80)}`,
+      { type: "errand_new", errandId: errand._id, errandType: errand.errandType },
+      `Hello,\n\nA new errand has been submitted.\n\nRef: ${errand.referenceId}\nType: ${errand.errandType}\nCustomer: ${errand.customerName} (${errand.customerPhone})\nPickup: ${errand.pickupLocation.address}\nDescription: ${errand.description}\n\nPlease log in to assign a rider.`
+    );
+
     res.status(201).json({
       success: true,
       message: "Errand created successfully",
@@ -127,12 +136,19 @@ export const assignRiderToErrand = async (req, res) => {
     }
 
     errand.driverId = driver._id;
-    // Set companyId from driver's company (same pattern as delivery flow)
     if (driver.companyId) errand.companyId = driver.companyId;
     errand.status = "RIDER_ASSIGNED";
     errand.assignedAt = new Date();
     addAudit(errand, "RIDER_ASSIGNED", user, user.role, `Driver: ${driver.userId?.name}`);
     await errand.save();
+
+    await notifyCompany(
+      errand.companyId,
+      "✅ Rider Assigned to Errand",
+      `Rider ${driver.userId?.name} has been assigned to errand #${errand.referenceId}.`,
+      { type: "errand_assigned", errandId: errand._id },
+      `Hello,\n\nRider ${driver.userId?.name} has been assigned to errand #${errand.referenceId}.\nCustomer: ${errand.customerName}\nDescription: ${errand.description}`
+    );
 
     if (driver.userId) {
       await sendNotification({
@@ -396,6 +412,14 @@ export const confirmErrandCompletion = async (req, res) => {
     addAudit(errand, "ERRAND_CONFIRMED_COMPLETED", user, user.role);
     await errand.save();
 
+    await notifyCompany(
+      errand.companyId,
+      "🎉 Errand Completed",
+      `Errand #${errand.referenceId} has been completed and confirmed by the customer.`,
+      { type: "errand_completed", errandId: errand._id },
+      `Hello,\n\nErrand #${errand.referenceId} has been completed.\nCustomer: ${errand.customerName}\nService Fee: ₦${errand.serviceFee?.toLocaleString() || 0}\nActual Spend: ₦${errand.actualSpend?.toLocaleString() || 0}`
+    );
+
     // Notify driver
     if (errand.driverId) {
       const driver = await Driver.findById(errand.driverId).populate("userId", "_id name");
@@ -447,6 +471,14 @@ export const cancelErrand = async (req, res) => {
     errand.cancelledBy = { userId: user._id, role: user.role, reason };
     addAudit(errand, "CANCELLED", user, user.role, reason);
     await errand.save();
+
+    await notifyCompany(
+      errand.companyId,
+      "❌ Errand Cancelled",
+      `Errand #${errand.referenceId} has been cancelled. Reason: ${reason}`,
+      { type: "errand_cancelled", errandId: errand._id },
+      `Hello,\n\nErrand #${errand.referenceId} has been cancelled.\nCancelled by: ${user.role}\nReason: ${reason}\nCustomer: ${errand.customerName}`
+    );
 
     // Notify driver if assigned
     if (errand.driverId) {
