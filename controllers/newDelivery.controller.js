@@ -671,7 +671,7 @@ export const getNearbyDrivers = async (req, res) => {
     if (vehicleType) query.vehicleType = vehicleType;
 
     const drivers = await Driver.find(query).populate('userId', 'name phone avatarUrl');
-    console.log(`🔍 Nearby drivers query found ${drivers.length} online drivers`);
+    console.log(` Nearby drivers query found ${drivers.length} online drivers`);
 
     const nearby = drivers
       .map(driver => {

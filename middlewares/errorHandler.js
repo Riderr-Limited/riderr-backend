@@ -3,7 +3,7 @@
  */
 export const errorHandler = (err, req, res, next) => {
   // Log error for debugging
-  console.error('🔥 ERROR:', {
+  console.error(' ERROR:', {
     message: err.message,
     stack: err.stack,
     path: req.path,

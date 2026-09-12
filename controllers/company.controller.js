@@ -84,7 +84,7 @@ export const getCompanyProfile = async (req, res) => {
       data: companyProfile,
     });
   } catch (error) {
-    console.error("❌ Get company profile error:", error);
+    console.error(" Get company profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company profile",
@@ -230,7 +230,7 @@ export const updateCompanyProfile = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Update company profile error:", error);
+    console.error(" Update company profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update company profile",
@@ -305,7 +305,7 @@ export const updateCompanySettings = async (req, res) => {
       data: filteredSettings,
     });
   } catch (error) {
-    console.error("❌ Update company settings error:", error);
+    console.error(" Update company settings error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update company settings",
@@ -400,7 +400,7 @@ export const uploadCompanyDocument = async (req, res) => {
       data: newDocument,
     });
   } catch (error) {
-    console.error("❌ Upload document error:", error);
+    console.error(" Upload document error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to upload document",
@@ -490,7 +490,7 @@ export const getCompanyDrivers = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company drivers error:", error);
+    console.error(" Get company drivers error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company drivers",
@@ -560,7 +560,7 @@ export const getCompanyStats = async (req, res) => {
       data: stats,
     });
   } catch (error) {
-    console.error("❌ Get company stats error:", error);
+    console.error(" Get company stats error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company statistics",
@@ -645,7 +645,7 @@ export const requestCompanyVerification = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Request company verification error:", error);
+    console.error(" Request company verification error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to submit verification request",
@@ -757,7 +757,7 @@ export const getCompanyNotifications = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company notifications error:", error);
+    console.error(" Get company notifications error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get notifications",
@@ -809,7 +809,7 @@ export const getActiveCompanies = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ getActiveCompanies error:", error);
+    console.error(" getActiveCompanies error:", error);
     res.status(500).json({ success: false, message: "Failed to get companies" });
   }
 };

@@ -50,7 +50,7 @@ export const sendVerificationEmail = async (email, name, token) => {
 
     return true;
   } catch (err) {
-    console.error("❌ Email sending error:", err.message);
+    console.error(" Email sending error:", err.message);
     return false;
   }
 };

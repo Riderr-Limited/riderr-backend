@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const adminChatSchema = new mongoose.Schema(
   {
-    // The non-admin party — the "owner" of this conversation thread
+    // The non-admin party  the "owner" of this conversation thread
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -35,8 +35,8 @@ const adminChatSchema = new mongoose.Schema(
       default: null,
     },
 
-    // true  → sent by admin TO the user
-    // false → sent by user TO admin
+    // true   sent by admin TO the user
+    // false  sent by user TO admin
     isAdminMessage: {
       type: Boolean,
       required: true,

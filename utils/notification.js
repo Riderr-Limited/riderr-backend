@@ -52,7 +52,7 @@ export const sendNotification = async ({
 
     return notification;
   } catch (error) {
-    console.error("❌ sendNotification error:", error);
+    console.error(" sendNotification error:", error);
     return null;
   }
 };
@@ -83,7 +83,7 @@ const sendPushNotification = async ({ tokens, title, body, data = {} }) => {
     const deadTokens = [];
     tickets.forEach((ticket, i) => {
       if (ticket.status === "error") {
-        console.error(`❌ Push error for token ${validTokens[i]}:`, ticket.message);
+        console.error(` Push error for token ${validTokens[i]}:`, ticket.message);
         if (ticket.details?.error === "DeviceNotRegistered") {
           deadTokens.push(validTokens[i]);
         }
@@ -94,12 +94,12 @@ const sendPushNotification = async ({ tokens, title, body, data = {} }) => {
       await User.updateMany(
         { $or: [{ pushToken: { $in: deadTokens } }, { deviceTokens: { $in: deadTokens } }] },
         { $pull: { deviceTokens: { $in: deadTokens } }, $set: { pushToken: null } }
-      ).catch(err => console.error("❌ Failed to remove dead tokens:", err));
+      ).catch(err => console.error(" Failed to remove dead tokens:", err));
     }
 
     return tickets;
   } catch (error) {
-    console.error("❌ Push error:", error);
+    console.error(" Push error:", error);
     return null;
   }
 };
@@ -118,7 +118,7 @@ export const markNotificationAsRead = async (notificationId) => {
     });
     return true;
   } catch (error) {
-    console.error("❌ markNotificationAsRead error:", error);
+    console.error(" markNotificationAsRead error:", error);
     return false;
   }
 };
@@ -131,7 +131,7 @@ export const markAllNotificationsAsRead = async (userId) => {
     );
     return true;
   } catch (error) {
-    console.error("❌ markAllNotificationsAsRead error:", error);
+    console.error(" markAllNotificationsAsRead error:", error);
     return false;
   }
 };
@@ -140,7 +140,7 @@ export const getUnreadCount = async (userId) => {
   try {
     return await Notification.countDocuments({ userId, read: false });
   } catch (error) {
-    console.error("❌ getUnreadCount error:", error);
+    console.error(" getUnreadCount error:", error);
     return 0;
   }
 };
@@ -154,17 +154,17 @@ export const deleteOldNotifications = async (daysOld = 30) => {
     });
     return result.deletedCount;
   } catch (error) {
-    console.error("❌ deleteOldNotifications error:", error);
+    console.error(" deleteOldNotifications error:", error);
     return 0;
   }
 };
 
 // Notification templates
 export const NotificationTemplates = {
-  // ── Customer ──────────────────────────────────────────
+  //  Customer 
   DELIVERY_CREATED: (deliveryId, referenceId) => ({
     type: "delivery", subType: "delivery_request",
-    title: "📦 Delivery Request Created",
+    title: " Delivery Request Created",
     message: `Your delivery ${referenceId} has been created. Looking for nearby drivers...`,
     data: { deliveryId, referenceId },
     actionUrl: `/deliveries/${deliveryId}`, actionLabel: "View Delivery",
@@ -172,7 +172,7 @@ export const NotificationTemplates = {
 
   DRIVER_ASSIGNED: (deliveryId, driverName, estimatedTime) => ({
     type: "delivery", subType: "delivery_accepted",
-    title: "🚗 Driver Assigned!",
+    title: " Driver Assigned!",
     message: `${driverName} will pick up your package in ~${estimatedTime} minutes`,
     data: { deliveryId, driverName, estimatedTime },
     actionUrl: `/deliveries/${deliveryId}`, actionLabel: "Track Delivery",
@@ -180,7 +180,7 @@ export const NotificationTemplates = {
 
   PACKAGE_PICKED_UP: (deliveryId, driverName) => ({
     type: "delivery", subType: "delivery_picked_up",
-    title: "📦 Package Picked Up",
+    title: " Package Picked Up",
     message: `${driverName} has picked up your package and is heading to the destination`,
     data: { deliveryId, driverName },
     actionUrl: `/deliveries/${deliveryId}`, actionLabel: "Track Delivery",
@@ -188,7 +188,7 @@ export const NotificationTemplates = {
 
   DELIVERY_COMPLETED: (deliveryId, referenceId) => ({
     type: "delivery", subType: "delivery_completed",
-    title: "🎉 Delivery Completed!",
+    title: " Delivery Completed!",
     message: `Your delivery ${referenceId} has been completed. Rate your experience!`,
     data: { deliveryId, referenceId, requestRating: true },
     actionUrl: `/deliveries/${deliveryId}`, actionLabel: "Rate Delivery",
@@ -197,7 +197,7 @@ export const NotificationTemplates = {
 
   DELIVERY_CANCELLED: (deliveryId, reason) => ({
     type: "delivery", subType: "delivery_cancelled",
-    title: "❌ Delivery Cancelled",
+    title: " Delivery Cancelled",
     message: `Your delivery has been cancelled.${reason ? ` Reason: ${reason}` : ""}`,
     data: { deliveryId, reason },
     priority: "high",
@@ -205,8 +205,8 @@ export const NotificationTemplates = {
 
   PAYMENT_REQUIRED: (deliveryId, amount, driverName, companyName) => ({
     type: "payment", subType: "payment_success",
-    title: "💳 Payment Required",
-    message: `${driverName} accepted your delivery. Pay ₦${amount.toLocaleString()} to ${companyName}`,
+    title: " Payment Required",
+    message: `${driverName} accepted your delivery. Pay ${amount.toLocaleString()} to ${companyName}`,
     data: { deliveryId, amount, driverName, companyName, requiresPayment: true },
     actionUrl: `/deliveries/${deliveryId}/pay`, actionLabel: "Pay Now",
     priority: "high",
@@ -214,16 +214,16 @@ export const NotificationTemplates = {
 
   PAYMENT_SUCCESS: (deliveryId, amount) => ({
     type: "payment", subType: "payment_success",
-    title: "✅ Payment Successful",
-    message: `Payment of ₦${amount.toLocaleString()} was successful`,
+    title: " Payment Successful",
+    message: `Payment of ${amount.toLocaleString()} was successful`,
     data: { deliveryId, amount },
     actionUrl: `/deliveries/${deliveryId}`, actionLabel: "View Delivery",
   }),
 
   PAYMENT_FAILED: (deliveryId, amount) => ({
     type: "payment", subType: "payment_failed",
-    title: "❌ Payment Failed",
-    message: `Payment of ₦${amount.toLocaleString()} failed. Please try again`,
+    title: " Payment Failed",
+    message: `Payment of ${amount.toLocaleString()} failed. Please try again`,
     data: { deliveryId, amount },
     actionUrl: `/deliveries/${deliveryId}/pay`, actionLabel: "Retry Payment",
     priority: "high",
@@ -231,16 +231,16 @@ export const NotificationTemplates = {
 
   PAYMENT_REFUNDED: (deliveryId, amount) => ({
     type: "payment", subType: "payment_refunded",
-    title: "💰 Refund Processed",
-    message: `A refund of ₦${amount.toLocaleString()} has been processed`,
+    title: " Refund Processed",
+    message: `A refund of ${amount.toLocaleString()} has been processed`,
     data: { deliveryId, amount },
   }),
 
-  // ── Driver ────────────────────────────────────────────
+  //  Driver 
   NEW_DELIVERY_REQUEST: (deliveryId, distance, fare) => ({
     type: "delivery", subType: "delivery_request",
-    title: "📦 New Delivery Request",
-    message: `New delivery ${distance.toFixed(1)}km away. Fare: ₦${fare.toLocaleString()}`,
+    title: " New Delivery Request",
+    message: `New delivery ${distance.toFixed(1)}km away. Fare: ${fare.toLocaleString()}`,
     data: { deliveryId, distance, fare },
     actionUrl: `/driver/deliveries/${deliveryId}`, actionLabel: "View Request",
     priority: "high",
@@ -248,21 +248,21 @@ export const NotificationTemplates = {
 
   PAYMENT_RECEIVED: (deliveryId, amount) => ({
     type: "payment", subType: "payout_processed",
-    title: "💰 Payment Received",
-    message: `Payment of ₦${amount.toLocaleString()} received for this delivery`,
+    title: " Payment Received",
+    message: `Payment of ${amount.toLocaleString()} received for this delivery`,
     data: { deliveryId, amount },
   }),
 
   RATING_RECEIVED: (deliveryId, rating, review) => ({
     type: "driver", subType: "rating_received",
-    title: "⭐ New Rating",
+    title: " New Rating",
     message: `You received a ${rating}-star rating${review ? `: "${review}"` : ""}`,
     data: { deliveryId, rating, review },
   }),
 
   ACCOUNT_VERIFIED: (driverId) => ({
     type: "driver", subType: "driver_approved",
-    title: "✅ Account Verified",
+    title: " Account Verified",
     message: "Your driver account has been verified. You can now go online!",
     data: { driverId },
     actionUrl: "/driver/dashboard", actionLabel: "Go Online",
@@ -271,7 +271,7 @@ export const NotificationTemplates = {
 
   ACCOUNT_SUSPENDED: (driverId, reason) => ({
     type: "driver", subType: "driver_suspended",
-    title: "⚠️ Account Suspended",
+    title: " Account Suspended",
     message: `Your account has been suspended. Reason: ${reason}`,
     data: { driverId, reason },
     actionUrl: "/driver/support", actionLabel: "Contact Support",
@@ -280,17 +280,17 @@ export const NotificationTemplates = {
 
   ACCOUNT_REACTIVATED: (driverId) => ({
     type: "driver", subType: "new_assignment",
-    title: "✅ Account Reactivated",
+    title: " Account Reactivated",
     message: "Your account has been reactivated. Welcome back!",
     data: { driverId },
     actionUrl: "/driver/dashboard", actionLabel: "Go to Dashboard",
     priority: "high",
   }),
 
-  // ── Company ───────────────────────────────────────────
+  //  Company 
   NEW_DRIVER_REQUEST: (driverId, driverName) => ({
     type: "company", subType: "driver_application",
-    title: "👤 New Driver Request",
+    title: " New Driver Request",
     message: `${driverName} has requested to join your company`,
     data: { driverId, driverName },
     actionUrl: `/company/drivers/${driverId}`, actionLabel: "Review Request",
@@ -299,7 +299,7 @@ export const NotificationTemplates = {
 
   COMPANY_APPROVED: () => ({
     type: "company", subType: "company_approved",
-    title: "✅ Company Approved",
+    title: " Company Approved",
     message: "Your company has been approved and is now active",
     priority: "high",
     actionUrl: "/company/dashboard", actionLabel: "Go to Dashboard",
@@ -307,7 +307,7 @@ export const NotificationTemplates = {
 
   COMPANY_SUSPENDED: (reason) => ({
     type: "company", subType: "company_suspended",
-    title: "⚠️ Company Suspended",
+    title: " Company Suspended",
     message: `Your company has been suspended. Reason: ${reason}`,
     priority: "urgent",
     actionUrl: "/company/support", actionLabel: "Contact Support",
@@ -315,38 +315,38 @@ export const NotificationTemplates = {
 
   BANK_DETAILS_APPROVED: () => ({
     type: "company", subType: "company_approved",
-    title: "✅ Bank Details Approved",
+    title: " Bank Details Approved",
     message: "Your company bank details have been verified and approved",
     priority: "high",
   }),
 
-  // ── Security ──────────────────────────────────────────
+  //  Security 
   PASSWORD_RESET: () => ({
     type: "security", subType: "password_changed",
-    title: "🔐 Password Reset",
+    title: " Password Reset",
     message: "Your password has been reset by an administrator",
     priority: "high",
   }),
 
   ACCOUNT_UPDATED: (fields) => ({
     type: "security", subType: "new_device",
-    title: "📝 Account Updated",
+    title: " Account Updated",
     message: "Your account has been updated by an administrator",
     data: { updatedFields: fields },
   }),
 
   CUSTOMER_CANCELLED: (deliveryId, reason) => ({
     type: "delivery", subType: "delivery_cancelled",
-    title: "🚫 Delivery Cancelled",
+    title: " Delivery Cancelled",
     message: `The customer has cancelled the delivery. Reason: ${reason}`,
     data: { deliveryId, reason },
     priority: "high",
   }),
 
-  // ── Ride ──────────────────────────────────────────────
+  //  Ride 
   RIDE_ACCEPTED: (rideId, driverName) => ({
     type: "delivery", subType: "delivery_accepted",
-    title: "🚗 Driver On The Way!",
+    title: " Driver On The Way!",
     message: `${driverName} has accepted your ride and is heading to your pickup location`,
     data: { rideId, driverName },
     actionUrl: `/rides/${rideId}`, actionLabel: "Track Ride",
@@ -355,7 +355,7 @@ export const NotificationTemplates = {
 
   RIDE_ARRIVED: (rideId, driverName) => ({
     type: "delivery", subType: "delivery_accepted",
-    title: "📍 Driver Arrived!",
+    title: " Driver Arrived!",
     message: `${driverName} has arrived at your pickup location`,
     data: { rideId, driverName },
     actionUrl: `/rides/${rideId}`, actionLabel: "View Ride",
@@ -364,7 +364,7 @@ export const NotificationTemplates = {
 
   RIDE_STARTED: (rideId) => ({
     type: "delivery", subType: "delivery_picked_up",
-    title: "🚀 Ride Started",
+    title: " Ride Started",
     message: "Your ride has started. Enjoy your trip!",
     data: { rideId },
     actionUrl: `/rides/${rideId}`, actionLabel: "Track Ride",
@@ -372,8 +372,8 @@ export const NotificationTemplates = {
 
   RIDE_COMPLETED: (rideId, fare) => ({
     type: "delivery", subType: "delivery_completed",
-    title: "🎉 Ride Completed!",
-    message: `Your ride has been completed. Total fare: ₦${fare.toLocaleString()}. Please rate your experience!`,
+    title: " Ride Completed!",
+    message: `Your ride has been completed. Total fare: ${fare.toLocaleString()}. Please rate your experience!`,
     data: { rideId, fare, requestRating: true },
     actionUrl: `/rides/${rideId}`, actionLabel: "Rate Ride",
     priority: "high",
@@ -381,7 +381,7 @@ export const NotificationTemplates = {
 
   RIDE_CANCELLED: (rideId, cancelledBy, reason) => ({
     type: "delivery", subType: "delivery_cancelled",
-    title: "❌ Ride Cancelled",
+    title: " Ride Cancelled",
     message: `Your ride has been cancelled by the ${cancelledBy}.${reason ? ` Reason: ${reason}` : ""}`,
     data: { rideId, cancelledBy, reason },
     priority: "high",
@@ -389,26 +389,26 @@ export const NotificationTemplates = {
 
   NEW_RIDE_REQUEST: (rideId, pickupAddress) => ({
     type: "delivery", subType: "delivery_request",
-    title: "🚗 New Ride Request",
+    title: " New Ride Request",
     message: `New ride request from ${pickupAddress}`,
     data: { rideId, pickupAddress },
     actionUrl: `/driver/rides/${rideId}`, actionLabel: "View Request",
     priority: "high",
   }),
 
-  // ── Chat ──────────────────────────────────────────────
+  //  Chat 
   NEW_CHAT_MESSAGE: (senderName, deliveryId, preview) => ({
     type: "system", subType: "alert",
-    title: `💬 ${senderName}`,
+    title: ` ${senderName}`,
     message: preview || "You have a new message",
     data: { deliveryId, senderName },
     actionUrl: `/deliveries/${deliveryId}/chat`, actionLabel: "View Message",
   }),
 
-  // ── Support ───────────────────────────────────────────
+  //  Support 
   SUPPORT_TICKET_CREATED: (ticketId) => ({
     type: "support", subType: "alert",
-    title: "🎫 Support Ticket Created",
+    title: " Support Ticket Created",
     message: `Your support ticket #${ticketId} has been created. We'll get back to you shortly.`,
     data: { ticketId },
     actionUrl: `/support/${ticketId}`, actionLabel: "View Ticket",
@@ -416,7 +416,7 @@ export const NotificationTemplates = {
 
   SUPPORT_TICKET_UPDATED: (ticketId, status) => ({
     type: "support", subType: "alert",
-    title: "🎫 Support Ticket Updated",
+    title: " Support Ticket Updated",
     message: `Your support ticket #${ticketId} status has been updated to: ${status}`,
     data: { ticketId, status },
     actionUrl: `/support/${ticketId}`, actionLabel: "View Ticket",
@@ -424,7 +424,7 @@ export const NotificationTemplates = {
 
   SUPPORT_NEW_MESSAGE: (ticketId, senderName) => ({
     type: "support", subType: "alert",
-    title: `💬 New message on ticket #${ticketId}`,
+    title: ` New message on ticket #${ticketId}`,
     message: `${senderName} replied to your support ticket`,
     data: { ticketId, senderName },
     actionUrl: `/support/${ticketId}`, actionLabel: "View Reply",

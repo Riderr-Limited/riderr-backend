@@ -32,7 +32,7 @@ const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 const isV4 = () => !!(process.env.FLW_CLIENT_ID && process.env.FLW_CLIENT_SECRET);
 
 if (!process.env.FLW_SECRET_KEY && !process.env.FLW_CLIENT_SECRET) {
-  console.warn("⚠️  No Flutterwave credentials set — API calls will fail");
+  console.warn("  No Flutterwave credentials set  API calls will fail");
 }
 
 const flwAxios = axios.create({
@@ -65,24 +65,24 @@ flwAxios.interceptors.request.use(async (config) => {
   } else {
     config.headers['Authorization'] = `Bearer ${getSecretKey()}`;
   }
-  console.log(`📤 Flutterwave → ${config.method?.toUpperCase()} ${config.url}`);
+  console.log(` Flutterwave  ${config.method?.toUpperCase()} ${config.url}`);
   return config;
 });
 
 flwAxios.interceptors.response.use(
   (response) => {
-    console.log(`📥 Flutterwave ← ${response.status} ${response.config.url}`);
+    console.log(` Flutterwave  ${response.status} ${response.config.url}`);
     return response;
   },
   (error) => {
-    console.error("❌ Flutterwave error:", error.response?.data || error.message);
+    console.error(" Flutterwave error:", error.response?.data || error.message);
     return Promise.reject(error);
   },
 );
 
-// ─────────────────────────────────────────────────────────────
+// 
 // PAYMENT INITIALIZATION  (returns a hosted-payment link)
-// ─────────────────────────────────────────────────────────────
+// 
 export const initializePayment = async (paymentData) => {
   try {
     const txRef =
@@ -135,9 +135,9 @@ export const initializePayment = async (paymentData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // VERIFY PAYMENT  (by tx_ref)
-// ─────────────────────────────────────────────────────────────
+// 
 export const verifyPayment = async (txRef) => {
   try {
     const response = await flwAxios.get(
@@ -183,9 +183,9 @@ export const verifyPayment = async (txRef) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // CHARGE CARD  (direct / inline charge)
-// ─────────────────────────────────────────────────────────────
+// 
 export const chargeCard = async (chargeData) => {
   try {
     const txRef =
@@ -278,9 +278,9 @@ export const chargeCard = async (chargeData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // SUBMIT PIN
-// ─────────────────────────────────────────────────────────────
+// 
 export const submitPin = async (pinData) => {
   try {
     const rawPayload = {
@@ -326,9 +326,9 @@ export const submitPin = async (pinData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // SUBMIT OTP
-// ─────────────────────────────────────────────────────────────
+// 
 export const submitOtp = async (otpData) => {
   try {
     const response = await flwAxios.post("/validate-charge", {
@@ -363,9 +363,9 @@ export const submitOtp = async (otpData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // VIRTUAL ACCOUNT  (for bank-transfer payments)
-// ─────────────────────────────────────────────────────────────
+// 
 export const createDedicatedVirtualAccount = async (accountData) => {
   try {
     const txRef =
@@ -412,9 +412,9 @@ export const createDedicatedVirtualAccount = async (accountData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // TRANSFER RECIPIENT  (create beneficiary)
-// ─────────────────────────────────────────────────────────────
+// 
 export const createTransferRecipient = async ({ accountName, accountNumber, bankCode }) => {
   try {
     const response = await flwAxios.post("/beneficiaries", {
@@ -452,15 +452,15 @@ export const createTransferRecipient = async ({ accountName, accountNumber, bank
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // INITIATE TRANSFER  (payout to company)
-// ─────────────────────────────────────────────────────────────
+// 
 export const initiateTransfer = async (transferData) => {
   try {
-    // Always use V3 secret key — V4 OAuth tokens don't support payouts
-    console.log("🔑 Secret key prefix:", process.env.FLW_SECRET_KEY?.substring(0, 10));
-    console.log("🔑 Secret key length:", process.env.FLW_SECRET_KEY?.length);
-    console.log("📦 Transfer payload:", JSON.stringify({
+    // Always use V3 secret key  V4 OAuth tokens don't support payouts
+    console.log(" Secret key prefix:", process.env.FLW_SECRET_KEY?.substring(0, 10));
+    console.log(" Secret key length:", process.env.FLW_SECRET_KEY?.length);
+    console.log(" Transfer payload:", JSON.stringify({
       account_bank: transferData.accountBank,
       account_number: transferData.accountNumber,
       amount: transferData.amount,
@@ -516,9 +516,9 @@ export const initiateTransfer = async (transferData) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // REFUND
-// ─────────────────────────────────────────────────────────────
+// 
 export const initiateRefund = async ({ flwRef, amount, comments }) => {
   try {
     const response = await flwAxios.post(`/transactions/${flwRef}/refund`, {
@@ -552,9 +552,9 @@ export const initiateRefund = async ({ flwRef, amount, comments }) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // GET BANK LIST
-// ─────────────────────────────────────────────────────────────
+// 
 export const getBankList = async () => {
   try {
     const response = await flwAxios.get("/banks/NG");
@@ -583,9 +583,9 @@ export const getBankList = async () => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // RESOLVE ACCOUNT NUMBER
-// ─────────────────────────────────────────────────────────────
+// 
 export const resolveAccountNumber = async (accountNumber, bankCode) => {
   try {
     const response = await flwAxios.post("/accounts/resolve", {
@@ -616,13 +616,13 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// 
 // WEBHOOK SIGNATURE VERIFICATION
-// Flutterwave sends verif-hash header — plain string comparison
-// ─────────────────────────────────────────────────────────────
+// Flutterwave sends verif-hash header  plain string comparison
+// 
 export const verifyWebhookSignature = (body, signature) => {
   if (!process.env.FLW_SECRET_HASH) {
-    console.warn("⚠️  FLW_SECRET_HASH not set — skipping webhook verification");
+    console.warn("  FLW_SECRET_HASH not set  skipping webhook verification");
     return true;
   }
   return signature === process.env.FLW_SECRET_HASH;

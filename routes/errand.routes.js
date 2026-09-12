@@ -35,7 +35,7 @@ router.patch("/:errandId/at-pickup",         authorize("driver"), markAtPickup);
 router.post("/:errandId/expense",            authorize("driver"), recordExpense);
 router.patch("/:errandId/complete",          authorize("driver"), completeErrand);
 router.patch("/:errandId/confirm-completion", authorize("customer", "admin"), confirmErrandCompletion);
-router.patch("/:errandId/cancel",            cancelErrand); // customer / company_admin / admin — checked in controller
+router.patch("/:errandId/cancel",            cancelErrand); // customer / company_admin / admin  checked in controller
 router.post("/:errandId/dispute",            authorize("customer", "admin"), raiseErrandDispute);
 
 export default router;

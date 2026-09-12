@@ -9,7 +9,7 @@ const deliverySchema = new mongoose.Schema({
     required: true,
   },
 
-  // ✅ driver 
+  //  driver 
   driverDetails: {
     driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -156,7 +156,7 @@ const deliverySchema = new mongoose.Schema({
     default: "created",
   },
 
-  // ✅ NEW: Track driver rejections
+  //  NEW: Track driver rejections
   rejectedByDrivers: [
     {
       driverId: {
@@ -226,7 +226,7 @@ deliverySchema.index({ driverId: 1, status: 1 });
 deliverySchema.index({ companyId: 1, status: 1 });
 deliverySchema.index({ status: 1 });
 deliverySchema.index({ createdAt: -1 });
-// ✅ NEW: Index for rejection filtering
+//  NEW: Index for rejection filtering
 deliverySchema.index({ 'rejectedByDrivers.driverId': 1 });
 
 // Generate reference ID before saving

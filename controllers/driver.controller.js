@@ -46,11 +46,11 @@ const saveDriverDetailsToDelivery = async (deliveryId, driver) => {
         },
       };
       await delivery.save();
-      console.log(`✅ Driver details saved for delivery ${deliveryId}`);
+      console.log(` Driver details saved for delivery ${deliveryId}`);
       return true;
     }
   } catch (error) {
-    console.error("❌ Error saving driver details:", error);
+    console.error(" Error saving driver details:", error);
   }
   return false;
 };
@@ -168,7 +168,7 @@ export const getDriverProfile = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver profile error:", error);
+    console.error(" Get driver profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get driver profile",
@@ -248,7 +248,7 @@ export const updateDriverProfile = async (req, res) => {
       data: updatedDriver,
     });
   } catch (error) {
-    console.error("❌ Update driver profile error:", error);
+    console.error(" Update driver profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update profile",
@@ -363,7 +363,7 @@ export const uploadDriverDocuments = async (req, res) => {
     if (req.files) {
       await Promise.all(req.files.map((file) => deleteFile(file.path)));
     }
-    console.error("❌ Upload driver documents error:", error);
+    console.error(" Upload driver documents error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to upload documents",
@@ -427,7 +427,7 @@ export const updateDriverLocation = async (req, res) => {
 
     await driver.save();
 
-    console.log(`📍 Driver ${driverUser._id} location updated: ${lat}, ${lng}`);
+    console.log(` Driver ${driverUser._id} location updated: ${lat}, ${lng}`);
 
     // If driver has current delivery, update delivery tracking
     if (driver.currentDeliveryId) {
@@ -479,7 +479,7 @@ export const updateDriverLocation = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Update driver location error:", error);
+    console.error(" Update driver location error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update location",
@@ -566,7 +566,7 @@ export const toggleDriverOnlineStatus = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Toggle driver online status error:", error);
+    console.error(" Toggle driver online status error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update online status",
@@ -636,7 +636,7 @@ export const updateDriverAvailability = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Update driver availability error:", error);
+    console.error(" Update driver availability error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update availability",
@@ -730,7 +730,7 @@ export const getCurrentDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get current delivery error:", error);
+    console.error(" Get current delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get current delivery",
@@ -847,7 +847,7 @@ export const getDriverEarnings = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver earnings error:", error);
+    console.error(" Get driver earnings error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get earnings",
@@ -1029,7 +1029,7 @@ export const getDriverStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver stats error:", error);
+    console.error(" Get driver stats error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get statistics",
@@ -1113,7 +1113,7 @@ export const getDeliveryRequests = async (req, res) => {
       count: deliveriesWithDistance.length,
     });
   } catch (error) {
-    console.error("❌ Get delivery requests error:", error);
+    console.error(" Get delivery requests error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get delivery requests",
@@ -1177,7 +1177,7 @@ export const updateDriverSettings = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Update driver settings error:", error);
+    console.error(" Update driver settings error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update settings",
@@ -1198,7 +1198,7 @@ export const acceptDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`🚗 Driver ${driverUser._id} accepting delivery ${deliveryId}`);
+    console.log(` Driver ${driverUser._id} accepting delivery ${deliveryId}`);
 
     const driver = await Driver.findOne({ userId: driverUser._id }).session(
       session
@@ -1277,7 +1277,7 @@ export const acceptDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "🚗 Driver Assigned!",
+        title: " Driver Assigned!",
         message: `Driver ${driverUser.name} has accepted your delivery`,
         data: {
           type: "driver_assigned",
@@ -1328,7 +1328,7 @@ export const acceptDelivery = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Accept delivery error:", error);
+    console.error(" Accept delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to accept delivery",
@@ -1351,7 +1351,7 @@ export const startDelivery = async (req, res) => {
     const { deliveryId } = req.params;
     const { otp, notes } = req.body || {};
 
-    console.log(`🚚 Driver ${driverUser._id} starting delivery ${deliveryId}`);
+    console.log(` Driver ${driverUser._id} starting delivery ${deliveryId}`);
 
     const driver = await Driver.findOne({ userId: driverUser._id }).session(
       session
@@ -1435,7 +1435,7 @@ export const startDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "📦 Package Picked Up",
+        title: " Package Picked Up",
         message: `Your package has been picked up by ${driverUser.name}`,
         data: {
           type: "delivery_started",
@@ -1470,7 +1470,7 @@ export const startDelivery = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Start delivery error:", error);
+    console.error(" Start delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to start delivery",
@@ -1493,7 +1493,7 @@ export const completeDelivery = async (req, res) => {
     const { otp } = req.body || {};
 
     console.log(
-      `✅ Driver ${driverUser._id} completing delivery ${deliveryId}`
+      ` Driver ${driverUser._id} completing delivery ${deliveryId}`
     );
 
     const driver = await Driver.findOne({ userId: driverUser._id }).session(
@@ -1577,7 +1577,7 @@ export const completeDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: "🎊 Delivery Completed!",
+        title: " Delivery Completed!",
         message: `Your package has been delivered successfully`,
         data: {
           type: "delivery_completed",
@@ -1607,7 +1607,7 @@ export const completeDelivery = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Complete delivery error:", error);
+    console.error(" Complete delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to complete delivery",
@@ -1677,7 +1677,7 @@ export const getDriverDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver deliveries error:", error);
+    console.error(" Get driver deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get deliveries",
@@ -1751,7 +1751,7 @@ export const getCompanyProfile = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company profile error:", error);
+    console.error(" Get company profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company profile",
@@ -1823,7 +1823,7 @@ export const updateCompanyProfile = async (req, res) => {
       data: updatedCompany,
     });
   } catch (error) {
-    console.error("❌ Update company profile error:", error);
+    console.error(" Update company profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update company profile",
@@ -1966,7 +1966,7 @@ export const getCompanyDrivers = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company drivers error:", error);
+    console.error(" Get company drivers error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company drivers",
@@ -2197,7 +2197,7 @@ export const getCompanyStatistics = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company statistics error:", error);
+    console.error(" Get company statistics error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company statistics",
@@ -2270,7 +2270,7 @@ export const getCompanyDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company deliveries error:", error);
+    console.error(" Get company deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company deliveries",
@@ -2404,7 +2404,7 @@ export const getCompanyEarnings = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company earnings error:", error);
+    console.error(" Get company earnings error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company earnings",
@@ -2465,7 +2465,7 @@ export const updateCompanySettings = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Update company settings error:", error);
+    console.error(" Update company settings error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update settings",
@@ -2553,7 +2553,7 @@ export const manageCompanyDocuments = async (req, res) => {
     if (req.file) {
       await deleteFile(req.file.path);
     }
-    console.error("❌ Manage company documents error:", error);
+    console.error(" Manage company documents error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to upload document",
@@ -2606,7 +2606,7 @@ export const getCompanyDriverRequests = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company driver requests error:", error);
+    console.error(" Get company driver requests error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get driver requests",
@@ -2663,7 +2663,7 @@ export const approveDriverDocument = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "✅ Account Verified",
+        title: " Account Verified",
         message: "Your driver account has been verified and approved",
         data: {
           type: "driver_approved",
@@ -2682,7 +2682,7 @@ export const approveDriverDocument = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Approve driver document error:", error);
+    console.error(" Approve driver document error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to approve driver document",
@@ -2734,7 +2734,7 @@ export const suspendDriver = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "⚠️ Account Suspended",
+        title: " Account Suspended",
         message: `Your driver account has been suspended. Reason: ${reason}`,
         data: {
           type: "driver_suspended",
@@ -2754,7 +2754,7 @@ export const suspendDriver = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Suspend driver error:", error);
+    console.error(" Suspend driver error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to suspend driver",
@@ -2803,7 +2803,7 @@ export const activateDriver = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "✅ Account Reactivated",
+        title: " Account Reactivated",
         message: "Your driver account has been reactivated",
         data: {
           type: "driver_reactivated",
@@ -2820,7 +2820,7 @@ export const activateDriver = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Activate driver error:", error);
+    console.error(" Activate driver error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to activate driver",
@@ -2881,7 +2881,7 @@ export const getCompanyNotifications = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company notifications error:", error);
+    console.error(" Get company notifications error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get notifications",
@@ -2950,7 +2950,7 @@ export const getCompanyTransactions = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company transactions error:", error);
+    console.error(" Get company transactions error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get transactions",
@@ -3090,7 +3090,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get nearby deliveries error:", error);
+    console.error(" Get nearby deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get nearby deliveries",
@@ -3124,7 +3124,7 @@ export const rejectDelivery = async (req, res) => {
       });
     }
 
-    // ✅ FIX: Store rejection in the delivery document
+    //  FIX: Store rejection in the delivery document
     const delivery = await Delivery.findByIdAndUpdate(
       deliveryId,
       {
@@ -3152,7 +3152,7 @@ export const rejectDelivery = async (req, res) => {
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     await driver.save();
 
-    console.log(`⏭️ Driver ${driver._id} rejected delivery ${deliveryId}: ${reason || 'No reason'}`);
+    console.log(` Driver ${driver._id} rejected delivery ${deliveryId}: ${reason || 'No reason'}`);
 
     res.status(200).json({
       success: true,
@@ -3164,7 +3164,7 @@ export const rejectDelivery = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Reject delivery error:", error);
+    console.error(" Reject delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to reject delivery",

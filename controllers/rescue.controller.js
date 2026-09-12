@@ -21,10 +21,10 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // DRIVER: Request Help (tire broke, accident, etc.)
 // POST /api/deliveries/:deliveryId/request-help
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const requestDriverHelp = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -128,7 +128,7 @@ export const requestDriverHelp = async (req, res) => {
     delivery.status = "rescue_requested";
     await delivery.save({ session });
 
-    // ── Notify company ──────────────────────────────────────────────────────
+    //  Notify company 
     let companyNotified = false;
     if (driver.companyId) {
       // Find company admin user(s) to notify
@@ -140,7 +140,7 @@ export const requestDriverHelp = async (req, res) => {
       for (const admin of companyAdmins) {
         await sendNotification({
           userId: admin._id,
-          title: "🚨 Driver Needs Help!",
+          title: " Driver Needs Help!",
           message: `${driver.userId.name} is stranded on delivery #${delivery.referenceId}. Reason: ${reason}`,
           data: {
             type: "rescue_requested",
@@ -160,10 +160,10 @@ export const requestDriverHelp = async (req, res) => {
       companyNotified = companyAdmins.length > 0;
     }
 
-    // ── Notify customer ─────────────────────────────────────────────────────
+    //  Notify customer 
     await sendNotification({
       userId: delivery.customerId,
-      title: "⚠️ Delivery Delayed",
+      title: " Delivery Delayed",
       message:
         "Your driver has encountered an issue. We're working to get your package delivered as soon as possible.",
       data: {
@@ -177,7 +177,7 @@ export const requestDriverHelp = async (req, res) => {
     session.endSession();
 
     console.log(
-      `🚨 Help requested for delivery ${deliveryId} by driver ${driver._id}. Reason: ${reason}`
+      ` Help requested for delivery ${deliveryId} by driver ${driver._id}. Reason: ${reason}`
     );
 
     res.status(200).json({
@@ -197,7 +197,7 @@ export const requestDriverHelp = async (req, res) => {
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
-    console.error("❌ Request driver help error:", error);
+    console.error(" Request driver help error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to send help request",
@@ -206,10 +206,10 @@ export const requestDriverHelp = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // COMPANY: Get all pending rescue requests
 // GET /api/company/rescue-requests
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const getCompanyRescueRequests = async (req, res) => {
   try {
     const user = req.user;
@@ -268,7 +268,7 @@ export const getCompanyRescueRequests = async (req, res) => {
       count: enriched.length,
     });
   } catch (error) {
-    console.error("❌ Get rescue requests error:", error);
+    console.error(" Get rescue requests error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get rescue requests",
@@ -276,10 +276,10 @@ export const getCompanyRescueRequests = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // COMPANY: Reassign delivery to a new driver
 // POST /api/company/deliveries/:deliveryId/reassign
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const reassignDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -307,7 +307,7 @@ export const reassignDelivery = async (req, res) => {
       });
     }
 
-    // ── Fetch delivery ──────────────────────────────────────────────────────
+    //  Fetch delivery 
     const delivery = await Delivery.findById(deliveryId).session(session);
     if (!delivery) {
       await session.abortTransaction();
@@ -324,7 +324,7 @@ export const reassignDelivery = async (req, res) => {
       });
     }
 
-    // ── Fetch new driver (by Driver._id or User._id) ────────────────────────
+    //  Fetch new driver (by Driver._id or User._id) 
     let newDriver = await Driver.findById(newDriverId)
       .populate("userId", "name phone avatarUrl rating")
       .session(session);
@@ -353,7 +353,7 @@ export const reassignDelivery = async (req, res) => {
       return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
     }
 
-    // ── Free the old driver ─────────────────────────────────────────────────
+    //  Free the old driver 
     const oldDriverId = delivery.driverId;
     if (oldDriverId) {
       const oldDriver = await Driver.findById(oldDriverId).session(session);
@@ -364,7 +364,7 @@ export const reassignDelivery = async (req, res) => {
       }
     }
 
-    // ── Keep history of reassignment ────────────────────────────────────────
+    //  Keep history of reassignment 
     if (!delivery.reassignmentHistory) delivery.reassignmentHistory = [];
     delivery.reassignmentHistory.push({
       previousDriverId: oldDriverId,
@@ -375,7 +375,7 @@ export const reassignDelivery = async (req, res) => {
       note: note || "",
     });
 
-    // ── Build new driver details ────────────────────────────────────────────
+    //  Build new driver details 
     const newDriverDetails = {
       driverId: newDriver._id,
       userId: newDriver.userId._id,
@@ -399,7 +399,7 @@ export const reassignDelivery = async (req, res) => {
       };
     }
 
-    // ── Update delivery ─────────────────────────────────────────────────────
+    //  Update delivery 
     delivery.driverId = newDriver._id;
     delivery.driverDetails = newDriverDetails;
     delivery.status = "assigned";            // reset to assigned
@@ -416,7 +416,7 @@ export const reassignDelivery = async (req, res) => {
 
     await delivery.save({ session });
 
-    // ── Update new driver ───────────────────────────────────────────────────
+    //  Update new driver 
     newDriver.currentDeliveryId = delivery._id;
     newDriver.isAvailable = false;
     newDriver.totalRequests = (newDriver.totalRequests || 0) + 1;
@@ -426,12 +426,12 @@ export const reassignDelivery = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // ── Notifications (outside transaction) ────────────────────────────────
+    //  Notifications (outside transaction) 
 
     // Notify new driver
     await sendNotification({
       userId: newDriver.userId._id,
-      title: "📦 New Delivery Assigned",
+      title: " New Delivery Assigned",
       message: `You've been assigned to take over delivery #${delivery.referenceId}. Please head to the ${delivery.status === "picked_up" ? "dropoff" : "pickup"} location.`,
       data: {
         type: "delivery_reassigned_to_you",
@@ -450,7 +450,7 @@ export const reassignDelivery = async (req, res) => {
       if (oldDriverDoc?.userId) {
         await sendNotification({
           userId: oldDriverDoc.userId._id,
-          title: "✅ Help is on the way",
+          title: " Help is on the way",
           message: `Delivery #${delivery.referenceId} has been reassigned to another driver. You're now free.`,
           data: {
             type: "delivery_taken_over",
@@ -463,7 +463,7 @@ export const reassignDelivery = async (req, res) => {
     // Notify customer
     await sendNotification({
       userId: delivery.customerId,
-      title: "🚗 New Driver Assigned",
+      title: " New Driver Assigned",
       message: `${newDriver.userId.name} is now handling your delivery and is on the way!`,
       data: {
         type: "driver_reassigned",
@@ -474,7 +474,7 @@ export const reassignDelivery = async (req, res) => {
     });
 
     console.log(
-      `✅ Delivery ${deliveryId} reassigned from driver ${oldDriverId} to ${newDriver._id}`
+      ` Delivery ${deliveryId} reassigned from driver ${oldDriverId} to ${newDriver._id}`
     );
 
     res.status(200).json({
@@ -494,7 +494,7 @@ export const reassignDelivery = async (req, res) => {
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
-    console.error("❌ Reassign delivery error:", error);
+    console.error(" Reassign delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to reassign delivery",
@@ -503,10 +503,10 @@ export const reassignDelivery = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // COMPANY: Get available drivers for reassignment
 // GET /api/company/available-drivers?deliveryId=xxx
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const getAvailableDriversForReassignment = async (req, res) => {
   try {
     const user = req.user;
@@ -592,7 +592,7 @@ export const getAvailableDriversForReassignment = async (req, res) => {
           : "No available drivers at the moment",
     });
   } catch (error) {
-    console.error("❌ Get available drivers for reassignment error:", error);
+    console.error(" Get available drivers for reassignment error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get available drivers",
@@ -600,10 +600,10 @@ export const getAvailableDriversForReassignment = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // COMPANY: Dismiss / close a rescue request without reassigning
 // POST /api/company/deliveries/:deliveryId/dismiss-rescue
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const dismissRescueRequest = async (req, res) => {
   try {
     const user = req.user;
@@ -641,7 +641,7 @@ export const dismissRescueRequest = async (req, res) => {
     if (driver?.userId) {
       await sendNotification({
         userId: driver.userId._id,
-        title: "📋 Update from company",
+        title: " Update from company",
         message: note
           ? `Your company says: "${note}". Please continue with the delivery.`
           : "Please continue with the delivery. Your company is aware of your situation.",
@@ -655,15 +655,15 @@ export const dismissRescueRequest = async (req, res) => {
       data: { deliveryId, status: delivery.status },
     });
   } catch (error) {
-    console.error("❌ Dismiss rescue request error:", error);
+    console.error(" Dismiss rescue request error:", error);
     res.status(500).json({ success: false, message: "Failed to dismiss rescue request" });
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // DRIVER: Get status of own rescue request
 // GET /api/deliveries/:deliveryId/rescue-status
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 export const getRescueRequestStatus = async (req, res) => {
   try {
     const driverUser = req.user;
@@ -695,7 +695,7 @@ export const getRescueRequestStatus = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get rescue status error:", error);
+    console.error(" Get rescue status error:", error);
     res.status(500).json({ success: false, message: "Failed to get rescue status" });
   }
 };

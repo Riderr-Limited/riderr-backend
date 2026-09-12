@@ -22,7 +22,7 @@ const run = async () => {
 
   const existing = await User.findOne({ $or: [{ email }, { phone }] });
   if (existing) {
-    console.log(`⚠️  User with that email or phone already exists.`);
+    console.log(`  User with that email or phone already exists.`);
     process.exit(0);
   }
 
@@ -36,12 +36,12 @@ const run = async () => {
     isActive: true,
   });
 
-  console.log(`\n✅ Super Admin created: ${admin.name} <${admin.email}>`);
-  console.log("⚠️  Change the password after first login!");
+  console.log(`\n Super Admin created: ${admin.name} <${admin.email}>`);
+  console.log("  Change the password after first login!");
   await mongoose.disconnect();
 };
 
 run().catch((err) => {
-  console.error("❌", err.message);
+  console.error("", err.message);
   process.exit(1);
 });

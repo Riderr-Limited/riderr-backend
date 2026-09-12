@@ -1,4 +1,4 @@
-﻿// controllers/payment.controller.js - MOBILE-FIRST PAYMENT FLOW
+// controllers/payment.controller.js - MOBILE-FIRST PAYMENT FLOW
 import Payment from "../models/payments.models.js";
 import Delivery from "../models/delivery.models.js";
 import Driver from "../models/riders.models.js";
@@ -45,7 +45,7 @@ async function generateBankTransferDetails(
 ) {
   try {
     console.log(
-      `ðŸ’³ Generating bank transfer details for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
+      ` Generating bank transfer details for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
     );
 
     let bankDetails = null;
@@ -54,7 +54,7 @@ async function generateBankTransferDetails(
 
     // Priority 1: Try Paystack dedicated virtual account (instant verification)
     try {
-      console.log("ðŸ”„ Attempting Paystack dedicated virtual account...");
+      console.log(" Attempting Paystack dedicated virtual account...");
       const accountData = await createDedicatedVirtualAccount({
         email: customer.email,
         first_name: customer.name.split(" ")[0] || customer.name,
@@ -78,23 +78,23 @@ async function generateBankTransferDetails(
           accountName: account.accountName,
           reference: reference,
           amount: amount,
-          formatted: `â‚¦${amount.toLocaleString()}`,
+          formatted: `${amount.toLocaleString()}`,
           narration: "Not required",
           expiresAt: null,
         };
         paymentMethod = "bank_transfer_dedicated";
         priority = "high";
         console.log(
-          `âœ… Dedicated virtual account created: ${account.accountNumber}`,
+          ` Dedicated virtual account created: ${account.accountNumber}`,
         );
       }
     } catch (err) {
-      console.warn("âš ï¸ Dedicated account failed:", err.message);
+      console.warn(" Dedicated account failed:", err.message);
     }
 
     // Priority 2: Use company bank account
     if (!bankDetails && delivery.companyId?.bankAccount?.accountNumber) {
-      console.log("ðŸ’¼ Using company bank account");
+      console.log(" Using company bank account");
       bankDetails = {
         type: "company_account",
         bankName: delivery.companyId.bankAccount.bankName || "Company Bank",
@@ -103,7 +103,7 @@ async function generateBankTransferDetails(
           delivery.companyId.bankAccount.accountName || delivery.companyId.name,
         reference: reference,
         amount: amount,
-        formatted: `â‚¦${amount.toLocaleString()}`,
+        formatted: `${amount.toLocaleString()}`,
         narration: `Riderr-${reference}`,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       };
@@ -113,7 +113,7 @@ async function generateBankTransferDetails(
 
     // Priority 3: Use platform account (always succeeds)
     if (!bankDetails) {
-      console.log("🔧 Using platform fallback account");
+      console.log(" Using platform fallback account");
       bankDetails = {
         type: "platform_account",
         bankName: process.env.PLATFORM_BANK_NAME || "Zenith Bank",
@@ -121,7 +121,7 @@ async function generateBankTransferDetails(
         accountName: process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
         reference: reference,
         amount: amount,
-        formatted: `₦${amount.toLocaleString()}`,
+        formatted: `${amount.toLocaleString()}`,
         narration: `Riderr-${reference}`,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       };
@@ -131,7 +131,7 @@ async function generateBankTransferDetails(
 
     return { bankDetails, paymentMethod, priority };
   } catch (error) {
-    console.error("âŒ Bank transfer generation error:", error);
+    console.error(" Bank transfer generation error:", error);
     throw error;
   }
 }
@@ -176,7 +176,7 @@ export const initializeDeliveryPayment = async (req, res) => {
     }
 
     console.log(
-      `ðŸ’³ [PAYMENT INIT] Customer: ${customer._id}, Delivery: ${deliveryId}, Type: ${paymentType}`,
+      ` [PAYMENT INIT] Customer: ${customer._id}, Delivery: ${deliveryId}, Type: ${paymentType}`,
     );
 
     // Find and validate delivery
@@ -210,7 +210,7 @@ export const initializeDeliveryPayment = async (req, res) => {
     });
 
     if (existingPayment && paymentType === "transfer") {
-      // Already has bank details — reuse them
+      // Already has bank details  reuse them
       if (
         existingPayment.paymentMethod === "bank_transfer_dedicated" ||
         existingPayment.metadata?.bankTransferDetails
@@ -223,7 +223,7 @@ export const initializeDeliveryPayment = async (req, res) => {
         });
       }
 
-      // Has pending payment but no bank details yet — generate virtual account now
+      // Has pending payment but no bank details yet  generate virtual account now
       try {
         const { bankDetails, paymentMethod: pm } = await generateBankTransferDetails(
           customer,
@@ -275,7 +275,7 @@ export const initializeDeliveryPayment = async (req, res) => {
     const reference = generatePaymentReference();
 
     console.log(
-      `ðŸ’° Amounts: Total=â‚¦${totalAmount}, Platform=â‚¦${platformFee} (10%), Company=â‚¦${companyAmount} (90%)`,
+      ` Amounts: Total=${totalAmount}, Platform=${platformFee} (10%), Company=${companyAmount} (90%)`,
     );
 
     // Route based on payment type
@@ -301,7 +301,7 @@ export const initializeDeliveryPayment = async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("âŒ Initialize payment error:", error);
+    console.error(" Initialize payment error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to initialize payment",
@@ -360,7 +360,7 @@ async function handleTransferInitialization(
     delivery.payment.reference = reference;
     await delivery.save();
 
-    console.log(`âœ… Transfer initialized - Reference: ${reference}`);
+    console.log(` Transfer initialized - Reference: ${reference}`);
 
     return res.status(200).json({
       success: true,
@@ -368,7 +368,7 @@ async function handleTransferInitialization(
       data: formatTransferResponse(payment, delivery),
     });
   } catch (error) {
-    console.error("âŒ Transfer initialization error:", error);
+    console.error(" Transfer initialization error:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to generate transfer details",
@@ -435,7 +435,7 @@ async function handleCardChargeInline(
           paymentId: payment._id,
           reference: reference,
           amount: totalAmount,
-          amountFormatted: `â‚¦${totalAmount.toLocaleString()}`,
+          amountFormatted: `${totalAmount.toLocaleString()}`,
           paymentType: "card",
           status: "pending_card_details",
           breakdown: {
@@ -463,7 +463,7 @@ async function handleCardChargeInline(
     }
 
     console.log(
-      `ðŸ’³ Charging card - Reference: ${reference}, Amount: â‚¦${totalAmount}`,
+      ` Charging card - Reference: ${reference}, Amount: ${totalAmount}`,
     );
 
     // Create payment record first
@@ -587,8 +587,8 @@ async function handleCardChargeInline(
       // Send notification
       await sendNotification({
         userId: customer._id,
-        title: "âœ… Payment Successful",
-        message: `Payment of â‚¦${totalAmount.toLocaleString()} confirmed`,
+        title: " Payment Successful",
+        message: `Payment of ${totalAmount.toLocaleString()} confirmed`,
         data: {
           type: "payment_success",
           deliveryId: delivery._id,
@@ -596,7 +596,7 @@ async function handleCardChargeInline(
         },
       });
 
-      console.log(`âœ… Card payment successful - Reference: ${reference}`);
+      console.log(` Card payment successful - Reference: ${reference}`);
 
       return res.status(200).json({
         success: true,
@@ -634,7 +634,7 @@ async function handleCardChargeInline(
     // Unexpected status
     throw new Error(`Unexpected charge status: ${chargeData.status}`);
   } catch (error) {
-    console.error("âŒ Card charge error:", error);
+    console.error(" Card charge error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to process card payment",
@@ -655,7 +655,7 @@ export const chargeCard = async (req, res) => {
     const { reference, cardDetails } = req.body;
 
     console.log(
-      `ðŸ’³ Customer ${customer._id} charging card for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
+      ` Customer ${customer._id} charging card for ${reference} (${IS_PRODUCTION ? "LIVE" : "TEST"})`,
     );
 
     if (!reference) {
@@ -710,7 +710,7 @@ export const chargeCard = async (req, res) => {
 
     const amount = payment.amount;
 
-    // âœ… Always use real charge (works in both test and live)
+    //  Always use real charge (works in both test and live)
     try {
       const chargeResult = await gatewayChargeCard({
         email: customer.email,
@@ -744,12 +744,12 @@ export const chargeCard = async (req, res) => {
       // Handle OTP requirement
 
       if (chargeData.status === "send_otp") {
-        // âœ… FIX: Use chargeResult.paystackReference, not chargeData.reference.
-        // chargeData is response.data.data â€” reference may not be in there.
+        //  FIX: Use chargeResult.paystackReference, not chargeData.reference.
+        // chargeData is response.data.data  reference may not be in there.
         // We now return it explicitly from chargeCardViaPaystack.
         const paystackRef = chargeResult.paystackReference;
 
-        console.log("ðŸ” OTP required");
+        console.log(" OTP required");
         console.log("   Internal ref  :", reference);
         console.log("   Paystack ref  :", paystackRef);
 
@@ -757,7 +757,7 @@ export const chargeCard = async (req, res) => {
           // Safety net: if we still can't get Paystack's reference, log the
           // full chargeResult so you can see what came back
           console.error(
-            "âŒ CRITICAL: paystackReference is undefined. Full chargeResult:",
+            " CRITICAL: paystackReference is undefined. Full chargeResult:",
           );
           console.error(JSON.stringify(chargeResult, null, 2));
         }
@@ -792,7 +792,7 @@ export const chargeCard = async (req, res) => {
       if (chargeData.status === "send_pin") {
         const paystackRef = chargeResult.paystackReference;
 
-        console.log("ðŸ” PIN required | Paystack ref:", paystackRef);
+        console.log(" PIN required | Paystack ref:", paystackRef);
 
         payment.status = "processing";
         payment.metadata = {
@@ -845,8 +845,8 @@ export const chargeCard = async (req, res) => {
 
         await sendNotification({
           userId: customer._id,
-          title: "âœ… Payment Successful",
-          message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+          title: " Payment Successful",
+          message: `Your payment of ${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
           data: {
             type: "payment_successful",
             deliveryId: payment.deliveryId,
@@ -873,7 +873,7 @@ export const chargeCard = async (req, res) => {
         message: `Unexpected payment status: ${chargeData.status}`,
       });
     } catch (chargeError) {
-      console.error("âŒ Paystack charge error:", chargeError);
+      console.error(" Paystack charge error:", chargeError);
       return res.status(500).json({
         success: false,
         message: "Failed to process card payment",
@@ -881,7 +881,7 @@ export const chargeCard = async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("âŒ Charge card error:", error);
+    console.error(" Charge card error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to process card payment",
@@ -962,7 +962,7 @@ export const verifyBankTransferManually = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Verify bank transfer error:", error);
+    console.error(" Verify bank transfer error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to submit transfer for verification",
@@ -1023,17 +1023,17 @@ export const initiateBankTransfer = async (req, res) => {
           narration: "Not required",
           expiresAt: va.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000),
           instructions: [
-            `Transfer exactly ₦${amount.toLocaleString()}`,
+            `Transfer exactly ${amount.toLocaleString()}`,
             "Payment confirmed automatically",
           ],
         };
         paymentMethod = "bank_transfer_dedicated";
-        console.log(`✅ Flutterwave virtual account created for ${reference}`);
+        console.log(` Flutterwave virtual account created for ${reference}`);
       } else {
         throw new Error(vaResult.message || "Virtual account unavailable");
       }
     } catch (vaError) {
-      console.warn("⚠️ Virtual account failed, using manual method:", vaError.message);
+      console.warn(" Virtual account failed, using manual method:", vaError.message);
       bankDetails = {
         bankName: process.env.PLATFORM_BANK_NAME || process.env.FALLBACK_BANK_NAME || "Zenith Bank",
         accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER || process.env.FALLBACK_ACCOUNT_NUMBER || "1012345678",
@@ -1044,7 +1044,7 @@ export const initiateBankTransfer = async (req, res) => {
         narration: `Riderr-${reference}`,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         instructions: [
-          `Transfer exactly ₦${amount.toLocaleString()}`,
+          `Transfer exactly ${amount.toLocaleString()}`,
           `Use "${reference}" as narration`,
           "Payment valid for 24 hours",
         ],
@@ -1085,7 +1085,7 @@ export const initiateBankTransfer = async (req, res) => {
     await delivery.save();
 
     console.log(
-      `âœ… Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`,
+      ` Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`,
     );
 
     res.status(200).json({
@@ -1098,15 +1098,15 @@ export const initiateBankTransfer = async (req, res) => {
         bankDetails: bankDetails,
         transferType: bankDetails.type,
         paymentBreakdown: {
-          totalAmount: `â‚¦${amount.toLocaleString()}`,
-          platformFee: `â‚¦${platformFee.toLocaleString()} (10%)`,
-          companyReceives: `â‚¦${companyAmount.toLocaleString()} (90%)`,
+          totalAmount: `${amount.toLocaleString()}`,
+          platformFee: `${platformFee.toLocaleString()} (10%)`,
+          companyReceives: `${companyAmount.toLocaleString()} (90%)`,
           escrowStatus: "Payment held securely until delivery completion",
         },
         nextSteps: [
           "Open your banking app",
-          `Transfer exactly ₦${amount.toLocaleString()} to the account shown`,
-          "Return to this app — payment confirms automatically",
+          `Transfer exactly ${amount.toLocaleString()} to the account shown`,
+          "Return to this app  payment confirms automatically",
         ],
         polling: {
           url: `/api/payments/status/${reference}`,
@@ -1121,7 +1121,7 @@ export const initiateBankTransfer = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Initiate bank transfer error:", error);
+    console.error(" Initiate bank transfer error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to initiate bank transfer",
@@ -1142,7 +1142,7 @@ export const verifyDeliveryPayment = async (req, res) => {
   try {
     const { reference } = req.params;
 
-    console.log(`ðŸ” [STEP 2b] Verifying payment: ${reference}`);
+    console.log(` [STEP 2b] Verifying payment: ${reference}`);
 
     // Verify with Paystack
     const verificationResult = await verifyPayment(reference);
@@ -1151,7 +1151,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       await session.abortTransaction();
       session.endSession();
       console.error(
-        `âŒ Paystack verification failed:`,
+        ` Paystack verification failed:`,
         verificationResult.message,
       );
       return res.status(400).json({
@@ -1181,7 +1181,7 @@ export const verifyDeliveryPayment = async (req, res) => {
     if (payment.status === "successful") {
       await session.abortTransaction();
       session.endSession();
-      console.log(`â„¹ï¸ Payment already verified: ${reference}`);
+      console.log(` Payment already verified: ${reference}`);
       return res.status(200).json({
         success: true,
         message: "Payment already verified",
@@ -1205,7 +1205,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       session.endSession();
 
       console.error(
-        `âŒ Payment failed - Gateway response: ${paymentData.gateway_response}`,
+        ` Payment failed - Gateway response: ${paymentData.gateway_response}`,
       );
       return res.status(400).json({
         success: false,
@@ -1217,7 +1217,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       });
     }
 
-    // âœ… Payment successful - Update payment record
+    //  Payment successful - Update payment record
     payment.status = "successful";
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
@@ -1242,7 +1242,7 @@ export const verifyDeliveryPayment = async (req, res) => {
     );
 
     if (delivery) {
-      delivery.payment.status = "paid"; // âœ… Payment received and held in escrow
+      delivery.payment.status = "paid"; //  Payment received and held in escrow
       delivery.payment.paidAt = new Date();
       delivery.payment.reference = reference;
       delivery.status = "created"; // Keep as "created" - waiting for driver to accept
@@ -1253,14 +1253,14 @@ export const verifyDeliveryPayment = async (req, res) => {
     session.endSession();
 
     console.log(
-      `âœ… Payment verified and funds held in escrow - Reference: ${reference}`,
+      ` Payment verified and funds held in escrow - Reference: ${reference}`,
     );
 
     // Notify customer
     await sendNotification({
       userId: payment.customerId,
-      title: "âœ… Payment Successful",
-      message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      title: " Payment Successful",
+      message: `Your payment of ${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
       data: {
         type: "payment_successful",
         deliveryId: delivery._id,
@@ -1288,7 +1288,7 @@ export const verifyDeliveryPayment = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("âŒ Verify payment error:", error);
+    console.error(" Verify payment error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to verify payment",
@@ -1313,7 +1313,7 @@ export const completeAndSettlePayment = async (req, res) => {
     const { review, verified } = req.body;
 
     console.log(
-      `ðŸ“¦ [SETTLEMENT] Customer ${customer._id} verifying delivery ${deliveryId}`,
+      ` [SETTLEMENT] Customer ${customer._id} verifying delivery ${deliveryId}`,
     );
 
     if (!verified) {
@@ -1419,11 +1419,11 @@ export const completeAndSettlePayment = async (req, res) => {
     delivery.payment.status = "completed";
     await delivery.save({ session });
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     // AUTOMATIC SETTLEMENT - This is where money moves!
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     console.log(
-      "ðŸ’¸ [SETTLEMENT] Initiating automatic transfer to company...",
+      " [SETTLEMENT] Initiating automatic transfer to company...",
     );
 
     const settlementResult = await settlePaymentToCompany(
@@ -1432,7 +1432,7 @@ export const completeAndSettlePayment = async (req, res) => {
     );
 
     if (settlementResult.success) {
-      // âœ… Transfer successful - update payment record
+      //  Transfer successful - update payment record
       payment.escrowDetails.settledToCompany = true;
       payment.escrowDetails.settlementDate = new Date();
       payment.escrowDetails.paystackTransferId = settlementResult.transferId;
@@ -1487,9 +1487,9 @@ export const completeAndSettlePayment = async (req, res) => {
       await session.commitTransaction();
       session.endSession();
 
-      console.log(`âœ… [SETTLEMENT COMPLETE] Transfer successful!`);
+      console.log(` [SETTLEMENT COMPLETE] Transfer successful!`);
       console.log(`   Transfer ID: ${settlementResult.transferId}`);
-      console.log(`   Amount: â‚¦${payment.companyAmount.toLocaleString()}`);
+      console.log(`   Amount: ${payment.companyAmount.toLocaleString()}`);
       console.log(`   Status: ${settlementResult.status}`);
 
       // Notify company
@@ -1500,8 +1500,8 @@ export const completeAndSettlePayment = async (req, res) => {
               delivery.companyId.userId ||
               delivery.companyId.ownerId ||
               delivery.companyId.owner,
-            title: "ðŸ’° Payment Received",
-            message: `â‚¦${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
+            title: " Payment Received",
+            message: `${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
             data: {
               type: "payment_settled",
               deliveryId: delivery._id,
@@ -1513,7 +1513,7 @@ export const completeAndSettlePayment = async (req, res) => {
         }
       } catch (notificationError) {
         console.error(
-          "âš ï¸ Notification error (non-critical):",
+          " Notification error (non-critical):",
           notificationError,
         );
       }
@@ -1527,7 +1527,7 @@ export const completeAndSettlePayment = async (req, res) => {
           if (driver && driver.userId) {
             await sendNotification({
               userId: driver.userId._id,
-              title: "âœ… Delivery Completed & Payment Settled",
+              title: " Delivery Completed & Payment Settled",
               message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
               data: {
                 type: "delivery_completed",
@@ -1538,7 +1538,7 @@ export const completeAndSettlePayment = async (req, res) => {
         }
       } catch (notificationError) {
         console.error(
-          "âš ï¸ Notification error (non-critical):",
+          " Notification error (non-critical):",
           notificationError,
         );
       }
@@ -1553,8 +1553,8 @@ export const completeAndSettlePayment = async (req, res) => {
           review: review,
           settlement: {
             success: true,
-            companyReceived: `â‚¦${payment.companyAmount.toLocaleString()}`,
-            platformFee: `â‚¦${payment.platformFee.toLocaleString()}`,
+            companyReceived: `${payment.companyAmount.toLocaleString()}`,
+            platformFee: `${payment.platformFee.toLocaleString()}`,
             settledAt: payment.escrowDetails.settlementDate,
             transferId: settlementResult.transferId,
             transferStatus: settlementResult.status,
@@ -1563,11 +1563,11 @@ export const completeAndSettlePayment = async (req, res) => {
         },
       });
     } else {
-      // âŒ Transfer failed - rollback and notify
+      //  Transfer failed - rollback and notify
       await session.abortTransaction();
       session.endSession();
 
-      console.error("âŒ [SETTLEMENT FAILED]", settlementResult.error);
+      console.error(" [SETTLEMENT FAILED]", settlementResult.error);
 
       // Update payment with failure info (don't mark as settled)
       payment.metadata = {
@@ -1614,7 +1614,7 @@ export const completeAndSettlePayment = async (req, res) => {
     }
     session.endSession();
 
-    console.error("âŒ Complete and settle payment error:", error);
+    console.error(" Complete and settle payment error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to complete delivery and settle payment",
@@ -1626,16 +1626,16 @@ export const completeAndSettlePayment = async (req, res) => {
 async function settlePaymentToCompany(payment, company) {
   try {
     console.log(
-      `ðŸ’¸ [SETTLEMENT] Starting settlement for payment ${payment._id}`,
+      ` [SETTLEMENT] Starting settlement for payment ${payment._id}`,
     );
-    console.log(`   Amount: â‚¦${payment.companyAmount.toLocaleString()}`);
+    console.log(`   Amount: ${payment.companyAmount.toLocaleString()}`);
     console.log(`   Company: ${company.name}`);
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     // STEP 1: Validate company has account number (that's all we need!)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     if (!company.bankAccount?.accountNumber) {
-      console.error("âŒ Company account number not configured");
+      console.error(" Company account number not configured");
       return {
         success: false,
         error: "Company account number not configured",
@@ -1644,7 +1644,7 @@ async function settlePaymentToCompany(payment, company) {
     }
 
     if (!company.bankAccount?.accountName) {
-      console.error("âŒ Company account name not configured");
+      console.error(" Company account name not configured");
       return {
         success: false,
         error: "Company account name not configured",
@@ -1661,19 +1661,19 @@ async function settlePaymentToCompany(payment, company) {
       };
     }
 
-    console.log(`âœ… Account found: ${company.bankAccount.accountNumber}`);
+    console.log(` Account found: ${company.bankAccount.accountNumber}`);
     console.log(`   Name: ${company.bankAccount.accountName}`);
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     // STEP 2 & 3: Create recipient (Paystack) or transfer directly (Flutterwave)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     const transferReference = `SETTLE-${payment.paystackReference}-${Date.now()}`;
     const provider = getGatewayProvider();
 
     if (provider === "flutterwave") {
       // Flutterwave: transfer directly using account details (no recipient code)
       console.log(
-        `ðŸ’° Initiating Flutterwave transfer of â‚¦${payment.companyAmount.toLocaleString()}...`,
+        ` Initiating Flutterwave transfer of ${payment.companyAmount.toLocaleString()}...`,
       );
 
       const transferResult = await initiateTransfer({
@@ -1687,7 +1687,7 @@ async function settlePaymentToCompany(payment, company) {
 
       if (!transferResult.success) {
         console.error(
-          "âŒ Flutterwave transfer failed:",
+          " Flutterwave transfer failed:",
           transferResult.message,
         );
         return {
@@ -1697,7 +1697,7 @@ async function settlePaymentToCompany(payment, company) {
         };
       }
 
-      console.log(`âœ… Flutterwave transfer successful!`);
+      console.log(` Flutterwave transfer successful!`);
       return {
         success: true,
         transferId: transferResult.data.transferCode,
@@ -1710,7 +1710,7 @@ async function settlePaymentToCompany(payment, company) {
 
     // Paystack: create recipient then transfer
     if (!company.paystackRecipientCode) {
-      console.log("ðŸ“ Creating Paystack recipient (bank auto-detected)...");
+      console.log(" Creating Paystack recipient (bank auto-detected)...");
 
       const recipientResult = await createTransferRecipient({
         accountName: company.bankAccount.accountName,
@@ -1721,7 +1721,7 @@ async function settlePaymentToCompany(payment, company) {
 
       if (!recipientResult.success) {
         console.error(
-          "âŒ Failed to create recipient:",
+          " Failed to create recipient:",
           recipientResult.message,
         );
         return {
@@ -1743,22 +1743,22 @@ async function settlePaymentToCompany(payment, company) {
       await company.save();
 
       console.log(
-        `âœ… Recipient created: ${recipientResult.data.recipientCode}`,
+        ` Recipient created: ${recipientResult.data.recipientCode}`,
       );
       console.log(
         `   Bank detected by Paystack: ${recipientResult.data.bankName}`,
       );
     } else {
       console.log(
-        `âœ… Using existing recipient: ${company.paystackRecipientCode}`,
+        ` Using existing recipient: ${company.paystackRecipientCode}`,
       );
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     // STEP 3: Initiate Paystack transfer
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // 
     console.log(
-      `ðŸ’° Initiating Paystack transfer of â‚¦${payment.companyAmount.toLocaleString()}...`,
+      ` Initiating Paystack transfer of ${payment.companyAmount.toLocaleString()}...`,
     );
 
     const transferResult = await initiateTransfer({
@@ -1769,11 +1769,11 @@ async function settlePaymentToCompany(payment, company) {
     });
 
     if (!transferResult.success) {
-      console.error("âŒ Transfer failed:", transferResult.message);
+      console.error(" Transfer failed:", transferResult.message);
 
       // If "Recipient not found", clear recipient code so it recreates next time
       if (transferResult.message?.includes("Recipient not found")) {
-        console.log("ðŸ”„ Clearing invalid recipient code...");
+        console.log(" Clearing invalid recipient code...");
         company.paystackRecipientCode = null;
         await company.save();
       }
@@ -1785,7 +1785,7 @@ async function settlePaymentToCompany(payment, company) {
       };
     }
 
-    console.log(`âœ… Transfer successful!`);
+    console.log(` Transfer successful!`);
     console.log(`   Transfer Code: ${transferResult.data.transferCode}`);
     console.log(`   Status: ${transferResult.data.status}`);
 
@@ -1798,7 +1798,7 @@ async function settlePaymentToCompany(payment, company) {
       status: transferResult.data.status,
     };
   } catch (error) {
-    console.error("âŒ Settlement error:", error);
+    console.error(" Settlement error:", error);
     return {
       success: false,
       error: error.message,
@@ -1889,10 +1889,10 @@ export const mobilePaymentCallback = async (req, res) => {
           </style>
         </head>
         <body>
-          <div class="success-icon">âœ…</div>
+          <div class="success-icon"></div>
           <h1>Payment Successful!</h1>
           <p>Your payment has been received and held securely until delivery completion.</p>
-          <div class="amount">â‚¦${payment.amount.toLocaleString()}</div>
+          <div class="amount">${payment.amount.toLocaleString()}</div>
           <p>Finding a driver for you...</p>
           <div class="button" onclick="redirectToApp()">Return to App</div>
           
@@ -1970,7 +1970,7 @@ export const mobilePaymentCallback = async (req, res) => {
           </style>
         </head>
         <body>
-          <div class="error-icon">âŒ</div>
+          <div class="error-icon"></div>
           <h1>Payment Failed</h1>
           <p>${payment.failureReason || "Payment could not be processed"}</p>
           <button onclick="window.location.href = 'riderrapp://payment/retry/${paymentReference}'">
@@ -2054,7 +2054,7 @@ export const handlePaystackWebhook = async (req, res) => {
     const signature = req.headers["verif-hash"];
 
     if (!verifyWebhookSignature(event, signature)) {
-      console.warn("âš ï¸ Invalid Flutterwave webhook signature");
+      console.warn(" Invalid Flutterwave webhook signature");
       return res
         .status(400)
         .json({ success: false, message: "Invalid signature" });
@@ -2066,10 +2066,10 @@ export const handlePaystackWebhook = async (req, res) => {
     const eventType = event.event;
 
     console.log(
-      `ðŸ“¨ Flutterwave webhook: event=${eventType} tx_ref=${txRef} status=${status}`,
+      ` Flutterwave webhook: event=${eventType} tx_ref=${txRef} status=${status}`,
     );
 
-    // â”€â”€ Charge success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Charge success 
     if (eventType === "charge.completed" && status === "successful") {
       const payment =
         (await Payment.findOne({ gatewayReference: txRef })) ||
@@ -2103,7 +2103,7 @@ export const handlePaystackWebhook = async (req, res) => {
             if (driver?.userId) {
               await sendNotification({
                 userId: driver.userId._id,
-                title: "âœ… Payment Confirmed!",
+                title: " Payment Confirmed!",
                 message: `Customer completed payment for delivery #${delivery.referenceId}. You can now start the delivery!`,
                 data: {
                   type: "payment_confirmed",
@@ -2117,11 +2117,11 @@ export const handlePaystackWebhook = async (req, res) => {
           }
         }
 
-        console.log("âœ… Payment updated via webhook:", txRef);
+        console.log(" Payment updated via webhook:", txRef);
       }
     }
 
-    // â”€â”€ Transfer success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Transfer success 
     if (eventType === "transfer.completed" && status === "successful") {
       const transferRef = event.data?.reference;
       const payment = await Payment.findOne({
@@ -2133,13 +2133,13 @@ export const handlePaystackWebhook = async (req, res) => {
         payment.escrowDetails.paystackTransferId = String(event.data?.id);
         payment.markModified("escrowDetails");
         await payment.save();
-        console.log("âœ… Transfer confirmed via webhook:", transferRef);
+        console.log(" Transfer confirmed via webhook:", transferRef);
       }
     }
 
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error("âŒ Webhook error:", error);
+    console.error(" Webhook error:", error);
     return res
       .status(500)
       .json({ success: false, message: "Webhook processing failed" });
@@ -2161,7 +2161,7 @@ export const getPaymentDetails = async (req, res) => {
     const { paymentId } = req.params;
     const user = req.user;
 
-    // âœ… ADD VALIDATION: Check if it's a valid ObjectId
+    //  ADD VALIDATION: Check if it's a valid ObjectId
     // If it's "company-payments", it's not a payment ID
     if (
       paymentId === "company-payments" ||
@@ -2180,7 +2180,7 @@ export const getPaymentDetails = async (req, res) => {
       });
     }
 
-    // âœ… Check if it's a valid MongoDB ObjectId
+    //  Check if it's a valid MongoDB ObjectId
     if (!mongoose.Types.ObjectId.isValid(paymentId)) {
       return res.status(400).json({
         success: false,
@@ -2252,7 +2252,7 @@ export const getPaymentDetails = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get payment details error:", error);
+    console.error(" Get payment details error:", error);
 
     // Handle CastError specifically
     if (error.name === "CastError" && error.kind === "ObjectId") {
@@ -2319,7 +2319,7 @@ export const getMyPayments = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get my payments error:", error);
+    console.error(" Get my payments error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get payments",
@@ -2358,7 +2358,7 @@ export const getCompanyPayments = async (req, res) => {
       query.status = status;
     }
 
-    // âœ… Update to use escrowDetails
+    //  Update to use escrowDetails
     if (settlementStatus) {
       if (settlementStatus === "settled") {
         query["escrowDetails.settledToCompany"] = true;
@@ -2402,7 +2402,7 @@ export const getCompanyPayments = async (req, res) => {
       Payment.countDocuments(query),
     ]);
 
-    // âœ… Update aggregation to use escrowDetails
+    //  Update aggregation to use escrowDetails
     const summary = await Payment.aggregate([
       { $match: { companyId: company._id, status: "successful" } },
       {
@@ -2438,7 +2438,7 @@ export const getCompanyPayments = async (req, res) => {
       },
     ]);
 
-    // âœ… Update recent settlements query
+    //  Update recent settlements query
     const recentSettlements = await Payment.find({
       companyId: company._id,
       status: "successful",
@@ -2452,7 +2452,7 @@ export const getCompanyPayments = async (req, res) => {
       .populate("deliveryId", "referenceId")
       .lean();
 
-    // âœ… Update formatting to use escrowDetails
+    //  Update formatting to use escrowDetails
     const formattedPayments = payments.map((payment) => {
       const settled = payment.escrowDetails?.settledToCompany || false;
       const escrowStatus = settled ? "settled" : "pending";
@@ -2495,7 +2495,7 @@ export const getCompanyPayments = async (req, res) => {
         companyAmount: payment.companyAmount,
         platformFee: payment.platformFee,
         status: payment.status,
-        escrowStatus: escrowStatus, // âœ… Now will show "settled"
+        escrowStatus: escrowStatus, //  Now will show "settled"
         paidAt: payment.paidAt,
         settledAt: settledAt,
         transferId: transferId,
@@ -2505,7 +2505,7 @@ export const getCompanyPayments = async (req, res) => {
       };
     });
 
-    // âœ… Format recent settlements
+    //  Format recent settlements
     const formattedRecentSettlements = recentSettlements.map((settlement) => ({
       _id: settlement._id,
       deliveryReference: settlement.deliveryId?.referenceId || "N/A",
@@ -2567,7 +2567,7 @@ export const getCompanyPayments = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get company payments error:", error);
+    console.error(" Get company payments error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get company payments",
@@ -2681,7 +2681,7 @@ export const getCompanySettlementDetails = async (req, res) => {
         };
       } catch (transferError) {
         console.warn(
-          "âš ï¸ Failed to fetch transfer details:",
+          " Failed to fetch transfer details:",
           transferError.message,
         );
       }
@@ -2709,8 +2709,8 @@ export const getCompanySettlementDetails = async (req, res) => {
         time: payment.paidAt,
         description: "Customer payment received",
         status: "completed",
-        icon: "ðŸ’³",
-        details: `â‚¦${payment.amount.toLocaleString()} from ${payment.customerId?.name || "Customer"}`,
+        icon: "",
+        details: `${payment.amount.toLocaleString()} from ${payment.customerId?.name || "Customer"}`,
       });
 
     if (payment.metadata?.escrowHeldAt)
@@ -2719,7 +2719,7 @@ export const getCompanySettlementDetails = async (req, res) => {
         time: payment.metadata.escrowHeldAt,
         description: "Funds held in escrow",
         status: "completed",
-        icon: "ðŸ”’",
+        icon: "",
         details: "Payment secured until delivery completion",
       });
 
@@ -2735,7 +2735,7 @@ export const getCompanySettlementDetails = async (req, res) => {
           time: delivery.assignedAt,
           description: "Driver accepted delivery",
           status: "completed",
-          icon: "ðŸš—",
+          icon: "",
           details: payment.deliveryId.driverId?.userId?.name || "Driver",
         });
 
@@ -2745,7 +2745,7 @@ export const getCompanySettlementDetails = async (req, res) => {
           time: delivery.pickedUpAt,
           description: "Package picked up",
           status: "completed",
-          icon: "ðŸ“¦",
+          icon: "",
           details: "Driver collected the package",
         });
 
@@ -2755,7 +2755,7 @@ export const getCompanySettlementDetails = async (req, res) => {
           time: delivery.deliveredAt,
           description: "Package delivered",
           status: "completed",
-          icon: "âœ…",
+          icon: "",
           details: "Delivery completed by driver",
         });
     }
@@ -2767,7 +2767,7 @@ export const getCompanySettlementDetails = async (req, res) => {
         time: payment.metadata.customerVerifiedAt,
         description: "Customer verified delivery",
         status: "completed",
-        icon: "ðŸ‘¤",
+        icon: "",
         details: "Customer confirmed successful delivery",
       });
 
@@ -2777,8 +2777,8 @@ export const getCompanySettlementDetails = async (req, res) => {
         time: payment.metadata.settledAt,
         description: "Settlement to company initiated",
         status: "completed",
-        icon: "ðŸ’°",
-        details: `â‚¦${payment.companyAmount.toLocaleString()} transferred to company account`,
+        icon: "",
+        details: `${payment.companyAmount.toLocaleString()} transferred to company account`,
       });
 
     if (payment.metadata?.escrowStatus === "settled")
@@ -2787,7 +2787,7 @@ export const getCompanySettlementDetails = async (req, res) => {
         time: payment.metadata.settledAt,
         description: "Settlement completed",
         status: "completed",
-        icon: "ðŸŽ‰",
+        icon: "",
         details: "Funds successfully deposited",
       });
 
@@ -2891,7 +2891,7 @@ export const getCompanySettlementDetails = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get settlement details error:", error);
+    console.error(" Get settlement details error:", error);
 
     // Handle specific errors
     if (error.name === "CastError") {
@@ -2950,33 +2950,33 @@ function getAvailableActions(escrowStatus) {
   switch (escrowStatus) {
     case "held":
       actions.push(
-        { label: "Contact Customer", action: "contact_customer", icon: "ðŸ“ž" },
+        { label: "Contact Customer", action: "contact_customer", icon: "" },
         {
           label: "View Delivery Details",
           action: "view_delivery",
-          icon: "ðŸ“‹",
+          icon: "",
         },
-        { label: "Check Driver Status", action: "check_driver", icon: "ðŸš—" },
+        { label: "Check Driver Status", action: "check_driver", icon: "" },
       );
       break;
 
     case "settling":
       actions.push(
-        { label: "Track Transfer", action: "track_transfer", icon: "ðŸ“" },
+        { label: "Track Transfer", action: "track_transfer", icon: "" },
         {
           label: "View Transfer Details",
           action: "view_transfer",
-          icon: "ðŸ’°",
+          icon: "",
         },
-        { label: "Contact Support", action: "contact_support", icon: "ðŸ†˜" },
+        { label: "Contact Support", action: "contact_support", icon: "" },
       );
       break;
 
     case "settled":
       actions.push(
-        { label: "Download Receipt", action: "download_receipt", icon: "ðŸ“„" },
-        { label: "View Bank Statement", action: "view_statement", icon: "ðŸ¦" },
-        { label: "Report Issue", action: "report_issue", icon: "âš ï¸" },
+        { label: "Download Receipt", action: "download_receipt", icon: "" },
+        { label: "View Bank Statement", action: "view_statement", icon: "" },
+        { label: "Report Issue", action: "report_issue", icon: "" },
       );
       break;
 
@@ -2984,7 +2984,7 @@ function getAvailableActions(escrowStatus) {
       actions.push({
         label: "Contact Support",
         action: "contact_support",
-        icon: "ðŸ†˜",
+        icon: "",
       });
   }
 
@@ -3086,19 +3086,19 @@ export const downloadSettlementReceipt = async (req, res) => {
           </tr>
           <tr>
             <td>Total Payment</td>
-            <td>â‚¦${payment.amount.toLocaleString()}</td>
+            <td>${payment.amount.toLocaleString()}</td>
           </tr>
           <tr>
             <td>Platform Fee (${Math.round((payment.platformFee / payment.amount) * 100)}%)</td>
-            <td>â‚¦${payment.platformFee.toLocaleString()}</td>
+            <td>${payment.platformFee.toLocaleString()}</td>
           </tr>
           <tr>
             <td><strong>Amount Settled to Company</strong></td>
-            <td><strong>â‚¦${payment.companyAmount.toLocaleString()}</strong></td>
+            <td><strong>${payment.companyAmount.toLocaleString()}</strong></td>
           </tr>
         </table>
         
-        <div class="amount">â‚¦${payment.companyAmount.toLocaleString()}</div>
+        <div class="amount">${payment.companyAmount.toLocaleString()}</div>
         
         <div class="footer">
           <p>This is an automated receipt generated by Riderr</p>
@@ -3118,7 +3118,7 @@ export const downloadSettlementReceipt = async (req, res) => {
 
     res.send(receiptHtml);
   } catch (error) {
-    console.error("âŒ Download receipt error:", error);
+    console.error(" Download receipt error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to generate receipt",
@@ -3163,7 +3163,7 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // âœ… FIXED: Don't check requiresOtp flag (it was being silently dropped
+    //  FIXED: Don't check requiresOtp flag (it was being silently dropped
     // by the old strict schema). Instead check payment is in 'processing'
     // state and that we have a chargeReference saved.
     if (payment.status !== "processing") {
@@ -3175,7 +3175,7 @@ export const submitOtp = async (req, res) => {
 
     const paystackReference = payment.metadata?.chargeReference;
 
-    console.log("ðŸ” Submitting OTP to Paystack");
+    console.log(" Submitting OTP to Paystack");
     console.log("   Internal ref  :", reference);
     console.log("   chargeReference from metadata:", paystackReference);
     console.log(
@@ -3184,7 +3184,7 @@ export const submitOtp = async (req, res) => {
     );
 
     if (!paystackReference) {
-      console.error("âŒ chargeReference missing from payment metadata!");
+      console.error(" chargeReference missing from payment metadata!");
       console.error("   This means it was not saved during chargeCard step.");
       console.error("   Payment status:", payment.status);
       return res.status(400).json({
@@ -3215,7 +3215,7 @@ export const submitOtp = async (req, res) => {
       });
     }
 
-    // âœ… OTP accepted â€” mark payment successful
+    //  OTP accepted  mark payment successful
     payment.status = "successful";
     payment.paidAt = new Date();
     payment.verifiedAt = new Date();
@@ -3228,7 +3228,7 @@ export const submitOtp = async (req, res) => {
       escrowHeldAt: new Date(),
       flwRef: otpResult.data?.flw_ref,
     };
-    // âœ… Required for Mixed schema fields
+    //  Required for Mixed schema fields
     payment.markModified("metadata");
     await payment.save();
 
@@ -3242,8 +3242,8 @@ export const submitOtp = async (req, res) => {
 
     await sendNotification({
       userId: customer._id,
-      title: "âœ… Payment Successful",
-      message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+      title: " Payment Successful",
+      message: `Your payment of ${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
       data: {
         type: "payment_successful",
         deliveryId: payment.deliveryId,
@@ -3264,7 +3264,7 @@ export const submitOtp = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Submit OTP error:", error);
+    console.error(" Submit OTP error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to verify OTP",
@@ -3309,10 +3309,10 @@ export const submitPin = async (req, res) => {
       });
     }
 
-    // âœ… Use Paystack's reference, not internal RIDERR-xxx reference
+    //  Use Paystack's reference, not internal RIDERR-xxx reference
     const paystackReference = payment.metadata?.chargeReference || reference;
 
-    console.log(`ðŸ” Submitting PIN for payment ${payment._id}`);
+    console.log(` Submitting PIN for payment ${payment._id}`);
     console.log(`   Paystack ref : ${paystackReference}`);
 
     const pinResult = await gatewaySubmitPin({
@@ -3336,7 +3336,7 @@ export const submitPin = async (req, res) => {
         ...payment.metadata,
         requiresPin: false,
         requiresOtp: true,
-        // âœ… Update chargeReference in case Paystack changed it
+        //  Update chargeReference in case Paystack changed it
         chargeReference: pinData.reference || paystackReference,
       };
       await payment.save();
@@ -3378,8 +3378,8 @@ export const submitPin = async (req, res) => {
 
       await sendNotification({
         userId: customer._id,
-        title: "âœ… Payment Successful",
-        message: `Your payment of â‚¦${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
+        title: " Payment Successful",
+        message: `Your payment of ${payment.amount.toLocaleString()} is confirmed. Finding a driver for you...`,
         data: {
           type: "payment_successful",
           deliveryId: payment.deliveryId,
@@ -3405,7 +3405,7 @@ export const submitPin = async (req, res) => {
       message: `Unexpected status after PIN: ${pinData?.status}`,
     });
   } catch (error) {
-    console.error("âŒ Submit PIN error:", error);
+    console.error(" Submit PIN error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to verify PIN",
@@ -3711,7 +3711,7 @@ export const getDriverPayments = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get driver payments error:", error);
+    console.error(" Get driver payments error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get driver payments",
@@ -3812,7 +3812,7 @@ export const getDriverPaymentDetails = async (req, res) => {
         event: "payment_created",
         time: payment.createdAt,
         description: "Payment record created",
-        icon: "ðŸ“",
+        icon: "",
         details: "Payment initiated for delivery",
       });
 
@@ -3821,8 +3821,8 @@ export const getDriverPaymentDetails = async (req, res) => {
         event: "payment_received",
         time: payment.paidAt,
         description: isCash ? "Cash payment collected" : "Payment received",
-        icon: isCash ? "ðŸ’µ" : "ðŸ’³",
-        details: `â‚¦${payment.amount.toLocaleString()} ${isCash ? "cash collected" : "received via " + payment.paymentMethod}`,
+        icon: isCash ? "" : "",
+        details: `${payment.amount.toLocaleString()} ${isCash ? "cash collected" : "received via " + payment.paymentMethod}`,
       });
 
     // Add delivery events if delivery exists
@@ -3836,7 +3836,7 @@ export const getDriverPaymentDetails = async (req, res) => {
           event: "delivery_assigned",
           time: delivery.assignedAt,
           description: "Delivery assigned to driver",
-          icon: "ðŸš—",
+          icon: "",
           details: "You accepted the delivery request",
         });
 
@@ -3845,7 +3845,7 @@ export const getDriverPaymentDetails = async (req, res) => {
           event: "package_picked_up",
           time: delivery.pickedUpAt,
           description: "Package picked up",
-          icon: "ðŸ“¦",
+          icon: "",
           details: "Package collected from customer",
         });
 
@@ -3854,7 +3854,7 @@ export const getDriverPaymentDetails = async (req, res) => {
           event: "delivery_completed",
           time: delivery.deliveredAt,
           description: "Package delivered",
-          icon: "âœ…",
+          icon: "",
           details: "Delivery completed successfully",
         });
     }
@@ -3865,8 +3865,8 @@ export const getDriverPaymentDetails = async (req, res) => {
         event: "payment_settled",
         time: settledAt,
         description: "Cash payment settled",
-        icon: "ðŸ’°",
-        details: `â‚¦${payment.amount.toLocaleString()} settled to you via ${settlementMethod || "cash"}`,
+        icon: "",
+        details: `${payment.amount.toLocaleString()} settled to you via ${settlementMethod || "cash"}`,
       });
     }
 
@@ -3974,7 +3974,7 @@ export const getDriverPaymentDetails = async (req, res) => {
 
     res.status(200).json(response);
   } catch (error) {
-    console.error("âŒ Get driver payment details error:", error);
+    console.error(" Get driver payment details error:", error);
 
     if (error.name === "CastError") {
       return res.status(400).json({
@@ -4003,34 +4003,34 @@ function getDriverPaymentActions(isCash, settledToDriver) {
         {
           label: "Request Settlement",
           action: "request_settlement",
-          icon: "ðŸ“²",
+          icon: "",
         },
-        { label: "Contact Company", action: "contact_company", icon: "ðŸ¢" },
+        { label: "Contact Company", action: "contact_company", icon: "" },
         {
           label: "View Delivery Details",
           action: "view_delivery",
-          icon: "ðŸ“‹",
+          icon: "",
         },
       );
     } else {
       actions.push(
-        { label: "Download Receipt", action: "download_receipt", icon: "ðŸ“„" },
+        { label: "Download Receipt", action: "download_receipt", icon: "" },
         {
           label: "View Settlement Details",
           action: "view_settlement",
-          icon: "ðŸ’°",
+          icon: "",
         },
-        { label: "Report Issue", action: "report_issue", icon: "âš ï¸" },
+        { label: "Report Issue", action: "report_issue", icon: "" },
       );
     }
   } else {
     actions.push(
-      { label: "View Escrow Status", action: "view_escrow", icon: "ðŸ”’" },
-      { label: "Contact Company", action: "contact_company", icon: "ðŸ¢" },
+      { label: "View Escrow Status", action: "view_escrow", icon: "" },
+      { label: "Contact Company", action: "contact_company", icon: "" },
       {
         label: "Download Payment Proof",
         action: "download_proof",
-        icon: "ðŸ“„",
+        icon: "",
       },
     );
   }
@@ -4120,8 +4120,8 @@ export const requestCashSettlement = async (req, res) => {
         if (companyUser) {
           await sendNotification({
             userId: companyUser._id,
-            title: "ðŸ’° Settlement Request",
-            message: `Driver ${driverUser.name} has requested settlement for cash payment of â‚¦${payment.amount.toLocaleString()}`,
+            title: " Settlement Request",
+            message: `Driver ${driverUser.name} has requested settlement for cash payment of ${payment.amount.toLocaleString()}`,
             data: {
               type: "cash_settlement_request",
               paymentId: payment._id,
@@ -4152,7 +4152,7 @@ export const requestCashSettlement = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Request cash settlement error:", error);
+    console.error(" Request cash settlement error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to request settlement",
@@ -4237,8 +4237,8 @@ export const markCashPaymentAsSettled = async (req, res) => {
     if (payment.driverId?.userId) {
       await sendNotification({
         userId: payment.driverId.userId,
-        title: "ðŸ’° Payment Settled!",
-        message: `Your cash payment of â‚¦${payment.amount.toLocaleString()} has been settled by ${company.name}`,
+        title: " Payment Settled!",
+        message: `Your cash payment of ${payment.amount.toLocaleString()} has been settled by ${company.name}`,
         data: {
           type: "cash_payment_settled",
           paymentId: payment._id,
@@ -4261,7 +4261,7 @@ export const markCashPaymentAsSettled = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Mark cash payment as settled error:", error);
+    console.error(" Mark cash payment as settled error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to mark payment as settled",
@@ -4488,7 +4488,7 @@ export const getDriverEarningsSummary = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Get driver earnings summary error:", error);
+    console.error(" Get driver earnings summary error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get earnings summary",
@@ -4525,7 +4525,7 @@ export const getPaymentForDelivery = async (req, res) => {
         reference: payment.paystackReference,
         status: payment.status,
         amount: payment.amount,
-        amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+        amountFormatted: `${payment.amount?.toLocaleString()}`,
         paymentMethod: payment.paymentMethod,
         paidAt: payment.paidAt,
         breakdown: {
@@ -4547,7 +4547,7 @@ export const getPaymentForDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get payment for delivery error:", error);
+    console.error(" Get payment for delivery error:", error);
     res.status(500).json({ success: false, message: "Failed to get payment" });
   }
 };
@@ -4559,7 +4559,7 @@ export const getPaymentForDelivery = async (req, res) => {
  */
 export const getNigerianBanks = async (req, res) => {
   try {
-    console.log("ðŸ¦ Fetching Nigerian banks from Paystack...");
+    console.log(" Fetching Nigerian banks from Paystack...");
 
     const result = await getBankList();
 
@@ -4581,7 +4581,7 @@ export const getNigerianBanks = async (req, res) => {
       type: bank.type,
     }));
 
-    console.log(`âœ… Fetched ${banks.length} Nigerian banks`);
+    console.log(` Fetched ${banks.length} Nigerian banks`);
 
     res.status(200).json({
       success: true,
@@ -4589,7 +4589,7 @@ export const getNigerianBanks = async (req, res) => {
       message: `${banks.length} banks available`,
     });
   } catch (error) {
-    console.error("âŒ Get banks error:", error);
+    console.error(" Get banks error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch banks",
@@ -4640,7 +4640,7 @@ export const getCompanyBankAccount = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('❌ Get company bank account error:', error);
+    console.error(' Get company bank account error:', error);
     res.status(500).json({ success: false, message: 'Failed to get bank account' });
   }
 };
@@ -4707,7 +4707,7 @@ export const updateCompanyBankAccount = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('❌ Update company bank account error:', error);
+    console.error(' Update company bank account error:', error);
     res.status(500).json({ success: false, message: 'Failed to update bank account' });
   }
 };
@@ -4740,7 +4740,7 @@ export const deleteCompanyBankAccount = async (req, res) => {
       data: { isSetup: false, setupStatus: 'not_setup' },
     });
   } catch (error) {
-    console.error('❌ Delete company bank account error:', error);
+    console.error(' Delete company bank account error:', error);
     res.status(500).json({ success: false, message: 'Failed to remove bank account' });
   }
 };
@@ -4786,7 +4786,7 @@ export const verifyAccountNumber = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Verify account error:", error);
+    console.error(" Verify account error:", error);
     res.status(500).json({ success: false, message: "Failed to verify account" });
   }
 };
@@ -4837,7 +4837,7 @@ export const setupCompanyBankAccount = async (req, res) => {
       });
     }
 
-    console.log("ðŸ¦ Setting up bank account (no bank code needed)");
+    console.log(" Setting up bank account (no bank code needed)");
     console.log("   Account:", accountNumber);
     console.log("   Name:", accountName);
 
@@ -4854,7 +4854,7 @@ export const setupCompanyBankAccount = async (req, res) => {
 
     await company.save();
 
-    console.log("âœ… Bank account saved");
+    console.log(" Bank account saved");
 
     res.status(200).json({
       success: true,
@@ -4874,7 +4874,7 @@ export const setupCompanyBankAccount = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("âŒ Setup bank account error:", error);
+    console.error(" Setup bank account error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to setup bank account",
@@ -4907,7 +4907,7 @@ async function ensureCompanyBankCode(company) {
     }
 
     console.log(
-      "ðŸ” Auto-resolving bank code for:",
+      " Auto-resolving bank code for:",
       company.bankAccount.bankName,
     );
 
@@ -4944,7 +4944,7 @@ async function ensureCompanyBankCode(company) {
     company.bankAccount.bankName = bank.name; // Use Paystack's official name
     await company.save();
 
-    console.log(`âœ… Bank code auto-resolved: ${bank.code} (${bank.name})`);
+    console.log(` Bank code auto-resolved: ${bank.code} (${bank.name})`);
 
     return {
       success: true,
@@ -4969,12 +4969,12 @@ export const refundPayment = async (
   reason = "Delivery cancelled",
 ) => {
   try {
-    console.log(`ðŸ’¸ [REFUND] Initiating refund for payment ${paymentId}`);
+    console.log(` [REFUND] Initiating refund for payment ${paymentId}`);
 
     const payment = await Payment.findById(paymentId);
 
     if (!payment) {
-      console.error("âŒ Payment not found for refund");
+      console.error(" Payment not found for refund");
       return {
         success: false,
         error: "Payment not found",
@@ -4983,7 +4983,7 @@ export const refundPayment = async (
 
     // Check if already refunded
     if (payment.refund?.status === "refunded") {
-      console.log("âš ï¸ Payment already refunded");
+      console.log(" Payment already refunded");
       return {
         success: true,
         alreadyRefunded: true,
@@ -4994,7 +4994,7 @@ export const refundPayment = async (
 
     // Check if payment can be refunded
     if (payment.status !== "successful") {
-      console.log(`âš ï¸ Payment status ${payment.status} - no refund needed`);
+      console.log(` Payment status ${payment.status} - no refund needed`);
       return {
         success: true,
         noRefundNeeded: true,
@@ -5004,7 +5004,7 @@ export const refundPayment = async (
 
     // Check payment method
     if (payment.paymentMethod === "cash") {
-      console.log("ðŸ’µ Cash payment - no refund needed");
+      console.log(" Cash payment - no refund needed");
       return {
         success: true,
         noRefundNeeded: true,
@@ -5012,14 +5012,14 @@ export const refundPayment = async (
       };
     }
 
-    // âœ… Initiate Flutterwave refund
+    //  Initiate Flutterwave refund
     try {
       // Need the flw_ref stored during payment for Flutterwave refunds
       const flwRef = payment.webhookData?.flw_ref || payment.metadata?.flwRef;
 
       if (!flwRef) {
         throw new Error(
-          "flw_ref not found â€” cannot process refund automatically",
+          "flw_ref not found  cannot process refund automatically",
         );
       }
 
@@ -5051,7 +5051,7 @@ export const refundPayment = async (
         await payment.save();
 
         console.log(
-          `âœ… Refund successful - Refund ID: ${refundResult.data.refundId}`,
+          ` Refund successful - Refund ID: ${refundResult.data.refundId}`,
         );
         return {
           success: true,
@@ -5063,7 +5063,7 @@ export const refundPayment = async (
         throw new Error(refundResult.message || "Refund failed");
       }
     } catch (refundError) {
-      console.error("âŒ Flutterwave refund error:", refundError.message);
+      console.error(" Flutterwave refund error:", refundError.message);
 
       payment.refund = {
         status: "pending",
@@ -5083,7 +5083,7 @@ export const refundPayment = async (
       };
     }
   } catch (error) {
-    console.error("âŒ Refund error:", error);
+    console.error(" Refund error:", error);
     return {
       success: false,
       error: error.message,
@@ -5111,7 +5111,7 @@ function formatTransferResponse(payment, delivery) {
     paymentId: payment._id,
     reference: payment.paystackReference,
     amount: payment.amount,
-    amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+    amountFormatted: `${payment.amount?.toLocaleString()}`,
     paymentType: "transfer",
     status: "pending_transfer",
     bankAccount: {
@@ -5126,8 +5126,8 @@ function formatTransferResponse(payment, delivery) {
     },
     instructions: [
       "Open your banking app",
-      `Transfer exactly ₦${payment.amount?.toLocaleString()}`,
-      "Return here — payment confirms automatically",
+      `Transfer exactly ${payment.amount?.toLocaleString()}`,
+      "Return here  payment confirms automatically",
     ],
     polling: {
       url: `/api/payments/status/${payment.paystackReference}`,
@@ -5146,7 +5146,7 @@ function formatPaymentSuccessResponse(payment, delivery) {
     paymentId: payment._id,
     reference: payment.paystackReference,
     amount: payment.amount,
-    amountFormatted: `₦${payment.amount?.toLocaleString()}`,
+    amountFormatted: `${payment.amount?.toLocaleString()}`,
     status: "paid",
     paidAt: payment.paidAt,
     deliveryId: delivery._id,

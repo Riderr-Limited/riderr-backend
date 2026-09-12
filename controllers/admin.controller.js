@@ -2352,7 +2352,7 @@ export const issueRefund = async (req, res) => {
       await sendNotification({
         userId: payment.customerId._id,
         title: "Refund Processed",
-        message: `A refund of ₦${refundAmount} has been processed for your payment`,
+        message: `A refund of ${refundAmount} has been processed for your payment`,
         type: "refund_processed",
         data: {
           paymentId: payment._id,

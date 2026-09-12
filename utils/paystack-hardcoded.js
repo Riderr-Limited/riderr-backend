@@ -8,7 +8,7 @@ const FRONTEND_URL = 'http://localhost:3000';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
-console.log('🔧 Using MOBILE-OPTIMIZED Paystack configuration');
+console.log(' Using MOBILE-OPTIMIZED Paystack configuration');
 console.log('Mobile Callback URL:', MOBILE_CALLBACK_URL);
 
 const paystackAxios = axios.create({
@@ -27,7 +27,7 @@ const paystackAxios = axios.create({
  */
 export const initializePayment = async (paymentData) => {
   try {
-    console.log('💰 Initializing payment...');
+    console.log(' Initializing payment...');
     console.log('Email:', paymentData.email);
     console.log('Amount:', paymentData.amount);
     console.log('Payment Channel:', paymentData.paymentChannel || 'card'); // Default to card
@@ -44,7 +44,7 @@ export const initializePayment = async (paymentData) => {
       currency: 'NGN',
       metadata: paymentData.metadata || {},
       reference: paymentData.reference || `RIDERR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      // ✅ LIMIT PAYMENT CHANNELS TO CARD AND BANK TRANSFER ONLY
+      //  LIMIT PAYMENT CHANNELS TO CARD AND BANK TRANSFER ONLY
       channels: paymentData.paymentChannel 
         ? [paymentData.paymentChannel] // Use user's selection
         : ['card', 'bank'], // Default: show both options
@@ -69,15 +69,15 @@ export const initializePayment = async (paymentData) => {
       // Set who bears the transaction fee
       payload.bearer = paymentData.bearer || 'account';
       
-      console.log('🏦 ESCROW MODE: Payment will split to subaccount');
+      console.log(' ESCROW MODE: Payment will split to subaccount');
     }
     
-    console.log('📋 Payment channels:', payload.channels);
+    console.log(' Payment channels:', payload.channels);
     
     // Make the request
     const response = await paystackAxios.post('/transaction/initialize', payload);
 
-    console.log('✅ Paystack response received');
+    console.log(' Paystack response received');
     
     if (response.data.status === true) {
       return {
@@ -93,7 +93,7 @@ export const initializePayment = async (paymentData) => {
       };
     }
   } catch (error) {
-    console.error('❌ Paystack initialization error:', {
+    console.error(' Paystack initialization error:', {
       message: error.message,
       status: error.response?.status,
       data: error.response?.data,
@@ -114,7 +114,7 @@ export const initializePayment = async (paymentData) => {
  */
 export const chargeCardViaPaystack = async (chargeData) => {
   try {
-    console.log('💳 Charging card via Paystack...');
+    console.log(' Charging card via Paystack...');
     
     const amountInKobo = Math.round(chargeData.amount * 100);
     
@@ -172,7 +172,7 @@ export const chargeCardViaPaystack = async (chargeData) => {
       error: response.data,
     };
   } catch (error) {
-    console.error('❌ Charge card error:', error.response?.data || error.message);
+    console.error(' Charge card error:', error.response?.data || error.message);
     
     return {
       success: false,
@@ -187,7 +187,7 @@ export const chargeCardViaPaystack = async (chargeData) => {
  */
 export const submitOtpToPaystack = async (otpData) => {
   try {
-    console.log('🔐 Submitting OTP to Paystack...');
+    console.log(' Submitting OTP to Paystack...');
     
     const payload = {
       otp: otpData.otp,
@@ -220,7 +220,7 @@ export const submitOtpToPaystack = async (otpData) => {
       error: response.data,
     };
   } catch (error) {
-    console.error('❌ Submit OTP error:', error.response?.data || error.message);
+    console.error(' Submit OTP error:', error.response?.data || error.message);
     
     return {
       success: false,
@@ -235,7 +235,7 @@ export const submitOtpToPaystack = async (otpData) => {
  */
 export const createDedicatedVirtualAccount = async (accountData) => {
   try {
-    console.log('🏦 Creating dedicated virtual account...');
+    console.log(' Creating dedicated virtual account...');
     
     const amountInKobo = Math.round(accountData.amount * 100);
     
@@ -273,7 +273,7 @@ export const createDedicatedVirtualAccount = async (accountData) => {
       error: response.data,
     };
   } catch (error) {
-    console.error('❌ Create virtual account error:', error.response?.data || error.message);
+    console.error(' Create virtual account error:', error.response?.data || error.message);
     
     return {
       success: false,
@@ -288,14 +288,14 @@ export const createDedicatedVirtualAccount = async (accountData) => {
  */
 export const verifyPayment = async (reference) => {
   try {
-    console.log('🔍 Verifying payment:', reference);
+    console.log(' Verifying payment:', reference);
     
     const response = await paystackAxios.get(`/transaction/verify/${reference}`);
     
     if (response.data.status === true) {
       // Log split payment details if available
       if (response.data.data.subaccount) {
-        console.log('💰 Split Payment Details:');
+        console.log(' Split Payment Details:');
         console.log('Subaccount Amount:', response.data.data.subaccount.amount / 100, 'NGN');
         console.log('Platform Fees:', response.data.data.fees / 100, 'NGN');
       }
@@ -313,7 +313,7 @@ export const verifyPayment = async (reference) => {
       };
     }
   } catch (error) {
-    console.error('❌ Verification error:', error.response?.data || error.message);
+    console.error(' Verification error:', error.response?.data || error.message);
     
     return {
       success: false,
@@ -328,7 +328,7 @@ export const verifyPayment = async (reference) => {
  */
 export const createSubaccount = async (companyData) => {
   try {
-    console.log('🏦 Creating Paystack subaccount for company:', companyData.businessName);
+    console.log(' Creating Paystack subaccount for company:', companyData.businessName);
     
     const response = await paystackAxios.post('/subaccount', {
       business_name: companyData.businessName,
@@ -346,7 +346,7 @@ export const createSubaccount = async (companyData) => {
     });
 
     if (response.data.status === true) {
-      console.log('✅ Subaccount created:', response.data.data.subaccount_code);
+      console.log(' Subaccount created:', response.data.data.subaccount_code);
       return {
         success: true,
         message: 'Subaccount created successfully',
@@ -366,7 +366,7 @@ export const createSubaccount = async (companyData) => {
       };
     }
   } catch (error) {
-    console.error('❌ Create subaccount error:', error.response?.data || error.message);
+    console.error(' Create subaccount error:', error.response?.data || error.message);
     
     return {
       success: false,
@@ -395,7 +395,7 @@ export const getBankList = async () => {
       };
     }
   } catch (error) {
-    console.error('❌ Get banks error:', error.response?.data || error.message);
+    console.error(' Get banks error:', error.response?.data || error.message);
     return {
       success: false,
       message: 'Failed to get bank list',
@@ -409,7 +409,7 @@ export const getBankList = async () => {
  */
 export const resolveAccountNumber = async (accountNumber, bankCode) => {
   try {
-    console.log('🔍 Resolving account:', accountNumber, 'Bank:', bankCode);
+    console.log(' Resolving account:', accountNumber, 'Bank:', bankCode);
     
     const response = await paystackAxios.get('/bank/resolve', {
       params: {
@@ -433,7 +433,7 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
       };
     }
   } catch (error) {
-    console.error('❌ Resolve account error:', error.response?.data || error.message);
+    console.error(' Resolve account error:', error.response?.data || error.message);
     
     return {
       success: false,

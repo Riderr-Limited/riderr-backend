@@ -175,7 +175,7 @@ router.use(protect);
  *         description: Marked as clicked
  */
 
-// Static routes first — before any /:param routes
+// Static routes first  before any /:param routes
 router.get("/unread-count", getUnreadNotificationCount);
 router.put("/read-all", markAllAsRead);
 router.put("/push-token", updatePushToken);

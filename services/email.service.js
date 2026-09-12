@@ -53,7 +53,7 @@ const getEmailHTML = (name, code, type = 'verification') => {
 <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f5f5f5">
   <div style="max-width:600px;margin:0 auto;background:#fff">
     <div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:40px;text-align:center;color:#fff">
-      <h1 style="margin:0;font-size:32px">🚗 Riderr</h1>
+      <h1 style="margin:0;font-size:32px"> Riderr</h1>
       <p style="margin:10px 0 0 0">${title}</p>
     </div>
     <div style="padding:40px 30px">
@@ -63,7 +63,7 @@ const getEmailHTML = (name, code, type = 'verification') => {
         <p style="font-size:42px;font-weight:700;letter-spacing:8px;color:#fff;margin:0">${code}</p>
       </div>
       <div style="font-size:14px;color:#666;padding:15px;background:#f8f9fa;border-radius:8px;border-left:4px solid #667eea">
-        ⏰ This code expires in 10 minutes
+         This code expires in 10 minutes
       </div>
       <p style="color:#888;font-size:14px;margin-top:30px">
         ${isVerification ? "If you didn't create a Riderr account, please ignore this email." : "If you didn't request this, please ignore this email."}
@@ -71,7 +71,7 @@ const getEmailHTML = (name, code, type = 'verification') => {
     </div>
     <div style="background:#f8f9fa;padding:20px;text-align:center;font-size:12px;color:#999;border-top:1px solid #eee">
       <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
-      <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+      <p> ${new Date().getFullYear()} Riderr. All rights reserved.</p>
     </div>
   </div>
 </body>
@@ -95,10 +95,10 @@ const sendViaSMTP = async (to, subject, html, text) => {
       text,
     });
 
-    console.log(`✅ Email sent via SMTP to ${to}`);
+    console.log(` Email sent via SMTP to ${to}`);
     return { success: true, messageId: info.messageId, method: 'SMTP' };
   } catch (error) {
-    console.error('❌ SMTP failed:', error.message);
+    console.error(' SMTP failed:', error.message);
     return null;
   }
 };
@@ -121,10 +121,10 @@ const sendViaResend = async (to, subject, html, text) => {
 
     if (error) throw new Error(error.message);
 
-    console.log(`✅ Email sent via Resend to ${to}`);
+    console.log(` Email sent via Resend to ${to}`);
     return { success: true, messageId: data.id, method: 'Resend' };
   } catch (error) {
-    console.error('❌ Resend failed:', error.message);
+    console.error(' Resend failed:', error.message);
     return null;
   }
 };
@@ -142,7 +142,7 @@ export const sendEmail = async (to, subject, html, text) => {
   // Development fallback - log to console
   if (!result && process.env.NODE_ENV === 'development') {
     console.log('\n' + '='.repeat(60));
-    console.log('📧 DEV MODE - Email not sent, but here\'s the content:');
+    console.log(' DEV MODE - Email not sent, but here\'s the content:');
     console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(`Text: ${text}`);
@@ -155,18 +155,18 @@ export const sendEmail = async (to, subject, html, text) => {
 
 // Send verification email
 export const sendVerificationEmail = async (email, code, name) => {
-  const subject = '🔐 Your Riderr Verification Code';
+  const subject = ' Your Riderr Verification Code';
   const html = getEmailHTML(name, code, 'verification');
-  const text = `Hello ${name},\n\nWelcome to Riderr! Your verification code is: ${code}\n\nThis code expires in 10 minutes.\n\n© ${new Date().getFullYear()} Riderr`;
+  const text = `Hello ${name},\n\nWelcome to Riderr! Your verification code is: ${code}\n\nThis code expires in 10 minutes.\n\n ${new Date().getFullYear()} Riderr`;
 
   return sendEmail(email, subject, html, text);
 };
 
 // Send password reset email
 export const sendPasswordResetEmail = async (email, code, name) => {
-  const subject = '🔑 Reset Your Riderr Password';
+  const subject = ' Reset Your Riderr Password';
   const html = getEmailHTML(name, code, 'password_reset');
-  const text = `Hello ${name},\n\nYou requested to reset your password. Your OTP is: ${code}\n\nThis code expires in 10 minutes.\n\n© ${new Date().getFullYear()} Riderr`;
+  const text = `Hello ${name},\n\nYou requested to reset your password. Your OTP is: ${code}\n\nThis code expires in 10 minutes.\n\n ${new Date().getFullYear()} Riderr`;
 
   return sendEmail(email, subject, html, text);
 };

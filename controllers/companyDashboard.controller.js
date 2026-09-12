@@ -9,7 +9,7 @@ import bcrypt from "bcryptjs";
 import { sendNotification } from "../utils/notification.js";
 import mongoose from "mongoose";
 
-// ─── RIDER MANAGEMENT ────────────────────────────────────────────────────────
+//  RIDER MANAGEMENT 
 
 // GET /api/company-dashboard/riders
 export const listRiders = async (req, res) => {
@@ -88,7 +88,7 @@ export const listRiders = async (req, res) => {
       pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
-    console.error("❌ listRiders error:", error);
+    console.error(" listRiders error:", error);
     res.status(500).json({ success: false, message: "Failed to list riders" });
   }
 };
@@ -167,7 +167,7 @@ export const addRider = async (req, res) => {
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
-    console.error("❌ addRider error:", error);
+    console.error(" addRider error:", error);
     res.status(500).json({ success: false, message: "Failed to add rider" });
   }
 };
@@ -189,7 +189,7 @@ export const approveRider = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "✅ Account Approved",
+        title: " Account Approved",
         message: "Your rider account has been approved. You can now go online and accept deliveries.",
         data: { type: "driver_approved" },
       });
@@ -197,7 +197,7 @@ export const approveRider = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Rider approved", data: { approvalStatus: driver.approvalStatus } });
   } catch (error) {
-    console.error("❌ approveRider error:", error);
+    console.error(" approveRider error:", error);
     res.status(500).json({ success: false, message: "Failed to approve rider" });
   }
 };
@@ -223,7 +223,7 @@ export const suspendRider = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "⚠️ Account Suspended",
+        title: " Account Suspended",
         message: `Your account has been suspended. Reason: ${reason}`,
         data: { type: "driver_suspended", reason },
       });
@@ -231,7 +231,7 @@ export const suspendRider = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Rider suspended" });
   } catch (error) {
-    console.error("❌ suspendRider error:", error);
+    console.error(" suspendRider error:", error);
     res.status(500).json({ success: false, message: "Failed to suspend rider" });
   }
 };
@@ -252,7 +252,7 @@ export const activateRider = async (req, res) => {
     if (driverUser) {
       await sendNotification({
         userId: driverUser._id,
-        title: "✅ Account Reactivated",
+        title: " Account Reactivated",
         message: "Your rider account has been reactivated.",
         data: { type: "driver_reactivated" },
       });
@@ -260,7 +260,7 @@ export const activateRider = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Rider activated" });
   } catch (error) {
-    console.error("❌ activateRider error:", error);
+    console.error(" activateRider error:", error);
     res.status(500).json({ success: false, message: "Failed to activate rider" });
   }
 };
@@ -309,12 +309,12 @@ export const getRiderDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ getRiderDeliveries error:", error);
+    console.error(" getRiderDeliveries error:", error);
     res.status(500).json({ success: false, message: "Failed to get rider deliveries" });
   }
 };
 
-// ─── DASHBOARD OVERVIEW ───────────────────────────────────────────────────────
+//  DASHBOARD OVERVIEW 
 
 // GET /api/company-dashboard/overview
 export const getDashboardOverview = async (req, res) => {
@@ -366,12 +366,12 @@ export const getDashboardOverview = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ getDashboardOverview error:", error);
+    console.error(" getDashboardOverview error:", error);
     res.status(500).json({ success: false, message: "Failed to get dashboard overview" });
   }
 };
 
-// ─── ALL DELIVERIES (RIDERR) ──────────────────────────────────────────────────
+//  ALL DELIVERIES (RIDERR) 
 
 // GET /api/company-dashboard/deliveries
 export const getAllDeliveries = async (req, res) => {
@@ -404,12 +404,12 @@ export const getAllDeliveries = async (req, res) => {
       pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
-    console.error("❌ getAllDeliveries error:", error);
+    console.error(" getAllDeliveries error:", error);
     res.status(500).json({ success: false, message: "Failed to get deliveries" });
   }
 };
 
-// ─── MANUAL RECORDS ───────────────────────────────────────────────────────────
+//  MANUAL RECORDS 
 
 // GET /api/company-dashboard/manual-records/drivers
 export const getDriversForSelect = async (req, res) => {
@@ -436,7 +436,7 @@ export const getDriversForSelect = async (req, res) => {
 
     res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("❌ getDriversForSelect error:", error);
+    console.error(" getDriversForSelect error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch drivers" });
   }
 };
@@ -495,7 +495,7 @@ export const createManualRecord = async (req, res) => {
 
     res.status(201).json({ success: true, message: "Manual record created", data: record });
   } catch (error) {
-    console.error("❌ createManualRecord error:", error);
+    console.error(" createManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to create manual record" });
   }
 };
@@ -530,7 +530,7 @@ export const listManualRecords = async (req, res) => {
       pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
-    console.error("❌ listManualRecords error:", error);
+    console.error(" listManualRecords error:", error);
     res.status(500).json({ success: false, message: "Failed to list manual records" });
   }
 };
@@ -544,7 +544,7 @@ export const getManualRecord = async (req, res) => {
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
     res.status(200).json({ success: true, data: record });
   } catch (error) {
-    console.error("❌ getManualRecord error:", error);
+    console.error(" getManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to get record" });
   }
 };
@@ -565,7 +565,7 @@ export const updateManualRecord = async (req, res) => {
     await record.save();
     res.status(200).json({ success: true, message: "Record updated", data: record });
   } catch (error) {
-    console.error("❌ updateManualRecord error:", error);
+    console.error(" updateManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to update record" });
   }
 };
@@ -577,12 +577,12 @@ export const deleteManualRecord = async (req, res) => {
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
     res.status(200).json({ success: true, message: "Record deleted" });
   } catch (error) {
-    console.error("❌ deleteManualRecord error:", error);
+    console.error(" deleteManualRecord error:", error);
     res.status(500).json({ success: false, message: "Failed to delete record" });
   }
 };
 
-// ─── MANUAL RECORDS SUMMARY ───────────────────────────────────────────────────
+//  MANUAL RECORDS SUMMARY 
 
 // GET /api/company-dashboard/manual-records/summary
 export const getManualRecordsSummary = async (req, res) => {
@@ -617,7 +617,7 @@ export const getManualRecordsSummary = async (req, res) => {
       data: { byType, byPayment, topDrivers: byDriver },
     });
   } catch (error) {
-    console.error("❌ getManualRecordsSummary error:", error);
+    console.error(" getManualRecordsSummary error:", error);
     res.status(500).json({ success: false, message: "Failed to get summary" });
   }
 };

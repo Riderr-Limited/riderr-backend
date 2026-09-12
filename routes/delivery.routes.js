@@ -232,7 +232,7 @@ router.post('/:deliveryId/complete', protect, authorize('driver'), completeDeliv
 router.get('/:deliveryId', protect, getDeliveryDetails);
 router.get('/:deliveryId/track', protect, trackDelivery);
 router.get('/:deliveryId/updates', protect, getDeliveryUpdates);
-router.post('/:deliveryId/cancel', protect, cancelDeliveryWithRefund); // ✅ Single route
+router.post('/:deliveryId/cancel', protect, cancelDeliveryWithRefund); //  Single route
 router.post('/:deliveryId/rate', protect, authorize('customer'), rateDelivery);
 router.delete('/:deliveryId', protect, authorize('customer'), deleteDelivery);
 
@@ -292,7 +292,7 @@ router.get('/debug/all-drivers', protect, async (req, res) => {
   try {
     const allDrivers = await Driver.find({}).lean();
     
-    console.log('📊 TOTAL DRIVERS IN DATABASE:', allDrivers.length);
+    console.log(' TOTAL DRIVERS IN DATABASE:', allDrivers.length);
     
     const analysis = allDrivers.map(driver => ({
       _id: driver._id,
@@ -359,7 +359,7 @@ router.get('/debug/all-drivers', protect, async (req, res) => {
 // ============================================================================
 router.get('/debug/test-query', protect, async (req, res) => {
   try {
-    console.log('🧪 TESTING DIFFERENT QUERY VARIATIONS...\n');
+    console.log(' TESTING DIFFERENT QUERY VARIATIONS...\n');
     
     // Query 1: Just isOnline
     const q1 = await Driver.find({ isOnline: true }).lean();
@@ -399,7 +399,7 @@ router.get('/debug/test-query', protect, async (req, res) => {
         { currentDeliveryId: { $exists: false } },
         { currentDeliveryId: null }
       ],
-      $or: [  // ← This overwrites the previous $or!
+      $or: [  //  This overwrites the previous $or!
         { 'location.coordinates': { $exists: true, $ne: [0, 0] } },
         { 'currentLocation.lat': { $exists: true } },
       ],

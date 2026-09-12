@@ -125,7 +125,7 @@ export const getUserMessages = async (req, res) => {
 };
 
 /**
- * @desc  Send a message (user → admin OR admin → user)
+ * @desc  Send a message (user  admin OR admin  user)
  * @route POST /api/admin-chat/messages
  * @access Private (any authenticated user)
  */
@@ -356,7 +356,7 @@ export const getUserChats = async (req, res) => {
 };
 
 /**
- * @desc  Delete a message (soft delete — marks as deleted)
+ * @desc  Delete a message (soft delete  marks as deleted)
  * @route DELETE /api/admin-chat/messages/:messageId
  * @access Private (Admin or message owner)
  */

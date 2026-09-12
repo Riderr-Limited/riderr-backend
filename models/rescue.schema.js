@@ -1,13 +1,13 @@
 /**
- * ═══════════════════════════════════════════════════════════════════
- * DELIVERY MODEL — RESCUE FIELDS
+ * 
+ * DELIVERY MODEL  RESCUE FIELDS
  * Add these fields to your existing Delivery mongoose schema
- * ═══════════════════════════════════════════════════════════════════
+ * 
  *
  * In your delivery.models.js, add the following to the schema
  * definition object (alongside your existing fields):
  *
- * ─── 1. Add "rescue_requested" to your status enum ─────────────────
+ *  1. Add "rescue_requested" to your status enum 
  *
  *   status: {
  *     type: String,
@@ -19,12 +19,12 @@
  *       "delivered",
  *       "cancelled",
  *       "failed",
- *       "rescue_requested",   // ← ADD THIS
+ *       "rescue_requested",   //  ADD THIS
  *     ],
  *     default: "created",
  *   },
  *
- * ─── 2. Add rescueRequest sub-document ─────────────────────────────
+ *  2. Add rescueRequest sub-document 
  *
  *   rescueRequest: {
  *     status: {
@@ -49,7 +49,7 @@
  *     note: { type: String },
  *   },
  *
- * ─── 3. Add reassignmentHistory array ──────────────────────────────
+ *  3. Add reassignmentHistory array 
  *
  *   reassignmentHistory: [
  *     {
@@ -62,9 +62,9 @@
  *     },
  *   ],
  *
- * ═══════════════════════════════════════════════════════════════════
- * EXAMPLE — Complete snippet to paste into your schema:
- * ═══════════════════════════════════════════════════════════════════
+ * 
+ * EXAMPLE  Complete snippet to paste into your schema:
+ * 
  */
 
 import mongoose from "mongoose";
@@ -115,11 +115,11 @@ export const rescueFields = {
 };
 
 /**
- * ═══════════════════════════════════════════════════════════════════
+ * 
  * HOW TO APPLY: In your delivery.models.js file
- * ═══════════════════════════════════════════════════════════════════
+ * 
  *
- * Option A — Spread into existing schema (cleanest):
+ * Option A  Spread into existing schema (cleanest):
  *
  *   import { rescueFields } from "./rescue.schema.js";
  *
@@ -129,12 +129,12 @@ export const rescueFields = {
  *   }, { timestamps: true });
  *
  *
- * Option B — Manual copy-paste:
+ * Option B  Manual copy-paste:
  *   Just copy the two field blocks above directly into your schema.
  *
- * ═══════════════════════════════════════════════════════════════════
+ * 
  * ALSO update the status enum in your existing schema:
- * ═══════════════════════════════════════════════════════════════════
+ * 
  *
  *   status: {
  *     type: String,
@@ -142,7 +142,7 @@ export const rescueFields = {
  *       "created", "assigned", "picked_up",
  *       "in_transit", "delivered", "cancelled",
  *       "failed",
- *       "rescue_requested",   // ← add this line
+ *       "rescue_requested",   //  add this line
  *     ],
  *     default: "created",
  *   },

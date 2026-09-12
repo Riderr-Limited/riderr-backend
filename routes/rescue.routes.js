@@ -19,7 +19,7 @@ const router = express.Router();
 
 // All routes require authentication
  
-// ─── DRIVER ROUTES ────────────────────────────────────────────────────────────
+//  DRIVER ROUTES 
 
 /**
  * @route   POST /api/deliveries/:deliveryId/request-help

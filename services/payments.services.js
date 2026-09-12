@@ -365,8 +365,8 @@ class PaymentService {
         // Notify customer
         await sendNotification({
           userId: payment.customerId,
-          title: '✅ Payment Successful',
-          message: `Your payment of ₦${amountInNaira.toLocaleString()} has been received`,
+          title: ' Payment Successful',
+          message: `Your payment of ${amountInNaira.toLocaleString()} has been received`,
           data: {
             type: 'payment_success',
             paymentId: payment._id,
@@ -381,7 +381,7 @@ class PaymentService {
           for (const admin of companyAdmins) {
             await sendNotification({
               userId: admin.userId,
-              title: '💰 New Payment Received',
+              title: ' New Payment Received',
               message: `Payment received for delivery ${delivery.referenceId}`,
               data: {
                 type: 'company_payment_received',
@@ -451,7 +451,7 @@ class PaymentService {
       // Notify customer
       await sendNotification({
         userId: payment.customerId,
-        title: '❌ Payment Failed',
+        title: ' Payment Failed',
         message: 'Your payment failed. Please try again.',
         data: {
           type: 'payment_failed',
@@ -709,8 +709,8 @@ class PaymentService {
       // Notify customer
       await sendNotification({
         userId: payment.customerId,
-        title: '💰 Payment Released',
-        message: `Payment of ₦${payment.amount.toLocaleString()} has been released to ${company.name}`,
+        title: ' Payment Released',
+        message: `Payment of ${payment.amount.toLocaleString()} has been released to ${company.name}`,
         data: {
           type: 'payment_released_to_company',
           paymentId: payment._id,
@@ -724,8 +724,8 @@ class PaymentService {
         for (const admin of company.admins) {
           await sendNotification({
             userId: admin.userId,
-            title: '✅ Funds Released',
-            message: `₦${companyCommission.toLocaleString()} has been added to your company balance`,
+            title: ' Funds Released',
+            message: `${companyCommission.toLocaleString()} has been added to your company balance`,
             data: {
               type: 'company_funds_released',
               paymentId: payment._id,
@@ -741,8 +741,8 @@ class PaymentService {
       if (driver && driver.userId) {
         await sendNotification({
           userId: driver.userId._id,
-          title: '💸 Earnings Updated',
-          message: `₦${driverAmount.toLocaleString()} has been added to your earnings`,
+          title: ' Earnings Updated',
+          message: `${driverAmount.toLocaleString()} has been added to your earnings`,
           data: {
             type: 'driver_earnings_updated',
             paymentId: payment._id,
@@ -877,8 +877,8 @@ class PaymentService {
       // Notify customer
       await sendNotification({
         userId: payment.customerId,
-        title: '💸 Payment Refunded',
-        message: `₦${payment.amount.toLocaleString()} has been refunded to your account`,
+        title: ' Payment Refunded',
+        message: `${payment.amount.toLocaleString()} has been refunded to your account`,
         data: {
           type: 'payment_refunded',
           paymentId: payment._id,
@@ -894,7 +894,7 @@ class PaymentService {
           for (const admin of company.admins) {
             await sendNotification({
               userId: admin.userId,
-              title: '🔄 Payment Refunded',
+              title: ' Payment Refunded',
               message: `Payment refunded to customer: ${reason}`,
               data: {
                 type: 'company_payment_refunded',
@@ -1029,8 +1029,8 @@ class PaymentService {
       if (parseFloat(customerAmount) > 0) {
         await sendNotification({
           userId: payment.customerId,
-          title: '💰 Partial Refund',
-          message: `₦${parseFloat(customerAmount).toLocaleString()} has been refunded to your account`,
+          title: ' Partial Refund',
+          message: `${parseFloat(customerAmount).toLocaleString()} has been refunded to your account`,
           data: {
             type: 'payment_split_customer',
             paymentId: payment._id,
@@ -1047,8 +1047,8 @@ class PaymentService {
           for (const admin of company.admins) {
             await sendNotification({
               userId: admin.userId,
-              title: '💰 Partial Release',
-              message: `₦${parseFloat(companyAmount).toLocaleString()} has been added to your company balance`,
+              title: ' Partial Release',
+              message: `${parseFloat(companyAmount).toLocaleString()} has been added to your company balance`,
               data: {
                 type: 'payment_split_company',
                 paymentId: payment._id,
@@ -1272,7 +1272,7 @@ class PaymentService {
       for (const admin of admins) {
         await sendNotification({
           userId: admin._id,
-          title: '⚠️ New Dispute Raised',
+          title: ' New Dispute Raised',
           message: `Dispute raised by ${raisedBy} for payment ${payment.reference}`,
           data: {
             type: 'new_dispute',
@@ -1290,7 +1290,7 @@ class PaymentService {
           for (const admin of company.admins) {
             await sendNotification({
               userId: admin.userId,
-              title: '⚠️ Dispute Raised',
+              title: ' Dispute Raised',
               message: `Customer raised dispute for payment ${payment.reference}`,
               data: {
                 type: 'customer_dispute',
@@ -1303,7 +1303,7 @@ class PaymentService {
       } else if (raisedBy === 'company_admin' || raisedBy === 'driver') {
         await sendNotification({
           userId: payment.customerId,
-          title: '⚠️ Dispute Raised',
+          title: ' Dispute Raised',
           message: `Company raised dispute for your payment ${payment.reference}`,
           data: {
             type: 'company_dispute',
@@ -1368,7 +1368,7 @@ class PaymentService {
             for (const admin of company.admins) {
               await sendNotification({
                 userId: admin.userId,
-                title: '❌ Transfer Failed',
+                title: ' Transfer Failed',
                 message: `Bank transfer failed for payment ${payment.reference}`,
                 data: {
                   type: 'transfer_failed',

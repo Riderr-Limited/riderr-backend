@@ -1,16 +1,16 @@
-// ─── PATCH for admin.controller.js ────────────────────────────────────────────
+//  PATCH for admin.controller.js 
 //
 // Replace the top-level ChatMessage import:
-//   import ChatMessage from "../models/chat.model.js";          ← WRONG
+//   import ChatMessage from "../models/chat.model.js";           WRONG
 // with:
-//   import ChatMessage from "../models/chatMessage.model.js";   ← CORRECT
+//   import ChatMessage from "../models/chatMessage.model.js";    CORRECT
 //
 // This single change fixes getDeliveryById and getSystemStats which both
 // reference ChatMessage.  All other admin controller logic stays the same.
 //
 // Also replace getDeliveryById with the version below so it returns
 // richer call data and consistent field names.
-// ──────────────────────────────────────────────────────────────────────────────
+// 
 
 /**
  * @desc    Get delivery details  (drop-in replacement for admin controller)

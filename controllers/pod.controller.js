@@ -6,13 +6,13 @@ import Company from "../models/company.models.js";
 import { sendNotification } from "../utils/notification.js";
 import { notifyCompany } from "../utils/companyNotify.js";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+//  helpers 
 
 const addAudit = (pod, action, actor, actorRole, note = "") => {
   pod.auditLog.push({ action, actor: actor._id, actorRole, note });
 };
 
-// ─── CREATE POD ORDER ────────────────────────────────────────────────────────
+//  CREATE POD ORDER 
 // POST /api/pod
 export const createPOD = async (req, res) => {
   try {
@@ -51,7 +51,7 @@ export const createPOD = async (req, res) => {
       merchantId:    merchantId || null,
       merchantName:  merchant?.name,
       merchantPhone: merchant?.phone,
-      companyId:     companyId || null, // optional — customer can pick a company
+      companyId:     companyId || null, // optional  customer can pick a company
       product: {
         name:        productName,
         description: productDescription,
@@ -86,10 +86,10 @@ export const createPOD = async (req, res) => {
 
     await notifyCompany(
       pod.companyId,
-      "📦 New POD Order",
+      " New POD Order",
       `New Pay-on-Delivery order from ${pod.customerName} for ${pod.product.name}.`,
       { type: "pod_new", podId: pod._id },
-      `Hello,\n\nA new POD order has been submitted.\n\nRef: ${pod.referenceId}\nProduct: ${pod.product.name} (x${pod.product.quantity})\nCustomer: ${pod.customerName} (${pod.customerPhone})\nDropoff: ${pod.dropoff.address}\nAmount to Collect: ₦${pod.amountToCollect?.toLocaleString()}\n\nPlease confirm the order.`
+      `Hello,\n\nA new POD order has been submitted.\n\nRef: ${pod.referenceId}\nProduct: ${pod.product.name} (x${pod.product.quantity})\nCustomer: ${pod.customerName} (${pod.customerPhone})\nDropoff: ${pod.dropoff.address}\nAmount to Collect: ${pod.amountToCollect?.toLocaleString()}\n\nPlease confirm the order.`
     );
 
     res.status(201).json({
@@ -98,12 +98,12 @@ export const createPOD = async (req, res) => {
       data: pod,
     });
   } catch (error) {
-    console.error("❌ createPOD error:", error);
+    console.error(" createPOD error:", error);
     res.status(500).json({ success: false, message: "Failed to create POD order" });
   }
 };
 
-// ─── CONFIRM POD (company/merchant confirms product is available) ─────────────
+//  CONFIRM POD (company/merchant confirms product is available) 
 // PATCH /api/pod/:podId/confirm
 export const confirmPOD = async (req, res) => {
   try {
@@ -136,28 +136,28 @@ export const confirmPOD = async (req, res) => {
 
     await notifyCompany(
       pod.companyId,
-      "✅ POD Order Confirmed",
+      " POD Order Confirmed",
       `POD order #${pod.referenceId} has been confirmed. Please assign a driver.`,
       { type: "pod_confirmed", podId: pod._id },
-      `Hello,\n\nPOD order #${pod.referenceId} has been confirmed.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount to Collect: ₦${pod.amountToCollect?.toLocaleString()}\n\nPlease assign a driver.`
+      `Hello,\n\nPOD order #${pod.referenceId} has been confirmed.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount to Collect: ${pod.amountToCollect?.toLocaleString()}\n\nPlease assign a driver.`
     );
 
     // Notify customer
     await sendNotification({
       userId: pod.customerId,
-      title: "✅ POD Order Confirmed",
+      title: " POD Order Confirmed",
       message: `Your Pay-on-Delivery order #${pod.referenceId} has been confirmed. Product is available.`,
       data: { type: "pod_confirmed", podId: pod._id },
     });
 
     res.status(200).json({ success: true, message: "POD order confirmed", data: pod });
   } catch (error) {
-    console.error("❌ confirmPOD error:", error);
+    console.error(" confirmPOD error:", error);
     res.status(500).json({ success: false, message: "Failed to confirm POD order" });
   }
 };
 
-// ─── MARK READY FOR DELIVERY ─────────────────────────────────────────────────
+//  MARK READY FOR DELIVERY 
 // PATCH /api/pod/:podId/ready
 export const markReadyForDelivery = async (req, res) => {
   try {
@@ -182,12 +182,12 @@ export const markReadyForDelivery = async (req, res) => {
 
     res.status(200).json({ success: true, message: "POD order marked ready for delivery", data: pod });
   } catch (error) {
-    console.error("❌ markReadyForDelivery error:", error);
+    console.error(" markReadyForDelivery error:", error);
     res.status(500).json({ success: false, message: "Failed to update POD order" });
   }
 };
 
-// ─── ASSIGN DRIVER ────────────────────────────────────────────────────────────
+//  ASSIGN DRIVER 
 // POST /api/pod/:podId/assign
 export const assignDriverToPOD = async (req, res) => {
   try {
@@ -223,8 +223,8 @@ export const assignDriverToPOD = async (req, res) => {
     if (driver.userId) {
       await sendNotification({
         userId: driver.userId._id,
-        title: "📦 New POD Delivery",
-        message: `You have been assigned a Pay-on-Delivery order #${pod.referenceId}. Collect ₦${pod.amountToCollect?.toLocaleString()} from customer.`,
+        title: " New POD Delivery",
+        message: `You have been assigned a Pay-on-Delivery order #${pod.referenceId}. Collect ${pod.amountToCollect?.toLocaleString()} from customer.`,
         data: { type: "pod_assigned", podId: pod._id, amountToCollect: pod.amountToCollect },
       });
     }
@@ -232,19 +232,19 @@ export const assignDriverToPOD = async (req, res) => {
     // Notify customer
     await sendNotification({
       userId: pod.customerId,
-      title: "🚗 Driver On The Way",
+      title: " Driver On The Way",
       message: `A driver has been assigned to your POD order #${pod.referenceId} and is heading to you.`,
       data: { type: "pod_out_for_delivery", podId: pod._id },
     });
 
     res.status(200).json({ success: true, message: "Driver assigned to POD order", data: pod });
   } catch (error) {
-    console.error("❌ assignDriverToPOD error:", error);
+    console.error(" assignDriverToPOD error:", error);
     res.status(500).json({ success: false, message: "Failed to assign driver" });
   }
 };
 
-// ─── DRIVER MARKS AWAITING CUSTOMER ──────────────────────────────────────────
+//  DRIVER MARKS AWAITING CUSTOMER 
 // PATCH /api/pod/:podId/awaiting
 export const markAwaitingCustomer = async (req, res) => {
   try {
@@ -271,19 +271,19 @@ export const markAwaitingCustomer = async (req, res) => {
 
     await sendNotification({
       userId: pod.customerId,
-      title: "🔔 Driver Has Arrived",
-      message: `Your driver has arrived with your POD order #${pod.referenceId}. Please inspect and pay ₦${pod.amountToCollect?.toLocaleString()}.`,
+      title: " Driver Has Arrived",
+      message: `Your driver has arrived with your POD order #${pod.referenceId}. Please inspect and pay ${pod.amountToCollect?.toLocaleString()}.`,
       data: { type: "pod_awaiting_customer", podId: pod._id, amountToCollect: pod.amountToCollect },
     });
 
     res.status(200).json({ success: true, message: "Status updated to awaiting customer", data: pod });
   } catch (error) {
-    console.error("❌ markAwaitingCustomer error:", error);
+    console.error(" markAwaitingCustomer error:", error);
     res.status(500).json({ success: false, message: "Failed to update POD status" });
   }
 };
 
-// ─── RECORD PAYMENT (DELIVERED & PAID) ───────────────────────────────────────
+//  RECORD PAYMENT (DELIVERED & PAID) 
 // POST /api/pod/:podId/payment
 export const recordPODPayment = async (req, res) => {
   try {
@@ -310,22 +310,22 @@ export const recordPODPayment = async (req, res) => {
     pod.paymentReference = paymentReference || `CASH-${Date.now()}`;
     pod.paymentCollectedAt = new Date();
     pod.deliveredAt = new Date();
-    addAudit(pod, "PAYMENT_COLLECTED", driverUser, "driver", note || `Cash collected: ₦${pod.amountToCollect}`);
+    addAudit(pod, "PAYMENT_COLLECTED", driverUser, "driver", note || `Cash collected: ${pod.amountToCollect}`);
     await pod.save();
 
     await notifyCompany(
       pod.companyId,
-      "💰 POD Payment Collected",
-      `Payment of ₦${pod.amountToCollect?.toLocaleString()} collected for POD order #${pod.referenceId}.`,
+      " POD Payment Collected",
+      `Payment of ${pod.amountToCollect?.toLocaleString()} collected for POD order #${pod.referenceId}.`,
       { type: "pod_delivered_paid", podId: pod._id },
-      `Hello,\n\nPOD order #${pod.referenceId} has been delivered and payment collected.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount Collected: ₦${pod.amountToCollect?.toLocaleString()}\nSettlement pending.`
+      `Hello,\n\nPOD order #${pod.referenceId} has been delivered and payment collected.\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}\nAmount Collected: ${pod.amountToCollect?.toLocaleString()}\nSettlement pending.`
     );
 
     // Notify customer
     await sendNotification({
       userId: pod.customerId,
-      title: "✅ Payment Recorded",
-      message: `Payment of ₦${pod.amountToCollect?.toLocaleString()} recorded for POD order #${pod.referenceId}. Thank you!`,
+      title: " Payment Recorded",
+      message: `Payment of ${pod.amountToCollect?.toLocaleString()} recorded for POD order #${pod.referenceId}. Thank you!`,
       data: { type: "pod_delivered_paid", podId: pod._id },
     });
 
@@ -333,20 +333,20 @@ export const recordPODPayment = async (req, res) => {
     if (pod.merchantId) {
       await sendNotification({
         userId: pod.merchantId,
-        title: "💰 POD Payment Collected",
-        message: `Payment of ₦${pod.productAmount?.toLocaleString()} collected for your product in order #${pod.referenceId}. Settlement pending.`,
+        title: " POD Payment Collected",
+        message: `Payment of ${pod.productAmount?.toLocaleString()} collected for your product in order #${pod.referenceId}. Settlement pending.`,
         data: { type: "pod_payment_collected", podId: pod._id },
       });
     }
 
     res.status(200).json({ success: true, message: "Payment recorded. Order delivered and paid.", data: pod });
   } catch (error) {
-    console.error("❌ recordPODPayment error:", error);
+    console.error(" recordPODPayment error:", error);
     res.status(500).json({ success: false, message: "Failed to record payment" });
   }
 };
 
-// ─── REJECT / RETURN ─────────────────────────────────────────────────────────
+//  REJECT / RETURN 
 // POST /api/pod/:podId/reject
 export const rejectPOD = async (req, res) => {
   try {
@@ -389,7 +389,7 @@ export const rejectPOD = async (req, res) => {
       if (driver?.userId) {
         await sendNotification({
           userId: driver.userId._id,
-          title: "❌ POD Rejected",
+          title: " POD Rejected",
           message: `Customer rejected POD order #${pod.referenceId}. Reason: ${reason}. Please return the product.`,
           data: { type: "pod_rejected", podId: pod._id },
         });
@@ -400,7 +400,7 @@ export const rejectPOD = async (req, res) => {
     if (pod.merchantId) {
       await sendNotification({
         userId: pod.merchantId,
-        title: "↩️ Product Returned",
+        title: " Product Returned",
         message: `Customer rejected your product in POD order #${pod.referenceId}. Reason: ${reason}.`,
         data: { type: "pod_rejected", podId: pod._id },
       });
@@ -408,12 +408,12 @@ export const rejectPOD = async (req, res) => {
 
     res.status(200).json({ success: true, message: "POD order rejected. Return workflow initiated.", data: pod });
   } catch (error) {
-    console.error("❌ rejectPOD error:", error);
+    console.error(" rejectPOD error:", error);
     res.status(500).json({ success: false, message: "Failed to reject POD order" });
   }
 };
 
-// ─── SETTLE (platform marks merchant as settled) ─────────────────────────────
+//  SETTLE (platform marks merchant as settled) 
 // PATCH /api/pod/:podId/settle
 export const settlePOD = async (req, res) => {
   try {
@@ -436,26 +436,26 @@ export const settlePOD = async (req, res) => {
     pod.paymentStatus = "SETTLED";
     pod.settlementAmount = settlementAmount || pod.productAmount;
     pod.settledAt = new Date();
-    addAudit(pod, "SETTLED", user, user.role, note || `Settled ₦${pod.settlementAmount}`);
+    addAudit(pod, "SETTLED", user, user.role, note || `Settled ${pod.settlementAmount}`);
     await pod.save();
 
     if (pod.merchantId) {
       await sendNotification({
         userId: pod.merchantId,
-        title: "💳 Settlement Processed",
-        message: `₦${pod.settlementAmount?.toLocaleString()} has been settled to you for POD order #${pod.referenceId}.`,
+        title: " Settlement Processed",
+        message: `${pod.settlementAmount?.toLocaleString()} has been settled to you for POD order #${pod.referenceId}.`,
         data: { type: "pod_settled", podId: pod._id },
       });
     }
 
     res.status(200).json({ success: true, message: "POD order settled", data: pod });
   } catch (error) {
-    console.error("❌ settlePOD error:", error);
+    console.error(" settlePOD error:", error);
     res.status(500).json({ success: false, message: "Failed to settle POD order" });
   }
 };
 
-// ─── CANCEL POD ───────────────────────────────────────────────────────────────
+//  CANCEL POD 
 // PATCH /api/pod/:podId/cancel
 export const cancelPOD = async (req, res) => {
   try {
@@ -489,7 +489,7 @@ export const cancelPOD = async (req, res) => {
 
     await notifyCompany(
       pod.companyId,
-      "❌ POD Order Cancelled",
+      " POD Order Cancelled",
       `POD order #${pod.referenceId} has been cancelled. Reason: ${reason}`,
       { type: "pod_cancelled", podId: pod._id },
       `Hello,\n\nPOD order #${pod.referenceId} has been cancelled.\nCancelled by: ${user.role}\nReason: ${reason}\nProduct: ${pod.product.name}\nCustomer: ${pod.customerName}`
@@ -497,12 +497,12 @@ export const cancelPOD = async (req, res) => {
 
     res.status(200).json({ success: true, message: "POD order cancelled", data: pod });
   } catch (error) {
-    console.error("❌ cancelPOD error:", error);
+    console.error(" cancelPOD error:", error);
     res.status(500).json({ success: false, message: "Failed to cancel POD order" });
   }
 };
 
-// ─── GET POD DETAILS ──────────────────────────────────────────────────────────
+//  GET POD DETAILS 
 // GET /api/pod/:podId
 export const getPODDetails = async (req, res) => {
   try {
@@ -529,12 +529,12 @@ export const getPODDetails = async (req, res) => {
 
     res.status(200).json({ success: true, data: pod });
   } catch (error) {
-    console.error("❌ getPODDetails error:", error);
+    console.error(" getPODDetails error:", error);
     res.status(500).json({ success: false, message: "Failed to get POD order" });
   }
 };
 
-// ─── LIST POD ORDERS ──────────────────────────────────────────────────────────
+//  LIST POD ORDERS 
 // GET /api/pod
 export const listPODOrders = async (req, res) => {
   try {
@@ -579,7 +579,7 @@ export const listPODOrders = async (req, res) => {
       pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
-    console.error("❌ listPODOrders error:", error);
+    console.error(" listPODOrders error:", error);
     res.status(500).json({ success: false, message: "Failed to list POD orders" });
   }
 };

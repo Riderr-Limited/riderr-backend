@@ -12,10 +12,10 @@ const calculateFare = (distanceMeters, vehicleType) => {
   const distanceKm = distanceMeters / 1000;
   
   const rates = {
-    bike: { base: 200, perKm: 100 },      // ₦200 base + ₦100/km
-    car: { base: 500, perKm: 150 },       // ₦500 base + ₦150/km
-    van: { base: 800, perKm: 200 },       // ₦800 base + ₦200/km
-    truck: { base: 1500, perKm: 300 }     // ₦1500 base + ₦300/km
+    bike: { base: 200, perKm: 100 },      // 200 base + 100/km
+    car: { base: 500, perKm: 150 },       // 500 base + 150/km
+    van: { base: 800, perKm: 200 },       // 800 base + 200/km
+    truck: { base: 1500, perKm: 300 }     // 1500 base + 300/km
   };
   
   const rate = rates[vehicleType] || rates.car;
@@ -683,7 +683,7 @@ export const cancelRide = async (req, res) => {
       
       // Apply cancellation fee if driver already accepted
       if (['accepted', 'arrived'].includes(ride.status)) {
-        cancellationFee = 200; // ₦200 cancellation fee
+        cancellationFee = 200; // 200 cancellation fee
       }
     } else if (user.role === 'driver') {
       const driver = await Driver.findOne({ userId: user._id }).session(session);

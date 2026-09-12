@@ -22,7 +22,7 @@ const run = async () => {
 
   const existing = await User.findOne({ email });
   if (existing) {
-    console.log(`⚠️  User with email "${email}" already exists.`);
+    console.log(`  User with email "${email}" already exists.`);
     process.exit(0);
   }
 
@@ -34,11 +34,11 @@ const run = async () => {
     role: "admin",
   });
 
-  console.log(`\n✅ Admin created: ${admin.name} <${admin.email}>`);
+  console.log(`\n Admin created: ${admin.name} <${admin.email}>`);
   await mongoose.disconnect();
 };
 
 run().catch((err) => {
-  console.error("❌", err.message);
+  console.error("", err.message);
   process.exit(1);
 });

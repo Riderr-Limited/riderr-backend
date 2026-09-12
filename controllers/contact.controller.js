@@ -53,7 +53,7 @@ IP Address: ${req.ip}
         emailText
       );
     } catch (emailError) {
-      console.error('❌ Contact email failed:', emailError.message);
+      console.error(' Contact email failed:', emailError.message);
     }
 
     res.status(201).json({

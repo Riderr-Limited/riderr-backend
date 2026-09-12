@@ -34,7 +34,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 /**
- * ✅ ENHANCED: Complete driver and company details population
+ *  ENHANCED: Complete driver and company details population
  */
 const populateDriverAndCompanyDetails = async (delivery) => {
   try {
@@ -45,11 +45,11 @@ const populateDriverAndCompanyDetails = async (delivery) => {
 
     // If no driver assigned, return as is
     if (!deliveryObj.driverId) {
-      console.log('ℹ️ No driver assigned to delivery');
+      console.log(' No driver assigned to delivery');
       return deliveryObj;
     }
 
-    console.log(`🔍 Populating driver and company for delivery: ${deliveryObj._id}`);
+    console.log(` Populating driver and company for delivery: ${deliveryObj._id}`);
 
     // Fetch driver with populated user AND company
     const driver = await Driver.findById(deliveryObj.driverId)
@@ -58,7 +58,7 @@ const populateDriverAndCompanyDetails = async (delivery) => {
       .lean();
 
     if (!driver) {
-      console.log('❌ Driver not found');
+      console.log(' Driver not found');
       return deliveryObj;
     }
 
@@ -124,30 +124,30 @@ const populateDriverAndCompanyDetails = async (delivery) => {
       }
     }
 
-    console.log('✅ Driver and company details populated');
+    console.log(' Driver and company details populated');
     return deliveryObj;
 
   } catch (error) {
-    console.error('❌ Error populating driver and company details:', error);
+    console.error(' Error populating driver and company details:', error);
     return delivery;
   }
 };
 
 /**
- * ✅ ENHANCED: Save driver and company details to delivery
+ *  ENHANCED: Save driver and company details to delivery
  */
 const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
   try {
-    console.log(`💾 Saving driver and company details for delivery: ${deliveryId}`);
+    console.log(` Saving driver and company details for delivery: ${deliveryId}`);
     
     const delivery = await Delivery.findById(deliveryId);
     if (!delivery) {
-      console.log('❌ Delivery not found');
+      console.log(' Delivery not found');
       return false;
     }
 
     if (!driver) {
-      console.log('❌ Driver not provided');
+      console.log(' Driver not provided');
       return false;
     }
 
@@ -166,7 +166,7 @@ const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
     }
 
     if (!driverUser) {
-      console.log('❌ Driver user not found');
+      console.log(' Driver user not found');
       return false;
     }
 
@@ -226,11 +226,11 @@ const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
     }
 
     await delivery.save();
-    console.log(`✅ Driver and company details saved for delivery ${deliveryId}`);
+    console.log(` Driver and company details saved for delivery ${deliveryId}`);
     return true;
     
   } catch (error) {
-    console.error("❌ Error saving driver and company details:", error);
+    console.error(" Error saving driver and company details:", error);
     return false;
   }
 };
@@ -238,7 +238,7 @@ const saveDriverAndCompanyDetailsToDelivery = async (deliveryId, driver) => {
 
 
 /**
- * ✅ FIXED: Get customer's deliveries with complete driver and company details
+ *  FIXED: Get customer's deliveries with complete driver and company details
  */
 export const getMyDeliveries = async (req, res) => {
   try {
@@ -266,7 +266,7 @@ export const getMyDeliveries = async (req, res) => {
 
     const total = await Delivery.countDocuments(query);
 
-    // ✅ Populate driver and company details for each delivery
+    //  Populate driver and company details for each delivery
     const deliveriesWithDetails = await Promise.all(
       deliveries.map(async (delivery) => {
         return await populateDriverAndCompanyDetails(delivery);
@@ -284,7 +284,7 @@ export const getMyDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get my deliveries error:", error);
+    console.error(" Get my deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get deliveries",
@@ -346,10 +346,10 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       });
     }
 
-    console.log(`📍 Driver location: ${latitude}, ${longitude}`);
-    console.log(`🔍 Driver ID: ${driver._id}`);
+    console.log(` Driver location: ${latitude}, ${longitude}`);
+    console.log(` Driver ID: ${driver._id}`);
 
-    // ✅ STEP 1: Get all available deliveries with basic filters
+    //  STEP 1: Get all available deliveries with basic filters
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
@@ -359,18 +359,18 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       .limit(50)
       .lean();
 
-    console.log(`📦 Total deliveries found before filtering: ${deliveries.length}`);
+    console.log(` Total deliveries found before filtering: ${deliveries.length}`);
 
     const nearbyDeliveries = [];
     
     for (const delivery of deliveries) {
-      // ✅ CHECK 1: Has valid pickup location
+      //  CHECK 1: Has valid pickup location
       if (!delivery.pickup?.lat || !delivery.pickup?.lng) {
-        console.log(`❌ Delivery ${delivery._id} has no pickup location`);
+        console.log(` Delivery ${delivery._id} has no pickup location`);
         continue;
       }
 
-      // ✅ CHECK 2: Driver hasn't rejected this delivery
+      //  CHECK 2: Driver hasn't rejected this delivery
       if (delivery.rejectedByDrivers && Array.isArray(delivery.rejectedByDrivers)) {
         const hasRejected = delivery.rejectedByDrivers.some(
           rejection => {
@@ -381,33 +381,33 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         );
         
         if (hasRejected) {
-          console.log(`⏭️ Delivery ${delivery._id} was rejected by this driver - skipping`);
+          console.log(` Delivery ${delivery._id} was rejected by this driver - skipping`);
           continue;
         }
       }
 
-      // ✅ CHECK 3: Payment method validation - UPDATED TO INCLUDE BANK TRANSFERS
+      //  CHECK 3: Payment method validation - UPDATED TO INCLUDE BANK TRANSFERS
       const paymentMethod = delivery.payment?.method;
       const paymentStatus = delivery.payment?.status;
       
-      console.log(`💳 Delivery ${delivery._id}: method=${paymentMethod}, status=${paymentStatus}`);
+      console.log(` Delivery ${delivery._id}: method=${paymentMethod}, status=${paymentStatus}`);
       
       let shouldSkip = false;
       
       if (paymentMethod === 'cash') {
         // Cash payments are always OK regardless of status
-        console.log(`✅ Cash payment - OK to show`);
+        console.log(` Cash payment - OK to show`);
       } else if (['card', 'bank_transfer', 'bank', 'online'].includes(paymentMethod)) {
-        // ✅ UPDATED: Non-cash payments (card AND bank transfer) must be paid
+        //  UPDATED: Non-cash payments (card AND bank transfer) must be paid
         if (paymentStatus !== 'paid') {
-          console.log(`❌ ${paymentMethod} payment not paid (status: ${paymentStatus}) - skipping`);
+          console.log(` ${paymentMethod} payment not paid (status: ${paymentStatus}) - skipping`);
           shouldSkip = true;
         } else {
-          console.log(`✅ ${paymentMethod} payment is paid - OK to show`);
+          console.log(` ${paymentMethod} payment is paid - OK to show`);
         }
       } else {
         // Unknown payment method - skip to be safe
-        console.log(`⚠️ Unknown payment method: ${paymentMethod} - skipping`);
+        console.log(` Unknown payment method: ${paymentMethod} - skipping`);
         shouldSkip = true;
       }
       
@@ -415,7 +415,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         continue;
       }
 
-      // ✅ CHECK 4: Distance validation
+      //  CHECK 4: Distance validation
       const distance = calculateDistance(
         latitude,
         longitude,
@@ -423,14 +423,14 @@ export const getNearbyDeliveryRequests = async (req, res) => {
         delivery.pickup.lng
       );
 
-      console.log(`📏 Delivery ${delivery._id} distance: ${distance.toFixed(2)} km`);
+      console.log(` Delivery ${delivery._id} distance: ${distance.toFixed(2)} km`);
 
       if (distance > parseFloat(maxDistance)) {
-        console.log(`❌ Delivery ${delivery._id} too far (${distance.toFixed(2)} km > ${maxDistance} km)`);
+        console.log(` Delivery ${delivery._id} too far (${distance.toFixed(2)} km > ${maxDistance} km)`);
         continue;
       }
 
-      // ✅ All checks passed - add to results
+      //  All checks passed - add to results
       const pickupTimeMinutes = Math.ceil(distance * 3);
       const isCashPayment = paymentMethod === 'cash';
       const isPaid = paymentStatus === 'paid';
@@ -476,13 +476,13 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       };
 
       nearbyDeliveries.push(formattedDelivery);
-      console.log(`✅ Added delivery ${delivery._id} to results`);
+      console.log(` Added delivery ${delivery._id} to results`);
     }
 
     // Sort by distance (closest first)
     nearbyDeliveries.sort((a, b) => a.distanceFromDriver - b.distanceFromDriver);
 
-    console.log(`✅ Final nearby deliveries: ${nearbyDeliveries.length}`);
+    console.log(` Final nearby deliveries: ${nearbyDeliveries.length}`);
 
     // Count payment types for debugging
     const cashCount = nearbyDeliveries.filter(d => d.payment.method === 'cash').length;
@@ -518,7 +518,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get nearby deliveries error:", error);
+    console.error(" Get nearby deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Something went wrong while loading delivery requests. Please try again",
@@ -537,7 +537,7 @@ export const acceptDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`🚗 [STEP 3] Driver ${driverUser._id} accepting delivery ${deliveryId}`);
+    console.log(` [STEP 3] Driver ${driverUser._id} accepting delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
@@ -594,7 +594,7 @@ export const acceptDelivery = async (req, res) => {
       });
     }
 
-    // ✅ UPDATED: Check if payment is required based on payment method
+    //  UPDATED: Check if payment is required based on payment method
     const isCashPayment = delivery.payment?.method === 'cash';
     
     // For non-cash payments (card, bank transfer, escrow), require payment to be completed
@@ -617,7 +617,7 @@ export const acceptDelivery = async (req, res) => {
 
     // For cash payments, we can proceed without upfront payment
     if (isCashPayment && delivery.payment.status !== 'pending') {
-      console.log(`💰 Cash delivery - Payment status: ${delivery.payment.status}`);
+      console.log(` Cash delivery - Payment status: ${delivery.payment.status}`);
       delivery.payment.status = 'pending';
     }
 
@@ -666,7 +666,7 @@ export const acceptDelivery = async (req, res) => {
           await payment.save({ session });
         }
       } catch (error) {
-        console.warn("⚠️ Payment update skipped:", error.message);
+        console.warn(" Payment update skipped:", error.message);
       }
     } else {
       // For cash payments, create a payment record if it doesn't exist
@@ -698,7 +698,7 @@ export const acceptDelivery = async (req, res) => {
           await payment.save({ session });
         }
       } catch (error) {
-        console.warn("⚠️ Cash payment record creation skipped:", error.message);
+        console.warn(" Cash payment record creation skipped:", error.message);
       }
     }
 
@@ -777,12 +777,12 @@ export const acceptDelivery = async (req, res) => {
     // Send notifications (outside transaction)
     if (customer) {
       const paymentMessage = isCashPayment 
-        ? `This is a cash-on-delivery payment. Please have ₦${delivery.fare.totalFare.toLocaleString()} ready when the driver arrives.`
+        ? `This is a cash-on-delivery payment. Please have ${delivery.fare.totalFare.toLocaleString()} ready when the driver arrives.`
         : 'Payment is held securely and will be released after delivery completion.';
       
       await sendNotification({
         userId: customer._id,
-        title: '🚗 Driver Assigned!',
+        title: ' Driver Assigned!',
         message: `${driver.userId.name}${driver.companyId ? ` from ${driver.companyId.name}` : ''} has accepted your delivery. ${paymentMessage}`,
         data: {
           type: 'driver_assigned',
@@ -797,12 +797,12 @@ export const acceptDelivery = async (req, res) => {
     }
 
     const driverMessage = isCashPayment
-      ? `You've accepted a cash delivery. Please collect ₦${delivery.fare.totalFare.toLocaleString()} from the customer upon delivery`
-      : `You've accepted a delivery. Payment of ₦${delivery.fare.totalFare.toLocaleString()} is secured. Head to the pickup location`;
+      ? `You've accepted a cash delivery. Please collect ${delivery.fare.totalFare.toLocaleString()} from the customer upon delivery`
+      : `You've accepted a delivery. Payment of ${delivery.fare.totalFare.toLocaleString()} is secured. Head to the pickup location`;
 
     await sendNotification({
       userId: driverUser._id,
-      title: '✅ Delivery Accepted',
+      title: ' Delivery Accepted',
       message: driverMessage,
       data: {
         type: 'delivery_accepted',
@@ -820,7 +820,7 @@ export const acceptDelivery = async (req, res) => {
     
     const deliveryWithDetails = await populateDriverAndCompanyDetails(updatedDelivery);
 
-    console.log(`✅ Delivery accepted - Payment method: ${delivery.payment.method}`);
+    console.log(` Delivery accepted - Payment method: ${delivery.payment.method}`);
 
     res.status(200).json({
       success: true,
@@ -849,7 +849,7 @@ export const acceptDelivery = async (req, res) => {
     }
     await session.endSession();
     
-    console.error("❌ Accept delivery error:", error);
+    console.error(" Accept delivery error:", error);
     
     if (error.code === 112) {
       return res.status(409).json({
@@ -866,7 +866,7 @@ export const acceptDelivery = async (req, res) => {
 };
 
 /**
- * ✅ UPDATED: Start delivery
+ *  UPDATED: Start delivery
   */
 export const startDelivery = async (req, res) => {
   const session = await mongoose.startSession();
@@ -876,7 +876,7 @@ export const startDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`📦 [STEP 3b] Driver ${driverUser._id} starting delivery ${deliveryId}`);
+    console.log(` [STEP 3b] Driver ${driverUser._id} starting delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
@@ -945,7 +945,7 @@ export const startDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: '📦 Package Picked Up',
+        title: ' Package Picked Up',
         message: `Driver has picked up your package and is heading to the destination. Payment is secured.`,
         data: {
           type: 'package_picked_up',
@@ -957,7 +957,7 @@ export const startDelivery = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Delivery started - Payment still secured`);
+    console.log(` Delivery started - Payment still secured`);
 
     res.status(200).json({
       success: true,
@@ -978,7 +978,7 @@ export const startDelivery = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Start delivery error:", error);
+    console.error(" Start delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to start delivery",
@@ -996,7 +996,7 @@ export const completeDelivery = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`✅ [STEP 4] Driver ${driverUser._id} completing delivery ${deliveryId}`);
+    console.log(` [STEP 4] Driver ${driverUser._id} completing delivery ${deliveryId}`);
 
     if (driverUser.role !== "driver") {
       await session.abortTransaction();
@@ -1051,7 +1051,7 @@ export const completeDelivery = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: '✅ Package Delivered',
+        title: ' Package Delivered',
         message: `Your package has been delivered! Please verify the delivery to release payment.`,
         data: {
           type: 'delivery_completed',
@@ -1064,7 +1064,7 @@ export const completeDelivery = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Delivery completed - Waiting for customer verification`);
+    console.log(` Delivery completed - Waiting for customer verification`);
 
     res.status(200).json({
       success: true,
@@ -1087,7 +1087,7 @@ export const completeDelivery = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Complete delivery error:", error);
+    console.error(" Complete delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to complete delivery",
@@ -1097,7 +1097,7 @@ export const completeDelivery = async (req, res) => {
 
 
 /**
- * ✅ FIXED: Get driver's active delivery with complete details
+ *  FIXED: Get driver's active delivery with complete details
  */
 export const getDriverActiveDelivery = async (req, res) => {
   try {
@@ -1164,7 +1164,7 @@ export const getDriverActiveDelivery = async (req, res) => {
       });
     }
 
-    // ✅ Populate complete details
+    //  Populate complete details
     const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let etaMinutes = null;
@@ -1194,7 +1194,7 @@ export const getDriverActiveDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get active delivery error:", error);
+    console.error(" Get active delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get active delivery",
@@ -1203,7 +1203,7 @@ export const getDriverActiveDelivery = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get driver's deliveries with complete details
+ *  FIXED: Get driver's deliveries with complete details
  */
 export const getDriverDeliveries = async (req, res) => {
   try {
@@ -1240,7 +1240,7 @@ export const getDriverDeliveries = async (req, res) => {
 
     const total = await Delivery.countDocuments(query);
 
-    // ✅ Populate complete details for each delivery
+    //  Populate complete details for each delivery
     const deliveriesWithDetails = await Promise.all(
       deliveries.map(async (delivery) => {
         return await populateDriverAndCompanyDetails(delivery);
@@ -1258,7 +1258,7 @@ export const getDriverDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver deliveries error:", error);
+    console.error(" Get driver deliveries error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get deliveries",
@@ -1287,7 +1287,7 @@ export const rejectDelivery = async (req, res) => {
       });
     }
 
-    console.log(`🚫 Driver ${driver._id} rejecting delivery ${deliveryId}`);
+    console.log(` Driver ${driver._id} rejecting delivery ${deliveryId}`);
 
     // Find and update the delivery
     const delivery = await Delivery.findById(deliveryId);
@@ -1336,7 +1336,7 @@ export const rejectDelivery = async (req, res) => {
       $inc: { totalRequests: 1 }
     });
 
-    console.log(`✅ Rejection recorded for delivery ${deliveryId}`);
+    console.log(` Rejection recorded for delivery ${deliveryId}`);
     console.log(`   Total rejections: ${delivery.rejectedByDrivers.length}`);
 
     res.status(200).json({
@@ -1349,8 +1349,8 @@ export const rejectDelivery = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Reject delivery error:", error.message);
-    console.error("❌ Reject delivery stack:", error.stack);
+    console.error(" Reject delivery error:", error.message);
+    console.error(" Reject delivery stack:", error.stack);
     res.status(500).json({
       success: false,
       message: "Failed to reject delivery",
@@ -1364,7 +1364,7 @@ export const rejectDelivery = async (req, res) => {
  */
 
 /**
- * ✅ FIXED: Get delivery details with complete driver and company info
+ *  FIXED: Get delivery details with complete driver and company info
  */
 export const getDeliveryDetails = async (req, res) => {
   try {
@@ -1393,7 +1393,7 @@ export const getDeliveryDetails = async (req, res) => {
       });
     }
 
-    // ✅ Populate complete details
+    //  Populate complete details
     const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     res.status(200).json({
@@ -1401,7 +1401,7 @@ export const getDeliveryDetails = async (req, res) => {
       data: deliveryWithDetails,
     });
   } catch (error) {
-    console.error("❌ Get delivery details error:", error);
+    console.error(" Get delivery details error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get delivery details",
@@ -1410,7 +1410,7 @@ export const getDeliveryDetails = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Track delivery with complete driver and company info
+ *  FIXED: Track delivery with complete driver and company info
  */
 export const trackDelivery = async (req, res) => {
   try {
@@ -1439,7 +1439,7 @@ export const trackDelivery = async (req, res) => {
       });
     }
 
-    // ✅ Populate complete details
+    //  Populate complete details
     const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let driverLocation = null;
@@ -1493,7 +1493,7 @@ export const trackDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Track delivery error:", error);
+    console.error(" Track delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to track delivery",
@@ -1595,7 +1595,7 @@ export const cancelDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Cancel delivery error:", error);
+    console.error(" Cancel delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to cancel delivery",
@@ -1687,7 +1687,7 @@ export const rateDelivery = async (req, res) => {
       data: { rating, review, tip },
     });
   } catch (error) {
-    console.error("❌ Rate delivery error:", error);
+    console.error(" Rate delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to submit rating",
@@ -1805,7 +1805,7 @@ export const getDeliveryUpdates = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get delivery updates error:", error);
+    console.error(" Get delivery updates error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get delivery updates",
@@ -1963,7 +1963,7 @@ export const getDriverDeliveryStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get driver delivery stats error:", error);
+    console.error(" Get driver delivery stats error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get delivery statistics",
@@ -1972,11 +1972,11 @@ export const getDriverDeliveryStats = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get company deliveries with complete driver and company details
+ *  FIXED: Get company deliveries with complete driver and company details
  */
 export const getCompanyDeliveries = async (req, res) => {
   try {
-    console.log('🔍 Fetching company deliveries...');
+    console.log(' Fetching company deliveries...');
     
     const company = await Company.findById(req.user.companyId);
     
@@ -2000,7 +2000,7 @@ export const getCompanyDeliveries = async (req, res) => {
       .select('_id')
       .lean();
     
-    console.log(`🚗 Found ${companyDrivers.length} company drivers`);
+    console.log(` Found ${companyDrivers.length} company drivers`);
     
     if (companyDrivers.length === 0) {
       return res.status(200).json({
@@ -2045,9 +2045,9 @@ export const getCompanyDeliveries = async (req, res) => {
       Delivery.countDocuments(query),
     ]);
 
-    console.log(`📦 Found ${deliveries.length} deliveries for company`);
+    console.log(` Found ${deliveries.length} deliveries for company`);
 
-    // ✅ Populate complete driver and company details for each delivery
+    //  Populate complete driver and company details for each delivery
     const formattedDeliveries = await Promise.all(
       deliveries.map(async (delivery) => {
         const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
@@ -2103,7 +2103,7 @@ export const getCompanyDeliveries = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get company deliveries error:", error);
+    console.error(" Get company deliveries error:", error);
     
     const errorInfo = {
       message: error.message,
@@ -2184,15 +2184,15 @@ export const calculateDeliveryFare = async (req, res) => {
       });
     }
 
-    console.log(`📍 Resolving addresses for coordinates...`);
+    console.log(` Resolving addresses for coordinates...`);
 
     const [pickupAddress, dropoffAddress] = await Promise.all([
       smartReverseGeocode(pickup.lat, pickup.lng),
       smartReverseGeocode(dropoff.lat, dropoff.lng),
     ]);
 
-    console.log(`📍 Pickup: ${pickupAddress.formattedAddress}`);
-    console.log(`📍 Dropoff: ${dropoffAddress.formattedAddress}`);
+    console.log(` Pickup: ${pickupAddress.formattedAddress}`);
+    console.log(` Dropoff: ${dropoffAddress.formattedAddress}`);
 
     const distance = calculateDistance(
       pickup.lat,
@@ -2201,7 +2201,7 @@ export const calculateDeliveryFare = async (req, res) => {
       dropoff.lng
     );
 
-    console.log(`📏 Distance calculated: ${distance.toFixed(2)} km`);
+    console.log(` Distance calculated: ${distance.toFixed(2)} km`);
 
     if (distance < 0.1) {
       return res.status(400).json({
@@ -2305,7 +2305,7 @@ export const calculateDeliveryFare = async (req, res) => {
           tax: fareDetails.tax || 0,
           totalFare: fareDetails.totalFare,
           currency: "NGN",
-          formatted: `₦${fareDetails.totalFare.toLocaleString()}`,
+          formatted: `${fareDetails.totalFare.toLocaleString()}`,
         },
         distance: {
           km: parseFloat(distance.toFixed(2)),
@@ -2349,12 +2349,12 @@ export const calculateDeliveryFare = async (req, res) => {
           {
             label: "Base Fare",
             amount: fareDetails.baseFare,
-            formatted: `₦${fareDetails.baseFare.toLocaleString()}`,
+            formatted: `${fareDetails.baseFare.toLocaleString()}`,
           },
           {
             label: "Distance Charge",
             amount: fareDetails.distanceFare,
-            formatted: `₦${fareDetails.distanceFare.toLocaleString()}`,
+            formatted: `${fareDetails.distanceFare.toLocaleString()}`,
             details: `${distance.toFixed(1)} km`,
           },
         ],
@@ -2373,7 +2373,7 @@ export const calculateDeliveryFare = async (req, res) => {
       },
     };
 
-    console.log(`💰 Fare calculated for customer ${customer._id}:`, {
+    console.log(` Fare calculated for customer ${customer._id}:`, {
       quoteId,
       distance: distance.toFixed(2),
       fare: fareDetails.totalFare,
@@ -2382,7 +2382,7 @@ export const calculateDeliveryFare = async (req, res) => {
 
     res.status(200).json(response);
   } catch (error) {
-    console.error("❌ Calculate fare error:", error);
+    console.error(" Calculate fare error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to calculate delivery fare",
@@ -2457,7 +2457,7 @@ export const createDeliveryRequest = async (req, res) => {
     let resolvedDropoffAddress = dropoffAddress;
 
     if (!pickupAddress || !dropoffAddress) {
-      console.log(`📍 Auto-resolving addresses...`);
+      console.log(` Auto-resolving addresses...`);
       
       const [pickupGeo, dropoffGeo] = await Promise.all([
         !pickupAddress ? smartReverseGeocode(pickup.lat, pickup.lng) : null,
@@ -2466,12 +2466,12 @@ export const createDeliveryRequest = async (req, res) => {
 
       if (pickupGeo) {
         resolvedPickupAddress = pickupGeo.formattedAddress;
-        console.log(`📍 Auto-resolved pickup: ${resolvedPickupAddress}`);
+        console.log(` Auto-resolved pickup: ${resolvedPickupAddress}`);
       }
       
       if (dropoffGeo) {
         resolvedDropoffAddress = dropoffGeo.formattedAddress;
-        console.log(`📍 Auto-resolved dropoff: ${resolvedDropoffAddress}`);
+        console.log(` Auto-resolved dropoff: ${resolvedDropoffAddress}`);
       }
     }
 
@@ -2503,7 +2503,7 @@ export const createDeliveryRequest = async (req, res) => {
     });
 
     if (expectedFare && Math.abs(fareDetails.totalFare - expectedFare) > 50) {
-      console.warn(`⚠️ Fare mismatch - Expected: ${expectedFare}, Actual: ${fareDetails.totalFare}`);
+      console.warn(` Fare mismatch - Expected: ${expectedFare}, Actual: ${fareDetails.totalFare}`);
       return res.status(400).json({
         success: false,
         message: "Fare has changed. Please recalculate and try again.",
@@ -2579,7 +2579,7 @@ export const createDeliveryRequest = async (req, res) => {
     const delivery = new Delivery(deliveryData);
     await delivery.save();
 
-    console.log(`✅ Delivery created: ${delivery._id} (${delivery.referenceId})`);
+    console.log(` Delivery created: ${delivery._id} (${delivery.referenceId})`);
 
     await sendNotification({
       userId: customer._id,
@@ -2589,7 +2589,7 @@ export const createDeliveryRequest = async (req, res) => {
       ),
     });
 
-    // ─── AUTO-INITIALIZE PAYMENT FOR CARD / TRANSFER ───────────────────
+    //  AUTO-INITIALIZE PAYMENT FOR CARD / TRANSFER 
     let paymentData = null;
 
     if (paymentMethod && paymentMethod !== "cash") {
@@ -2629,7 +2629,7 @@ export const createDeliveryRequest = async (req, res) => {
           paymentId: payment._id,
           reference,
           amount: totalAmount,
-          amountFormatted: `₦${totalAmount.toLocaleString()}`,
+          amountFormatted: `${totalAmount.toLocaleString()}`,
           paymentMethod,
           breakdown: {
             total: totalAmount,
@@ -2641,9 +2641,9 @@ export const createDeliveryRequest = async (req, res) => {
           nextAction: paymentMethod === "transfer" ? "show_bank_details" : "show_card_form",
         };
 
-        console.log(`💳 Payment record created: ${reference} (${paymentMethod})`);
+        console.log(` Payment record created: ${reference} (${paymentMethod})`);
       } catch (paymentError) {
-        console.error("⚠️ Payment init failed (delivery still created):", paymentError.message);
+        console.error(" Payment init failed (delivery still created):", paymentError.message);
       }
     }
 
@@ -2687,9 +2687,9 @@ export const createDeliveryRequest = async (req, res) => {
       return distanceToPickup <= 10;
     });
 
-    console.log(`🚗 Notifying ${driversNearPickup.length} nearby drivers`);
+    console.log(` Notifying ${driversNearPickup.length} nearby drivers`);
 
-    // ─── NO DRIVERS FOUND — return nearby companies as fallback ───────
+    //  NO DRIVERS FOUND  return nearby companies as fallback 
     if (driversNearPickup.length === 0) {
       const allCompanies = await Company.find({
         status: "active",
@@ -2740,7 +2740,7 @@ export const createDeliveryRequest = async (req, res) => {
         },
       });
     }
-    // ──────────────────────────────────────────────────────────────────
+    // 
 
     for (const driver of driversNearPickup) {
       if (!driver.userId) continue;
@@ -2816,8 +2816,8 @@ export const createDeliveryRequest = async (req, res) => {
           payment: delivery.payment,
           createdAt: delivery.createdAt,
         },
-        // null for cash — app goes straight to "waiting for rider"
-        // present for card/transfer — app must complete payment first
+        // null for cash  app goes straight to "waiting for rider"
+        // present for card/transfer  app must complete payment first
         payment: paymentData,
         requiresPayment: paymentData !== null,
         message: paymentData
@@ -2830,7 +2830,7 @@ export const createDeliveryRequest = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Create delivery error:", error);
+    console.error(" Create delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to create delivery request",
@@ -2840,7 +2840,7 @@ export const createDeliveryRequest = async (req, res) => {
 };
 
 /**
- * ✅ FIXED: Get customer's active delivery with complete driver and company details
+ *  FIXED: Get customer's active delivery with complete driver and company details
  */
 export const getCustomerActiveDelivery = async (req, res) => {
   try {
@@ -2868,11 +2868,11 @@ export const getCustomerActiveDelivery = async (req, res) => {
       });
     }
 
-    console.log('📦 Active Delivery ID:', delivery._id);
-    console.log('📊 Status:', delivery.status);
-    console.log('🚗 Driver ID:', delivery.driverId);
+    console.log(' Active Delivery ID:', delivery._id);
+    console.log(' Status:', delivery.status);
+    console.log(' Driver ID:', delivery.driverId);
 
-    // ✅ Populate complete driver and company details
+    //  Populate complete driver and company details
     const deliveryWithDetails = await populateDriverAndCompanyDetails(delivery);
 
     let driverLocation = null;
@@ -2927,11 +2927,11 @@ export const getCustomerActiveDelivery = async (req, res) => {
 
     const timeline = [];
     if (delivery.createdAt)
-      timeline.push({ event: "created", time: delivery.createdAt, description: "Order created", icon: "📝" });
+      timeline.push({ event: "created", time: delivery.createdAt, description: "Order created", icon: "" });
     if (delivery.assignedAt)
-      timeline.push({ event: "assigned", time: delivery.assignedAt, description: "Driver assigned", icon: "🚗" });
+      timeline.push({ event: "assigned", time: delivery.assignedAt, description: "Driver assigned", icon: "" });
     if (delivery.pickedUpAt)
-      timeline.push({ event: "picked_up", time: delivery.pickedUpAt, description: "Package picked up", icon: "📦" });
+      timeline.push({ event: "picked_up", time: delivery.pickedUpAt, description: "Package picked up", icon: "" });
 
     let currentStep = "awaiting_driver";
     let nextStep = "";
@@ -2974,7 +2974,7 @@ export const getCustomerActiveDelivery = async (req, res) => {
           _id: customer._id
         },
         
-        // ✅ Complete company details
+        //  Complete company details
         company: deliveryWithDetails.companyDetails,
         
         pickup: deliveryWithDetails.pickup,
@@ -2982,7 +2982,7 @@ export const getCustomerActiveDelivery = async (req, res) => {
         recipientName: deliveryWithDetails.recipientName,
         recipientPhone: deliveryWithDetails.recipientPhone,
         
-        // ✅ Complete driver details with current location
+        //  Complete driver details with current location
         driver: deliveryWithDetails.driverDetails,
         driverDetails: deliveryWithDetails.driverDetails, // Alias for compatibility
         
@@ -3007,13 +3007,13 @@ export const getCustomerActiveDelivery = async (req, res) => {
       },
     };
 
-    console.log('✅ Sending response with complete details');
+    console.log(' Sending response with complete details');
     console.log('  - Driver details:', deliveryWithDetails.driverDetails ? 'YES' : 'NO');
     console.log('  - Company details:', deliveryWithDetails.companyDetails ? 'YES' : 'NO');
     return res.status(200).json(response);
 
   } catch (error) {
-    console.error("❌ Get customer active delivery error:", error);
+    console.error(" Get customer active delivery error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get active delivery",
@@ -3046,7 +3046,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
     const customerLng = parseFloat(lng);
     const searchRadius = parseFloat(radius);
 
-    console.log(`📍 Searching for drivers near: ${customerLat}, ${customerLng}, Radius: ${searchRadius}km`);
+    console.log(` Searching for drivers near: ${customerLat}, ${customerLng}, Radius: ${searchRadius}km`);
 
     const drivers = await Driver.find({
       isOnline: true,
@@ -3062,7 +3062,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
       .populate("companyId", "name logo rating")
       .lean();
 
-    console.log(`🚗 Total available drivers found: ${drivers.length}`);
+    console.log(` Total available drivers found: ${drivers.length}`);
 
     const nearbyDrivers = [];
     
@@ -3077,7 +3077,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
           lng: driverLng,
           updatedAt: driver.currentLocation.updatedAt || new Date(),
         };
-        console.log(`✅ Driver ${driver._id} - currentLocation: ${driverLat}, ${driverLng}`);
+        console.log(` Driver ${driver._id} - currentLocation: ${driverLat}, ${driverLng}`);
       } else if (driver.location?.coordinates && driver.location.coordinates.length >= 2) {
         driverLng = driver.location.coordinates[0];
         driverLat = driver.location.coordinates[1];
@@ -3086,9 +3086,9 @@ export const getNearbyAvailableDrivers = async (req, res) => {
           lng: driverLng,
           updatedAt: new Date(),
         };
-        console.log(`✅ Driver ${driver._id} - GeoJSON location: ${driverLat}, ${driverLng}`);
+        console.log(` Driver ${driver._id} - GeoJSON location: ${driverLat}, ${driverLng}`);
       } else {
-        console.log(`❌ Driver ${driver._id} - No location data available`);
+        console.log(` Driver ${driver._id} - No location data available`);
         continue;
       }
 
@@ -3099,7 +3099,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
         driverLng
       );
 
-      console.log(`📏 Driver ${driver._id} distance: ${distance.toFixed(2)} km`);
+      console.log(` Driver ${driver._id} distance: ${distance.toFixed(2)} km`);
 
       if (distance <= searchRadius) {
         const etaMinutes = Math.max(2, Math.ceil(distance * 3));
@@ -3138,7 +3138,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
 
     nearbyDrivers.sort((a, b) => a.distance - b.distance);
 
-    console.log(`✅ Found ${nearbyDrivers.length} nearby drivers within ${searchRadius}km`);
+    console.log(` Found ${nearbyDrivers.length} nearby drivers within ${searchRadius}km`);
 
     res.status(200).json({
       success: true,
@@ -3154,7 +3154,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get nearby available drivers error:", error);
+    console.error(" Get nearby available drivers error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to find nearby drivers",
@@ -3179,7 +3179,7 @@ export const confirmCashCollection = async (req, res) => {
     const driverUser = req.user;
     const { deliveryId } = req.params;
 
-    console.log(`💰 Driver ${driverUser._id} confirming cash collection for delivery ${deliveryId}`);
+    console.log(` Driver ${driverUser._id} confirming cash collection for delivery ${deliveryId}`);
 
     if (driverUser.role !== 'driver') {
       await session.abortTransaction();
@@ -3290,8 +3290,8 @@ export const confirmCashCollection = async (req, res) => {
     if (customer) {
       await sendNotification({
         userId: customer._id,
-        title: '✅ Cash Payment Confirmed',
-        message: `Driver has confirmed cash payment of ₦${delivery.fare.totalFare.toLocaleString()} for your delivery`,
+        title: ' Cash Payment Confirmed',
+        message: `Driver has confirmed cash payment of ${delivery.fare.totalFare.toLocaleString()} for your delivery`,
         data: {
           type: 'cash_payment_confirmed',
           deliveryId: delivery._id,
@@ -3315,8 +3315,8 @@ export const confirmCashCollection = async (req, res) => {
         if (companyUser) {
           await sendNotification({
             userId: companyUser._id,
-            title: '💰 Cash Payment Collected',
-            message: `Driver ${driverUser.name} has collected ₦${delivery.fare.totalFare.toLocaleString()} cash payment for delivery #${delivery.referenceId}`,
+            title: ' Cash Payment Collected',
+            message: `Driver ${driverUser.name} has collected ${delivery.fare.totalFare.toLocaleString()} cash payment for delivery #${delivery.referenceId}`,
             data: {
               type: 'cash_payment_collected',
               deliveryId: delivery._id,
@@ -3354,7 +3354,7 @@ export const confirmCashCollection = async (req, res) => {
     }
     session.endSession();
     
-    console.error('❌ Confirm cash collection error:', error);
+    console.error(' Confirm cash collection error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to confirm cash collection',
@@ -3389,31 +3389,31 @@ export const getNearbyDrivers = async (req, res) => {
     const searchLng = parseFloat(lng);
     const searchRadius = parseFloat(radius);
 
-    console.log('\n🔍 ===== NEARBY DRIVERS SEARCH =====');
-    console.log(`📍 Search Location: ${searchLat}, ${searchLng}`);
-    console.log(`📡 Search Radius: ${searchRadius} km`);
+    console.log('\n ===== NEARBY DRIVERS SEARCH =====');
+    console.log(` Search Location: ${searchLat}, ${searchLng}`);
+    console.log(` Search Radius: ${searchRadius} km`);
     console.log('=====================================\n');
 
-    // ✅ STEP 1: Count total drivers
+    //  STEP 1: Count total drivers
     const totalDrivers = await Driver.countDocuments({});
-    console.log(`📊 Total drivers in database: ${totalDrivers}`);
+    console.log(` Total drivers in database: ${totalDrivers}`);
 
-    // ✅ STEP 2: Check each condition one by one
+    //  STEP 2: Check each condition one by one
     const onlineCount = await Driver.countDocuments({ isOnline: true });
-    console.log(`   - isOnline: true → ${onlineCount} drivers`);
+    console.log(`   - isOnline: true  ${onlineCount} drivers`);
 
     const availableCount = await Driver.countDocuments({ 
       isOnline: true,
       isAvailable: true 
     });
-    console.log(`   - isAvailable: true → ${availableCount} drivers`);
+    console.log(`   - isAvailable: true  ${availableCount} drivers`);
 
     const activeCount = await Driver.countDocuments({ 
       isOnline: true,
       isAvailable: true,
       isActive: true
     });
-    console.log(`   - isActive: true → ${activeCount} drivers`);
+    console.log(`   - isActive: true  ${activeCount} drivers`);
 
     const approvedCount = await Driver.countDocuments({ 
       isOnline: true,
@@ -3421,7 +3421,7 @@ export const getNearbyDrivers = async (req, res) => {
       isActive: true,
       approvalStatus: 'approved'
     });
-    console.log(`   - approvalStatus: approved → ${approvedCount} drivers`);
+    console.log(`   - approvalStatus: approved  ${approvedCount} drivers`);
 
     const noDeliveryCount = await Driver.countDocuments({ 
       isOnline: true,
@@ -3430,9 +3430,9 @@ export const getNearbyDrivers = async (req, res) => {
       approvalStatus: 'approved',
       currentDeliveryId: null
     });
-    console.log(`   - currentDeliveryId: null → ${noDeliveryCount} drivers`);
+    console.log(`   - currentDeliveryId: null  ${noDeliveryCount} drivers`);
 
-    // ✅ STEP 3: SIMPLIFIED QUERY - Remove location check from query, do it manually
+    //  STEP 3: SIMPLIFIED QUERY - Remove location check from query, do it manually
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
@@ -3443,11 +3443,11 @@ export const getNearbyDrivers = async (req, res) => {
       .populate('companyId', 'name logo rating contactPhone')
       .lean();
 
-    console.log(`\n✅ Query returned: ${drivers.length} drivers`);
+    console.log(`\n Query returned: ${drivers.length} drivers`);
     console.log('=====================================\n');
 
-    // ✅ STEP 4: Analyze each driver's location data
-    console.log('📍 ANALYZING DRIVER LOCATIONS:\n');
+    //  STEP 4: Analyze each driver's location data
+    console.log(' ANALYZING DRIVER LOCATIONS:\n');
 
     const nearbyDrivers = [];
 
@@ -3500,7 +3500,7 @@ export const getNearbyDrivers = async (req, res) => {
         driverLat = driver.currentLocation.lat;
         driverLng = driver.currentLocation.lng;
         locationSource = 'currentLocation';
-        console.log(`✅ Using currentLocation: ${driverLat}, ${driverLng}`);
+        console.log(` Using currentLocation: ${driverLat}, ${driverLng}`);
       }
       // Try GeoJSON
       else if (driver.location?.coordinates && 
@@ -3514,16 +3514,16 @@ export const getNearbyDrivers = async (req, res) => {
         driverLng = driver.location.coordinates[0];
         driverLat = driver.location.coordinates[1];
         locationSource = 'geoJSON';
-        console.log(`✅ Using GeoJSON: ${driverLat}, ${driverLng}`);
+        console.log(` Using GeoJSON: ${driverLat}, ${driverLng}`);
       }
       else {
-        console.log(`❌ No valid location data - SKIPPING`);
+        console.log(` No valid location data - SKIPPING`);
         continue;
       }
 
       // Validate coordinates
       if (driverLat < -90 || driverLat > 90 || driverLng < -180 || driverLng > 180) {
-        console.log(`❌ Invalid coordinates (out of range) - SKIPPING`);
+        console.log(` Invalid coordinates (out of range) - SKIPPING`);
         continue;
       }
 
@@ -3535,10 +3535,10 @@ export const getNearbyDrivers = async (req, res) => {
         driverLng
       );
 
-      console.log(`📏 Distance: ${distance.toFixed(4)} km`);
+      console.log(` Distance: ${distance.toFixed(4)} km`);
 
       if (distance <= searchRadius) {
-        console.log(`✅ WITHIN RADIUS - ADDING TO RESULTS`);
+        console.log(` WITHIN RADIUS - ADDING TO RESULTS`);
         
         const etaMinutes = Math.max(2, Math.ceil(distance * 3));
 
@@ -3595,13 +3595,13 @@ export const getNearbyDrivers = async (req, res) => {
           },
         });
       } else {
-        console.log(`❌ TOO FAR (${distance.toFixed(2)} km > ${searchRadius} km)`);
+        console.log(` TOO FAR (${distance.toFixed(2)} km > ${searchRadius} km)`);
       }
     }
 
     nearbyDrivers.sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
 
-    console.log(`\n✅ FINAL RESULT: ${nearbyDrivers.length} drivers within ${searchRadius}km`);
+    console.log(`\n FINAL RESULT: ${nearbyDrivers.length} drivers within ${searchRadius}km`);
     console.log('=====================================\n');
 
     const groupedDrivers = {
@@ -3633,7 +3633,7 @@ export const getNearbyDrivers = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('❌ Get nearby drivers error:', error);
+    console.error(' Get nearby drivers error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to find nearby drivers',
@@ -3681,7 +3681,7 @@ export const deleteDelivery = async (req, res) => {
       message: 'Delivery deleted successfully',
     });
   } catch (error) {
-    console.error('❌ Delete delivery error:', error);
+    console.error(' Delete delivery error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete delivery',
@@ -3707,7 +3707,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       });
     }
 
-    console.log(`🚫 [CANCELLATION] User ${user._id} (${user.role}) cancelling delivery ${deliveryId}`);
+    console.log(` [CANCELLATION] User ${user._id} (${user.role}) cancelling delivery ${deliveryId}`);
 
     const delivery = await Delivery.findById(deliveryId)
       .populate('customerId', 'name email phone')
@@ -3722,9 +3722,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     // AUTHORIZATION CHECK - FIXED
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     const isCustomer = user._id.toString() === delivery.customerId._id.toString();
     
     let isDriver = false;
@@ -3756,9 +3756,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       });
     }
 
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     // REFUND LOGIC
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     let refundResult = null;
     let refundInfo = null;
 
@@ -3771,9 +3771,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     const isCashPayment = delivery.payment?.method === 'cash';
 
     if (payment && !isCashPayment) {
-      console.log(`💰 Processing refund for payment: ${payment._id}`);
+      console.log(` Processing refund for payment: ${payment._id}`);
       console.log(`   Payment method: ${payment.paymentMethod}`);
-      console.log(`   Amount: ₦${payment.amount}`);
+      console.log(`   Amount: ${payment.amount}`);
 
       // Calculate refund amount based on cancellation stage
       let refundAmount = payment.amount;
@@ -3783,16 +3783,16 @@ export const cancelDeliveryWithRefund = async (req, res) => {
         // If driver already picked up, charge 20% cancellation fee
         cancellationFee = Math.round(payment.amount * 0.2);
         refundAmount = payment.amount - cancellationFee;
-        console.log(`⚠️ Picked up - Applying 20% cancellation fee: ₦${cancellationFee}`);
+        console.log(` Picked up - Applying 20% cancellation fee: ${cancellationFee}`);
       } else if (delivery.status === 'assigned') {
         // If driver assigned but not picked up, charge 10% cancellation fee
         cancellationFee = Math.round(payment.amount * 0.1);
         refundAmount = payment.amount - cancellationFee;
-        console.log(`⚠️ Assigned - Applying 10% cancellation fee: ₦${cancellationFee}`);
+        console.log(` Assigned - Applying 10% cancellation fee: ${cancellationFee}`);
       }
       // If 'created' (no driver assigned), full refund
 
-      console.log(`💸 Refund amount: ₦${refundAmount}`);
+      console.log(` Refund amount: ${refundAmount}`);
 
       // Initiate refund via Paystack
       try {
@@ -3800,12 +3800,12 @@ export const cancelDeliveryWithRefund = async (req, res) => {
           transaction: payment.paystackReference,
           amount: refundAmount, // Partial or full refund
           deliveryId: delivery._id,
-          customer_note: `Your delivery was cancelled. Refund of ₦${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ₦${cancellationFee.toLocaleString()}` : ''}`,
+          customer_note: `Your delivery was cancelled. Refund of ${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ${cancellationFee.toLocaleString()}` : ''}`,
           merchant_note: `Delivery ${delivery.referenceId} cancelled by ${user.role}. Reason: ${reason}`,
         });
 
         if (refundResult.success) {
-          console.log(`✅ Refund initiated successfully`);
+          console.log(` Refund initiated successfully`);
           console.log(`   Refund ID: ${refundResult.data.refundId}`);
 
           // Update payment record
@@ -3843,14 +3843,14 @@ export const cancelDeliveryWithRefund = async (req, res) => {
             refundId: refundResult.data.refundId,
             expectedAt: refundResult.data.expectedAt,
             message: cancellationFee > 0
-              ? `Refund of ₦${refundAmount.toLocaleString()} initiated (₦${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
-              : `Full refund of ₦${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
+              ? `Refund of ${refundAmount.toLocaleString()} initiated (${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
+              : `Full refund of ${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
           };
         } else {
           throw new Error(refundResult.message || 'Refund failed');
         }
       } catch (refundError) {
-        console.error(`❌ Refund failed:`, refundError.message);
+        console.error(` Refund failed:`, refundError.message);
         
         // Mark for manual refund
         payment.metadata = {
@@ -3873,14 +3873,14 @@ export const cancelDeliveryWithRefund = async (req, res) => {
         };
       }
     } else if (isCashPayment) {
-      console.log(`💵 Cash payment - No refund needed`);
+      console.log(` Cash payment - No refund needed`);
       refundInfo = {
         refunded: false,
         cashPayment: true,
         message: 'Cash payment - No refund necessary',
       };
     } else {
-      console.log(`⚠️ No payment found or payment not successful`);
+      console.log(` No payment found or payment not successful`);
       refundInfo = {
         refunded: false,
         noPayment: true,
@@ -3888,9 +3888,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       };
     }
 
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     // UPDATE DELIVERY
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     delivery.status = 'cancelled';
     delivery.cancelledAt = new Date();
     delivery.cancelledBy = {
@@ -3908,9 +3908,9 @@ export const cancelDeliveryWithRefund = async (req, res) => {
 
     await delivery.save({ session });
 
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     // UPDATE DRIVER
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId).session(session);
       if (driver) {
@@ -3922,7 +3922,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
         if (driverUser) {
           await sendNotification({
             userId: driverUser._id,
-            title: '🚫 Delivery Cancelled',
+            title: ' Delivery Cancelled',
             message: `Delivery #${delivery.referenceId} has been cancelled by ${user.role === 'customer' ? 'customer' : 'admin'}. Reason: ${reason}`,
             data: {
               type: 'delivery_cancelled',
@@ -3935,13 +3935,13 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     // NOTIFY CUSTOMER
-    // ═══════════════════════════════════════════════════════════════════
+    // 
     if (user.role !== 'customer') {
       await sendNotification({
         userId: delivery.customerId._id,
-        title: '🚫 Delivery Cancelled',
+        title: ' Delivery Cancelled',
         message: refundInfo?.refunded
           ? `Your delivery has been cancelled. ${refundInfo.message}`
           : `Your delivery has been cancelled. Reason: ${reason}`,
@@ -3958,7 +3958,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Delivery cancelled successfully`);
+    console.log(` Delivery cancelled successfully`);
 
     res.status(200).json({
       success: true,
@@ -3980,7 +3980,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     }
     session.endSession();
     
-    console.error('❌ Cancel delivery with refund error:', error);
+    console.error(' Cancel delivery with refund error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to cancel delivery',
@@ -4084,7 +4084,7 @@ export const assignCompanyToDelivery = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ assignCompanyToDelivery error:", error);
+    console.error(" assignCompanyToDelivery error:", error);
     res.status(500).json({ success: false, message: "Failed to assign company to delivery" });
   }
 };

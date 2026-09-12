@@ -27,7 +27,7 @@ const manualRecordSchema = new mongoose.Schema(
     pickupAddress:  String,
     dropoffAddress: String,
 
-    // Customer info (optional — may be a walk-in)
+    // Customer info (optional  may be a walk-in)
     customerName:  String,
     customerPhone: String,
 

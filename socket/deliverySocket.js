@@ -12,7 +12,7 @@ const deliveryRequests = new Map(); // deliveryId -> { customer data, timeout }
 
 export const setupDeliverySocket = (io) => {
   io.on("connection", (socket) => {
-    console.log("🔌 Client connected:", socket.id);
+    console.log(" Client connected:", socket.id);
 
     // ==========================================
     // DELIVERY PERSON EVENTS
@@ -47,7 +47,7 @@ export const setupDeliverySocket = (io) => {
           },
         );
 
-        console.log(`✅ Delivery person ${userId} is online`);
+        console.log(` Delivery person ${userId} is online`);
 
         socket.emit("delivery_person:online_success", {
           success: true,
@@ -75,7 +75,7 @@ export const setupDeliverySocket = (io) => {
         // Update database
         await DeliveryPerson.findOneAndUpdate({ userId }, { isOnline: false });
 
-        console.log(`❌ Delivery person ${userId} is offline`);
+        console.log(` Delivery person ${userId} is offline`);
 
         socket.emit("delivery_person:offline_success", {
           success: true,
@@ -185,7 +185,7 @@ export const setupDeliverySocket = (io) => {
         }
 
         console.log(
-          `✅ Delivery ${deliveryId} assigned to ${deliveryPersonId}`,
+          ` Delivery ${deliveryId} assigned to ${deliveryPersonId}`,
         );
       } catch (error) {
         console.error("Error accepting delivery:", error);
@@ -203,7 +203,7 @@ export const setupDeliverySocket = (io) => {
       try {
         const { deliveryId, reason } = data;
 
-        console.log(`❌ Delivery ${deliveryId} rejected: ${reason}`);
+        console.log(` Delivery ${deliveryId} rejected: ${reason}`);
 
         // Find next available delivery person
         await findAndNotifyNextDeliveryPerson(deliveryId, io);
@@ -224,7 +224,7 @@ export const setupDeliverySocket = (io) => {
         const { delivery, pickupLocation } = data;
 
         console.log(
-          "📦 New delivery created, searching for delivery persons...",
+          " New delivery created, searching for delivery persons...",
         );
 
         // Find nearby online delivery persons
@@ -512,7 +512,7 @@ export const setupDeliverySocket = (io) => {
     // DISCONNECT
     // ==========================================
     socket.on("disconnect", () => {
-      console.log("🔌 Client disconnected:", socket.id);
+      console.log(" Client disconnected:", socket.id);
 
       // Find and remove disconnected delivery person
       for (const [userId, person] of onlineDeliveryPersons.entries()) {
@@ -527,7 +527,7 @@ export const setupDeliverySocket = (io) => {
             console.error("Error updating offline status:", err),
           );
 
-          console.log(`❌ Delivery person ${userId} went offline (disconnect)`);
+          console.log(` Delivery person ${userId} went offline (disconnect)`);
           break;
         }
       }
@@ -643,7 +643,7 @@ async function notifyNextDeliveryPerson(deliveryId, io) {
   });
 
   console.log(
-    `📢 Notified delivery person ${nextPerson._id} about delivery ${deliveryId}`,
+    ` Notified delivery person ${nextPerson._id} about delivery ${deliveryId}`,
   );
 
   // Set timeout for this person to respond (30 seconds)

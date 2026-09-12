@@ -6,16 +6,16 @@ import Driver from './models/riders.models.js';
 async function testDatabase() {
   try {
     await mongoose.connect('mongodb://localhost:27017/riderr');
-    console.log('✅ Connected to MongoDB');
+    console.log(' Connected to MongoDB');
     
     // Check existing deliveries
     const deliveries = await Delivery.find({}).limit(5);
-    console.log(`📦 Found ${deliveries.length} deliveries:`);
+    console.log(` Found ${deliveries.length} deliveries:`);
     deliveries.forEach(d => console.log(`  - ID: ${d._id}, ReferenceID: ${d.referenceId || 'null'}`));
     
     // Check existing drivers
     const drivers = await Driver.find({}).limit(5);
-    console.log(`🚗 Found ${drivers.length} drivers:`);
+    console.log(` Found ${drivers.length} drivers:`);
     drivers.forEach(d => console.log(`  - ID: ${d._id}, UserID: ${d.userId}`));
     
     // Check for duplicate referenceIds
@@ -25,11 +25,11 @@ async function testDatabase() {
       { $match: { count: { $gt: 1 } } }
     ]);
     
-    console.log(`🔍 Found ${dupReferenceIds.length} duplicate referenceIds`);
+    console.log(` Found ${dupReferenceIds.length} duplicate referenceIds`);
     
     await mongoose.disconnect();
   } catch (error) {
-    console.error('❌ Error:', error);
+    console.error(' Error:', error);
   }
 }
 

@@ -83,7 +83,7 @@ export const checkVerificationStatus = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Check verification error:", error);
+    console.error(" Check verification error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to check verification status",
@@ -113,7 +113,7 @@ export const signUp = async (req, res) => {
 
       const { name, email, password, role, phone } = req.body;
 
-      console.log("📝 Signup request:", { name, email, role, phone });
+      console.log(" Signup request:", { name, email, role, phone });
 
       // Check existing user
       const existingUser = await User.findOne({
@@ -128,7 +128,7 @@ export const signUp = async (req, res) => {
       emailCode = generateVerificationCode();
       const emailExpiry = Date.now() + 10 * 60 * 1000;
       const hashedPassword = await bcrypt.hash(password, 10);
-      console.log('🔐 Generated verification code:', emailCode);
+      console.log(' Generated verification code:', emailCode);
 
       if (role === "company_admin") {
         const {
@@ -282,7 +282,7 @@ export const signUp = async (req, res) => {
 
       // In development, log if email fails but don't block signup
       if (process.env.NODE_ENV === 'development' && !emailResult.success && !emailResult.devMode) {
-        console.warn('⚠️ Email sending failed, but signup completed. Check email configuration.');
+        console.warn(' Email sending failed, but signup completed. Check email configuration.');
       }
     }
 
@@ -320,7 +320,7 @@ export const signUp = async (req, res) => {
   } catch (error) {
     session.endSession();
 
-    console.error("❌ Signup error:", error);
+    console.error(" Signup error:", error);
 
     if (error.message === "USER_EXISTS") {
       return res
@@ -387,7 +387,7 @@ export const signUpCompanyDriver = async (req, res) => {
       });
     }
 
-    console.log("📝 Company driver signup request:", {
+    console.log(" Company driver signup request:", {
       name,
       email,
       vehicleType,
@@ -426,7 +426,7 @@ export const signUpCompanyDriver = async (req, res) => {
     // Generate email verification code
     const emailCode = generateVerificationCode();
     const emailExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-    console.log("🔐 Generated email code:", emailCode);
+    console.log(" Generated email code:", emailCode);
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -451,7 +451,7 @@ export const signUpCompanyDriver = async (req, res) => {
       { session },
     );
 
-    console.log("🚗 Company driver created:", newUser._id);
+    console.log(" Company driver created:", newUser._id);
 
     // Generate a temporary license number (can be updated later by driver)
     const tempLicenseNumber = `TEMP-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`;
@@ -529,7 +529,7 @@ export const signUpCompanyDriver = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("❌ Company driver signup error:", error);
+    console.error(" Company driver signup error:", error);
 
     res.status(500).json({
       success: false,
@@ -693,7 +693,7 @@ export const signIn = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Login error:", error);
+    console.error(" Login error:", error);
     res.status(500).json({
       success: false,
       message: "Login failed",
@@ -791,7 +791,7 @@ export const verifyEmail = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Email verification error:", error);
+    console.error(" Email verification error:", error);
     res.status(500).json({
       success: false,
       message: "Verification failed",
@@ -829,7 +829,7 @@ export const forgotPassword = async (req, res) => {
     // Generate OTP
     const otp = generateVerificationCode();
     const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-    console.log('🔐 Generated password reset OTP:', otp);
+    console.log(' Generated password reset OTP:', otp);
 
     // Save OTP to user
     user.resetPasswordToken = otp;
@@ -840,7 +840,7 @@ export const forgotPassword = async (req, res) => {
     const emailResult = await sendPasswordResetEmail(email, otp, user.name);
 
     if (!emailResult.success && !emailResult.devMode) {
-      console.error('❌ Failed to send password reset email');
+      console.error(' Failed to send password reset email');
     }
 
     res.status(200).json({
@@ -854,7 +854,7 @@ export const forgotPassword = async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("❌ Forgot password error:", error);
+    console.error(" Forgot password error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to process request",
@@ -917,7 +917,7 @@ export const resetPassword = async (req, res) => {
         "Password reset successfully. Please login with your new password.",
     });
   } catch (error) {
-    console.error("❌ Reset password error:", error);
+    console.error(" Reset password error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to reset password",
@@ -977,7 +977,7 @@ export const changePassword = async (req, res) => {
       message: "Password changed successfully",
     });
   } catch (error) {
-    console.error("❌ Change password error:", error);
+    console.error(" Change password error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to change password",
@@ -1019,7 +1019,7 @@ export const resendVerification = async (req, res) => {
 
     // Generate new email verification code
     const newCode = generateVerificationCode();
-    console.log('🔐 Generated new verification code:', newCode);
+    console.log(' Generated new verification code:', newCode);
     
     user.emailVerificationToken = newCode;
     user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
@@ -1041,7 +1041,7 @@ export const resendVerification = async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("❌ Resend verification error:", error);
+    console.error(" Resend verification error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to resend code",
@@ -1116,7 +1116,7 @@ export const refreshToken = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Token refresh error:", error);
+    console.error(" Token refresh error:", error);
     res.status(500).json({
       success: false,
       message: "Token refresh failed",
@@ -1142,7 +1142,7 @@ export const logout = async (req, res) => {
       message: "Logged out successfully",
     });
   } catch (error) {
-    console.error("❌ Logout error:", error);
+    console.error(" Logout error:", error);
     res.status(500).json({
       success: false,
       message: "Logout failed",
@@ -1209,7 +1209,7 @@ export const getMe = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Get me error:", error);
+    console.error(" Get me error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to get user data",
@@ -1272,7 +1272,7 @@ export const updateProfile = async (req, res) => {
       data: updatedUser,
     });
   } catch (error) {
-    console.error("❌ Update profile error:", error);
+    console.error(" Update profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to update profile",

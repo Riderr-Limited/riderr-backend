@@ -73,7 +73,7 @@ router.use("/v1/support", supportTicketRoutes);
 router.use("/rescue", rescueRoutes);
 router.use("/rider", riderRoutes);
 
-// Public companies list — for customer to pick a company before creating order
+// Public companies list  for customer to pick a company before creating order
 router.get("/companies", authenticate, getActiveCompanies);
 
 router.use("/pod", podRoutes);

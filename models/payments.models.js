@@ -127,7 +127,7 @@ const paymentSchema = new mongoose.Schema(
       paystackTransferId: String,
     },
 
-    // ✅ FIXED: metadata is now Mixed so ALL dynamic fields are saved.
+    //  FIXED: metadata is now Mixed so ALL dynamic fields are saved.
     // The old strict-field definition was silently dropping requiresOtp,
     // chargeReference, escrowStatus, bankTransferDetails, and many others.
     metadata: {
@@ -183,13 +183,13 @@ paymentSchema.index({ paymentType: 1, status: 1 });
 
 // Virtuals
 paymentSchema.virtual("formattedAmount").get(function () {
-  return `₦${this.amount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
+  return `${this.amount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
 paymentSchema.virtual("formattedCompanyAmount").get(function () {
-  return `₦${this.companyAmount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
+  return `${this.companyAmount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
 paymentSchema.virtual("formattedPlatformFee").get(function () {
-  return `₦${this.platformFee.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
+  return `${this.platformFee.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
 });
 
 // Methods
@@ -287,7 +287,7 @@ paymentSchema.statics.getPlatformEarnings = async function (
   );
 };
 
-// ✅ FIXED: next() was commented out — this caused every payment.save()
+//  FIXED: next() was commented out  this caused every payment.save()
 // to hang forever and never resolve, breaking the entire payment flow.
 paymentSchema.pre("save", async function () {
   if (this.isModified("amount") && !this.platformFee) {

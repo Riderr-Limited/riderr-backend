@@ -41,7 +41,7 @@ export const getNotifications = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ getNotifications error:", error);
+    console.error(" getNotifications error:", error);
     return res.status(500).json({ success: false, message: "Failed to get notifications" });
   }
 };
@@ -56,7 +56,7 @@ export const getUnreadNotificationCount = async (req, res) => {
     const count = await getUnreadCount(req.user._id);
     return res.status(200).json({ success: true, data: { count } });
   } catch (error) {
-    console.error("❌ getUnreadNotificationCount error:", error);
+    console.error(" getUnreadNotificationCount error:", error);
     return res.status(500).json({ success: false, message: "Failed to get unread count" });
   }
 };
@@ -79,7 +79,7 @@ export const getNotificationById = async (req, res) => {
 
     return res.status(200).json({ success: true, data: notification });
   } catch (error) {
-    console.error("❌ getNotificationById error:", error);
+    console.error(" getNotificationById error:", error);
     return res.status(500).json({ success: false, message: "Failed to get notification" });
   }
 };
@@ -103,7 +103,7 @@ export const markAsRead = async (req, res) => {
 
     return res.status(200).json({ success: true, message: "Notification marked as read", data: notification });
   } catch (error) {
-    console.error("❌ markAsRead error:", error);
+    console.error(" markAsRead error:", error);
     return res.status(500).json({ success: false, message: "Failed to mark as read" });
   }
 };
@@ -127,7 +127,7 @@ export const markAsClicked = async (req, res) => {
 
     return res.status(200).json({ success: true, data: notification });
   } catch (error) {
-    console.error("❌ markAsClicked error:", error);
+    console.error(" markAsClicked error:", error);
     return res.status(500).json({ success: false, message: "Failed to mark as clicked" });
   }
 };
@@ -150,7 +150,7 @@ export const markAllAsRead = async (req, res) => {
       data: { updatedCount: result.modifiedCount },
     });
   } catch (error) {
-    console.error("❌ markAllAsRead error:", error);
+    console.error(" markAllAsRead error:", error);
     return res.status(500).json({ success: false, message: "Failed to mark all as read" });
   }
 };
@@ -173,7 +173,7 @@ export const deleteNotification = async (req, res) => {
 
     return res.status(200).json({ success: true, message: "Notification deleted" });
   } catch (error) {
-    console.error("❌ deleteNotification error:", error);
+    console.error(" deleteNotification error:", error);
     return res.status(500).json({ success: false, message: "Failed to delete notification" });
   }
 };
@@ -196,7 +196,7 @@ export const clearReadNotifications = async (req, res) => {
       data: { deletedCount: result.deletedCount },
     });
   } catch (error) {
-    console.error("❌ clearReadNotifications error:", error);
+    console.error(" clearReadNotifications error:", error);
     return res.status(500).json({ success: false, message: "Failed to clear notifications" });
   }
 };
@@ -228,7 +228,7 @@ export const updatePushToken = async (req, res) => {
 
     return res.status(200).json({ success: true, message: "Push token updated" });
   } catch (error) {
-    console.error("❌ updatePushToken error:", error);
+    console.error(" updatePushToken error:", error);
     return res.status(500).json({ success: false, message: "Failed to update push token" });
   }
 };

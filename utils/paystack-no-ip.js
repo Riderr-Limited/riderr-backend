@@ -27,10 +27,10 @@ paystackAxios.interceptors.response.use(
     
     // Handle IP restriction error specifically
     if (error.response?.data?.message?.includes('IP address is not allowed')) {
-      console.error('💡 IP RESTRICTION DETECTED!');
+      console.error(' IP RESTRICTION DETECTED!');
       console.error('Please add your IP to Paystack whitelist:');
       console.error('1. Go to Paystack Dashboard');
-      console.error('2. Settings → API & Webhooks');
+      console.error('2. Settings  API & Webhooks');
       console.error('3. Add your IP to IP Whitelist');
       console.error('4. Or use 0.0.0.0 to allow all IPs');
     }
@@ -51,7 +51,7 @@ export const initializePayment = async (paymentData) => {
       const shouldMock = process.env.USE_MOCK_PAYSTACK === 'true';
       
       if (shouldMock) {
-        console.log('⚠️ Using mock payment due to IP restrictions');
+        console.log(' Using mock payment due to IP restrictions');
         return {
           success: true,
           message: 'Mock payment (development mode)',

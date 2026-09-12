@@ -13,9 +13,9 @@ const connectToDatabase = async () => {
       connectTimeoutMS: 10000,
       socketTimeoutMS: 30000,
     });
-    console.log("✅ Connected to database");
+    console.log(" Connected to database");
   } catch (error) {
-    console.error("❌ MongoDB Connection Error:", error.message);
+    console.error(" MongoDB Connection Error:", error.message);
     process.exit(1);
   }
 };

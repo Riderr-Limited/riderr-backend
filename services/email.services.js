@@ -23,7 +23,7 @@ const createEmailTransporter = () => {
   try {
     // Validate required environment variables
     if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      console.error('❌ Missing email configuration. Required: EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD');
+      console.error(' Missing email configuration. Required: EMAIL_HOST, EMAIL_USER, EMAIL_PASSWORD');
       return null;
     }
 
@@ -48,7 +48,7 @@ const createEmailTransporter = () => {
       logger: process.env.NODE_ENV === 'development',
     };
 
-    console.log('📧 Email Configuration:', {
+    console.log(' Email Configuration:', {
       host: config.host,
       port: config.port,
       secure: config.secure,
@@ -58,7 +58,7 @@ const createEmailTransporter = () => {
 
     return nodemailer.createTransport(config);
   } catch (error) {
-    console.error('❌ Email transporter creation error:', error);
+    console.error(' Email transporter creation error:', error);
     return null;
   }
 };
@@ -75,12 +75,12 @@ export const sendOTPEmail = async (email, otp, name, purpose = 'verification') =
     const transporter = createEmailTransporter();
 
     if (!transporter) {
-      console.error('❌ Email transporter not available');
+      console.error(' Email transporter not available');
       
       // In development, log the OTP
       if (process.env.NODE_ENV === 'development') {
         console.log(`\n${'='.repeat(60)}`);
-        console.log(`📧 DEV MODE - OTP for ${email}: ${otp}`);
+        console.log(` DEV MODE - OTP for ${email}: ${otp}`);
         console.log(`${'='.repeat(60)}\n`);
         return { success: true, devMode: true };
       }
@@ -91,8 +91,8 @@ export const sendOTPEmail = async (email, otp, name, purpose = 'verification') =
     // Email content based on purpose
     const isVerification = purpose === 'verification';
     const subject = isVerification 
-      ? '🔐 Your Riderr Verification Code'
-      : '🔑 Reset Your Riderr Password';
+      ? ' Your Riderr Verification Code'
+      : ' Reset Your Riderr Password';
     
     const heading = isVerification 
       ? 'Email Verification'
@@ -226,7 +226,7 @@ export const sendOTPEmail = async (email, otp, name, purpose = 'verification') =
         <body>
           <div class="container">
             <div class="header">
-              <h1>🚗 Riderr</h1>
+              <h1> Riderr</h1>
               <p>${heading}</p>
             </div>
             
@@ -240,11 +240,11 @@ export const sendOTPEmail = async (email, otp, name, purpose = 'verification') =
               </div>
               
               <div class="expiry">
-                ⏰ ${expiryText}
+                 ${expiryText}
               </div>
               
               <div class="security-note">
-                🔒 <strong>Security Note:</strong><br>
+                 <strong>Security Note:</strong><br>
                 ${securityNote}
                 ${!isVerification ? '<br><br>For your security, never share this code with anyone.' : ''}
               </div>
@@ -252,7 +252,7 @@ export const sendOTPEmail = async (email, otp, name, purpose = 'verification') =
             
             <div class="footer">
               <p><strong>Riderr - Fast & Reliable Delivery</strong></p>
-              <p>© ${new Date().getFullYear()} Riderr. All rights reserved.</p>
+              <p> ${new Date().getFullYear()} Riderr. All rights reserved.</p>
               <p>Need help? Contact us at <a href="mailto:support@riderr.com">support@riderr.com</a></p>
             </div>
           </div>
@@ -273,16 +273,16 @@ ${securityNote}
 
 ---
 Riderr - Fast & Reliable Delivery
-© ${new Date().getFullYear()} Riderr. All rights reserved.
+ ${new Date().getFullYear()} Riderr. All rights reserved.
 Need help? Contact: support@riderr.com
       `.trim(),
     };
 
-    console.log(`📧 Sending ${purpose} email to ${email}...`);
+    console.log(` Sending ${purpose} email to ${email}...`);
     
     const info = await transporter.sendMail(mailOptions);
     
-    console.log(`✅ Email sent successfully to ${email}`);
+    console.log(` Email sent successfully to ${email}`);
     console.log(`   Message ID: ${info.messageId}`);
     console.log(`   Response: ${info.response}`);
 
@@ -292,7 +292,7 @@ Need help? Contact: support@riderr.com
       response: info.response,
     };
   } catch (error) {
-    console.error('❌ Email sending failed:', error);
+    console.error(' Email sending failed:', error);
     console.error('Error details:', {
       message: error.message,
       code: error.code,
@@ -303,7 +303,7 @@ Need help? Contact: support@riderr.com
     // In development, still log the OTP even if email fails
     if (process.env.NODE_ENV === 'development') {
       console.log(`\n${'='.repeat(60)}`);
-      console.log(`📧 EMAIL FAILED - But here's your OTP for testing:`);
+      console.log(` EMAIL FAILED - But here's your OTP for testing:`);
       console.log(`   Email: ${email}`);
       console.log(`   OTP: ${otp}`);
       console.log(`${'='.repeat(60)}\n`);
@@ -347,13 +347,13 @@ export const verifyEmailConfig = async () => {
 
     await transporter.verify();
     
-    console.log('✅ Email configuration is valid and ready');
+    console.log(' Email configuration is valid and ready');
     return {
       success: true,
       message: 'Email service is ready',
     };
   } catch (error) {
-    console.error('❌ Email configuration verification failed:', error);
+    console.error(' Email configuration verification failed:', error);
     return {
       success: false,
       error: error.message,

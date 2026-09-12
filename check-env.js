@@ -14,16 +14,16 @@ const __dirname = dirname(__filename);
 const result = dotenv.config({ path: join(__dirname, '.env') });
 
 console.log('\n' + '='.repeat(80));
-console.log('🔍 ENVIRONMENT VARIABLE DIAGNOSTIC');
+console.log(' ENVIRONMENT VARIABLE DIAGNOSTIC');
 console.log('='.repeat(80));
 
 if (result.error) {
-  console.log('❌ Error loading .env file:', result.error.message);
+  console.log(' Error loading .env file:', result.error.message);
 } else {
-  console.log('✅ .env file loaded successfully');
+  console.log(' .env file loaded successfully');
 }
 
-console.log('\n📋 CHECKING CRITICAL VARIABLES:\n');
+console.log('\n CHECKING CRITICAL VARIABLES:\n');
 
 const criticalVars = [
   'NODE_ENV',
@@ -44,9 +44,9 @@ criticalVars.forEach(varName => {
     const display = value.length > 20 
       ? `${value.substring(0, 10)}...${value.substring(value.length - 6)}`
       : value;
-    console.log(`✅ ${varName.padEnd(25)} = ${display}`);
+    console.log(` ${varName.padEnd(25)} = ${display}`);
   } else {
-    console.log(`❌ ${varName.padEnd(25)} = NOT FOUND`);
+    console.log(` ${varName.padEnd(25)} = NOT FOUND`);
     allFound = false;
   }
 });
@@ -54,10 +54,10 @@ criticalVars.forEach(varName => {
 console.log('\n' + '='.repeat(80));
 
 if (allFound) {
-  console.log('✅ ALL CRITICAL VARIABLES FOUND');
+  console.log(' ALL CRITICAL VARIABLES FOUND');
 } else {
-  console.log('❌ SOME VARIABLES ARE MISSING');
-  console.log('\n💡 TROUBLESHOOTING STEPS:');
+  console.log(' SOME VARIABLES ARE MISSING');
+  console.log('\n TROUBLESHOOTING STEPS:');
   console.log('1. Check if .env file exists in project root');
   console.log('2. Check for spaces before variable names');
   console.log('3. Make sure there are no special characters in values');
@@ -67,7 +67,7 @@ if (allFound) {
 console.log('='.repeat(80) + '\n');
 
 // Show all environment variables that start with common prefixes
-console.log('📋 ALL ENVIRONMENT VARIABLES (filtered):\n');
+console.log(' ALL ENVIRONMENT VARIABLES (filtered):\n');
 const filtered = Object.keys(process.env)
   .filter(key => 
     key.startsWith('RESEND') || 
@@ -88,10 +88,10 @@ if (filtered.length > 0) {
     console.log(`  ${key.padEnd(30)} = ${display}`);
   });
 } else {
-  console.log('  ⚠️ No relevant environment variables found!');
+  console.log('   No relevant environment variables found!');
 }
 
 console.log('\n' + '='.repeat(80));
-console.log('🔍 .env FILE LOCATION:', join(__dirname, '.env'));
-console.log('🔍 CURRENT DIRECTORY:', __dirname);
+console.log(' .env FILE LOCATION:', join(__dirname, '.env'));
+console.log(' CURRENT DIRECTORY:', __dirname);
 console.log('='.repeat(80) + '\n');

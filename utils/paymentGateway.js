@@ -1,4 +1,4 @@
-// utils/paymentGateway.js — Flutterwave only
+// utils/paymentGateway.js  Flutterwave only
 import {
   initializePayment,
   verifyPayment,

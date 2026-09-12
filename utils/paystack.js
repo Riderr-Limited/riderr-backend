@@ -4,7 +4,7 @@ import axios from 'axios';
 // ===== ENVIRONMENT CONFIGURATION =====
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-// Keys — env vars take priority, hardcoded values are fallback
+// Keys  env vars take priority, hardcoded values are fallback
 const LIVE_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_live_d68be4ae85980a9c4c319edf02dc2db4aca8cbdd';
 const LIVE_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || 'pk_live_3b52907c8d7a45ff0d023758e4a810bec5e2fc8a';
 const TEST_SECRET_KEY = process.env.PAYSTACK_TEST_SECRET_KEY || 'sk_test_a5a109269fd3e49e5d571342c97e155b8e677eac';
@@ -15,27 +15,27 @@ const PAYSTACK_SECRET_KEY = LIVE_SECRET_KEY;
 const PAYSTACK_PUBLIC_KEY = LIVE_PUBLIC_KEY;
 const USE_LIVE_KEYS = true;
 
-// ✅ FIX: BACKEND_URL must NOT include /api — it's appended in MOBILE_CALLBACK_URL
+//  FIX: BACKEND_URL must NOT include /api  it's appended in MOBILE_CALLBACK_URL
 const BACKEND_URL = process.env.BACKEND_URL || 'https://riderr-backend.onrender.com';
 const MOBILE_CALLBACK_URL = `${BACKEND_URL}/api/payments/mobile-callback`;
 
 // Log config on startup
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('🔧 Paystack Configuration:');
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('Environment    :', IS_PRODUCTION ? '🔴 PRODUCTION' : '🟡 DEVELOPMENT');
-console.log('Using Keys     :', USE_LIVE_KEYS ? '🔴 LIVE KEYS' : '🟡 TEST KEYS');
+console.log('');
+console.log(' Paystack Configuration:');
+console.log('');
+console.log('Environment    :', IS_PRODUCTION ? ' PRODUCTION' : ' DEVELOPMENT');
+console.log('Using Keys     :', USE_LIVE_KEYS ? ' LIVE KEYS' : ' TEST KEYS');
 console.log('Secret Key     :', PAYSTACK_SECRET_KEY.substring(0, 15) + '...' + PAYSTACK_SECRET_KEY.slice(-4));
 console.log('Public Key     :', PAYSTACK_PUBLIC_KEY.substring(0, 15) + '...' + PAYSTACK_PUBLIC_KEY.slice(-4));
 console.log('Callback URL   :', MOBILE_CALLBACK_URL);
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+console.log('\n');
 
 // Validate key format
 if (!PAYSTACK_SECRET_KEY || PAYSTACK_SECRET_KEY.length < 20) {
-  throw new Error('❌ PAYSTACK_SECRET_KEY is missing or too short');
+  throw new Error(' PAYSTACK_SECRET_KEY is missing or too short');
 }
 if (!PAYSTACK_SECRET_KEY.startsWith('sk_')) {
-  throw new Error('❌ PAYSTACK_SECRET_KEY must start with "sk_"');
+  throw new Error(' PAYSTACK_SECRET_KEY must start with "sk_"');
 }
 
 // Axios instance pointed at Paystack's real API
@@ -51,12 +51,12 @@ const paystackAxios = axios.create({
 // Request logger
 paystackAxios.interceptors.request.use(
   (config) => {
-    console.log(`📤 Paystack → ${config.method?.toUpperCase()} ${config.url}`);
+    console.log(` Paystack  ${config.method?.toUpperCase()} ${config.url}`);
     console.log('   Auth prefix:', config.headers.Authorization.substring(0, 25) + '...');
     return config;
   },
   (error) => {
-    console.error('❌ Paystack request setup error:', error.message);
+    console.error(' Paystack request setup error:', error.message);
     return Promise.reject(error);
   }
 );
@@ -64,11 +64,11 @@ paystackAxios.interceptors.request.use(
 // Response logger
 paystackAxios.interceptors.response.use(
   (response) => {
-    console.log(`📥 Paystack ← ${response.status} ${response.config.url} | status: ${response.data.status}`);
+    console.log(` Paystack  ${response.status} ${response.config.url} | status: ${response.data.status}`);
     return response;
   },
   (error) => {
-    console.error(`❌ Paystack error: ${error.response?.status} ${error.config?.url}`);
+    console.error(` Paystack error: ${error.response?.status} ${error.config?.url}`);
     if (error.response?.data) {
       console.error('   Details:', JSON.stringify(error.response.data, null, 2));
     }
@@ -106,7 +106,7 @@ export const initializePayment = async (paymentData) => {
       }
     }
 
-    // ✅ CORRECT endpoint
+    //  CORRECT endpoint
     const response = await paystackAxios.post('/transaction/initialize', payload);
 
     if (response.data.status === true) {
@@ -129,7 +129,7 @@ export const initializePayment = async (paymentData) => {
  */
 export const verifyPayment = async (reference) => {
   try {
-    // ✅ CORRECT endpoint (was wrongly set to /payments/verify/:reference)
+    //  CORRECT endpoint (was wrongly set to /payments/verify/:reference)
     const response = await paystackAxios.get(`/transaction/verify/${reference}`);
 
     if (response.data.status === true) {
@@ -148,7 +148,7 @@ export const verifyPayment = async (reference) => {
 
 export const chargeCardViaPaystack = async (chargeData) => {
   try {
-    console.log('💳 Charging card | email:', chargeData.email, '| amount:', chargeData.amount, 'NGN');
+    console.log(' Charging card | email:', chargeData.email, '| amount:', chargeData.amount, 'NGN');
 
     const payload = {
       email: chargeData.email,
@@ -167,24 +167,24 @@ export const chargeCardViaPaystack = async (chargeData) => {
 
     if (chargeData.card.pin) {
       payload.pin = chargeData.card.pin;
-      console.log('🔐 PIN included');
+      console.log(' PIN included');
     }
 
     const response = await paystackAxios.post('/charge', payload);
 
-    // ✅ Log the FULL raw response so you can see exactly where reference lives
-    console.log('📦 Raw Paystack charge response:', JSON.stringify(response.data, null, 2));
+    //  Log the FULL raw response so you can see exactly where reference lives
+    console.log(' Raw Paystack charge response:', JSON.stringify(response.data, null, 2));
 
     if (response.data.status === true) {
       const data = response.data.data;
 
-      // ✅ FIX: Paystack puts `reference` in different places depending on status.
+      //  FIX: Paystack puts `reference` in different places depending on status.
       // For send_otp / send_pin: it's in response.data.reference (top level)
       // For success: it's in response.data.data.reference
       // We capture BOTH and prefer data.reference, fall back to top-level reference.
       const paystackReference = data?.reference || response.data.reference;
 
-      console.log('🔑 Paystack reference captured:', paystackReference);
+      console.log(' Paystack reference captured:', paystackReference);
       console.log('   data.reference        :', data?.reference);
       console.log('   response.data.reference:', response.data.reference);
 
@@ -193,7 +193,7 @@ export const chargeCardViaPaystack = async (chargeData) => {
           success: true,
           requiresOtp: true,
           message: 'OTP sent to your phone',
-          // ✅ Attach paystackReference explicitly so the controller can save it
+          //  Attach paystackReference explicitly so the controller can save it
           paystackReference,
           data,
         };
@@ -246,7 +246,7 @@ export const chargeCardViaPaystack = async (chargeData) => {
  */
 export const submitOtpToPaystack = async (otpData) => {
   try {
-    // ✅ CORRECT endpoint (was /transaction/submit_otp)
+    //  CORRECT endpoint (was /transaction/submit_otp)
     const response = await paystackAxios.post('/charge/submit_otp', {
       otp: otpData.otp,
       reference: otpData.reference,
@@ -477,7 +477,7 @@ export const resolveAccountNumber = async (accountNumber, bankCode) => {
 
 export const createTransferRecipient = async (recipientData) => {
   try {
-    console.log('📝 Creating transfer recipient (no bank code needed)');
+    console.log(' Creating transfer recipient (no bank code needed)');
     console.log('   Account:', recipientData.accountNumber);
     console.log('   Name:', recipientData.accountName);
 
@@ -486,7 +486,7 @@ const response = await paystackAxios.post('/transferrecipient', {
   type: 'nuban',
   name: recipientData.accountName,
   account_number: recipientData.accountNumber,
-  bank_code: recipientData.bankCode,  // ← required
+  bank_code: recipientData.bankCode,  //  required
   currency: 'NGN',
 });
 
@@ -509,7 +509,7 @@ const response = await paystackAxios.post('/transferrecipient', {
       error: response.data 
     };
   } catch (error) {
-    console.error('❌ Paystack recipient error:', error.response?.data);
+    console.error(' Paystack recipient error:', error.response?.data);
     return {
       success: false,
       message: error.response?.data?.message || 'Recipient creation failed',
@@ -524,7 +524,7 @@ const response = await paystackAxios.post('/transferrecipient', {
  */
 export const initiateRefund = async (refundData) => {
   try {
-    console.log('💸 Initiating refund via Paystack');
+    console.log(' Initiating refund via Paystack');
     console.log('   Transaction:', refundData.transaction);
     console.log('   Amount:', refundData.amount);
 
@@ -558,7 +558,7 @@ export const initiateRefund = async (refundData) => {
       error: response.data,
     };
   } catch (error) {
-    console.error('❌ Paystack refund error:', error.response?.data);
+    console.error(' Paystack refund error:', error.response?.data);
     return {
       success: false,
       message: error.response?.data?.message || 'Refund failed',

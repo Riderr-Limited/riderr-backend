@@ -18,17 +18,17 @@ async function migrateDeliveries() {
   try {
     // Connect to MongoDB
     await mongoose.connect(MONGODB_URI);
-    console.log('✅ Connected to MongoDB');
+    console.log(' Connected to MongoDB');
 
     // Count deliveries that need migration
     const count = await Delivery.countDocuments({
       rejectedByDrivers: { $exists: false }
     });
 
-    console.log(`📊 Found ${count} deliveries without rejectedByDrivers field`);
+    console.log(` Found ${count} deliveries without rejectedByDrivers field`);
 
     if (count === 0) {
-      console.log('✅ All deliveries already have the field. No migration needed.');
+      console.log(' All deliveries already have the field. No migration needed.');
       process.exit(0);
     }
 
@@ -38,7 +38,7 @@ async function migrateDeliveries() {
       { $set: { rejectedByDrivers: [] } }
     );
 
-    console.log(`✅ Migration complete!`);
+    console.log(` Migration complete!`);
     console.log(`   - Updated: ${result.modifiedCount} deliveries`);
     console.log(`   - Matched: ${result.matchedCount} deliveries`);
 
@@ -48,14 +48,14 @@ async function migrateDeliveries() {
     });
 
     if (remaining === 0) {
-      console.log('✅ Verification passed: All deliveries now have rejectedByDrivers field');
+      console.log(' Verification passed: All deliveries now have rejectedByDrivers field');
     } else {
-      console.log(`⚠️  Warning: ${remaining} deliveries still missing the field`);
+      console.log(`  Warning: ${remaining} deliveries still missing the field`);
     }
 
     process.exit(0);
   } catch (error) {
-    console.error('❌ Migration failed:', error);
+    console.error(' Migration failed:', error);
     process.exit(1);
   }
 }

@@ -10,7 +10,7 @@ export const reverseGeocode = async (lat, lng) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     
     if (!apiKey) {
-      console.error("❌ GOOGLE_MAPS_API_KEY not set in environment variables");
+      console.error(" GOOGLE_MAPS_API_KEY not set in environment variables");
       return {
         success: false,
         address: `${lat}, ${lng}`, // Fallback to coordinates
@@ -58,7 +58,7 @@ export const reverseGeocode = async (lat, lng) => {
         lng,
       };
     } else {
-      console.warn(`⚠️ Geocoding failed: ${response.data.status}`);
+      console.warn(` Geocoding failed: ${response.data.status}`);
       return {
         success: false,
         address: `${lat}, ${lng}`,
@@ -66,7 +66,7 @@ export const reverseGeocode = async (lat, lng) => {
       };
     }
   } catch (error) {
-    console.error("❌ Reverse geocoding error:", error.message);
+    console.error(" Reverse geocoding error:", error.message);
     return {
       success: false,
       address: `${lat}, ${lng}`,
@@ -84,7 +84,7 @@ export const forwardGeocode = async (address) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     
     if (!apiKey) {
-      console.error("❌ GOOGLE_MAPS_API_KEY not set in environment variables");
+      console.error(" GOOGLE_MAPS_API_KEY not set in environment variables");
       return {
         success: false,
         error: "Geocoding service not configured",
@@ -113,7 +113,7 @@ export const forwardGeocode = async (address) => {
       };
     }
   } catch (error) {
-    console.error("❌ Forward geocoding error:", error.message);
+    console.error(" Forward geocoding error:", error.message);
     return {
       success: false,
       error: error.message,
@@ -160,7 +160,7 @@ export const reverseGeocodeOSM = async (lat, lng) => {
       };
     }
   } catch (error) {
-    console.error("❌ OSM reverse geocoding error:", error.message);
+    console.error(" OSM reverse geocoding error:", error.message);
     return {
       success: false,
       address: `${lat}, ${lng}`,
@@ -178,7 +178,7 @@ export const reverseGeocodeMapbox = async (lat, lng) => {
     const apiKey = process.env.MAPBOX_ACCESS_TOKEN;
     
     if (!apiKey) {
-      console.error("❌ MAPBOX_ACCESS_TOKEN not set in environment variables");
+      console.error(" MAPBOX_ACCESS_TOKEN not set in environment variables");
       return {
         success: false,
         address: `${lat}, ${lng}`,
@@ -227,7 +227,7 @@ export const reverseGeocodeMapbox = async (lat, lng) => {
       };
     }
   } catch (error) {
-    console.error("❌ Mapbox reverse geocoding error:", error.message);
+    console.error(" Mapbox reverse geocoding error:", error.message);
     return {
       success: false,
       address: `${lat}, ${lng}`,

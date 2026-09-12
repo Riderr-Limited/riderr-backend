@@ -50,13 +50,13 @@ const UserSchema = new mongoose.Schema(
       select: false
     },
 
-    // ✅ ADD BOTH FIELDS FOR COMPATIBILITY
+    //  ADD BOTH FIELDS FOR COMPATIBILITY
     avatarUrl: {
       type: String,
       default: null
     },
 
-    profileImage: { // ✅ Add this field
+    profileImage: { //  Add this field
       type: String,
       default: null
     },
@@ -268,7 +268,7 @@ UserSchema.pre('save', async function(next) {
       this.phone = this.phone.trim().replace(/[\s\-\(\)]/g, '');
     }
     
-    // ✅ Sync avatarUrl and profileImage for backward compatibility
+    //  Sync avatarUrl and profileImage for backward compatibility
     if (this.avatarUrl && !this.profileImage) {
       this.profileImage = this.avatarUrl;
     }
@@ -326,8 +326,8 @@ UserSchema.methods.toSafeObject = function() {
     name: this.name,
     email: this.email,
     phone: this.phone,
-    avatarUrl: this.avatarUrl || this.profileImage, // ✅ Return whichever is available
-    profileImage: this.profileImage || this.avatarUrl, // ✅ Return both
+    avatarUrl: this.avatarUrl || this.profileImage, //  Return whichever is available
+    profileImage: this.profileImage || this.avatarUrl, //  Return both
     isVerified: this.isVerified,
     isActive: this.isActive,
     companyId: this.companyId,

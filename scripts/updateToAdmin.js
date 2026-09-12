@@ -7,17 +7,17 @@ dotenv.config();
 
 const updateToAdmin = async () => {
   try {
-    console.log("🔗 Connecting to MongoDB...");
+    console.log(" Connecting to MongoDB...");
     
     await mongoose.connect(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017/riderr_db");
     
-    console.log("✅ MongoDB connected");
+    console.log(" MongoDB connected");
     
     // Find the user
     const user = await User.findOne({ email: "admin@system.com" });
     
     if (!user) {
-      console.log("❌ User not found");
+      console.log(" User not found");
       return;
     }
     
@@ -27,15 +27,15 @@ const updateToAdmin = async () => {
     user.role = "admin";
     await user.save();
     
-    console.log("\n✅ USER UPDATED TO ADMIN!");
+    console.log("\n USER UPDATED TO ADMIN!");
     console.log("Email:", user.email);
     console.log("New role:", user.role);
-    console.log("\n⚠️  You need to login again to get new token with admin role");
+    console.log("\n  You need to login again to get new token with admin role");
     
     await mongoose.disconnect();
     
   } catch (error) {
-    console.error("❌ Error:", error.message);
+    console.error(" Error:", error.message);
     process.exit(1);
   }
 };

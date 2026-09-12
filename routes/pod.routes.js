@@ -34,6 +34,6 @@ router.patch("/:podId/awaiting", authorize("driver"), markAwaitingCustomer);
 router.post("/:podId/payment",   authorize("driver"), recordPODPayment);
 router.post("/:podId/reject",    authorize("customer", "admin"), rejectPOD);
 router.patch("/:podId/settle",   authorize("admin", "company_admin"), settlePOD);
-router.patch("/:podId/cancel",   cancelPOD); // customer / company_admin / admin — checked in controller
+router.patch("/:podId/cancel",   cancelPOD); // customer / company_admin / admin  checked in controller
 
 export default router;

@@ -199,7 +199,7 @@ router.delete('/company/bank-account', authenticate, deleteCompanyBankAccount);
 router.get('/for-delivery/:deliveryId', authenticate, getPaymentForDelivery);
 
 // ============================================================
-// 7. DYNAMIC ROUTE — must be LAST
+// 7. DYNAMIC ROUTE  must be LAST
 // ============================================================
 /**
  * @swagger
