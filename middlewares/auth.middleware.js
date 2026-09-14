@@ -29,10 +29,8 @@ export const authenticate = async (req, res, next) => {
     // Verify token
     let decoded;
     try {
-      decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
-      );
+      if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is not configured");
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
       if (err.name === "TokenExpiredError") {
         return res.status(401).json({
@@ -105,8 +103,6 @@ export const authorize = (...roles) => {
       return res.status(403).json({
         success: false,
         message: "Access denied. Insufficient permissions.",
-        requiredRoles: roles,
-        userRole: req.user.role,
       });
     }
 
@@ -131,10 +127,8 @@ export const optionalAuth = async (req, res, next) => {
       return next();
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || "fallback-secret-key-change-in-production",
-    );
+    if (!process.env.JWT_SECRET) return next();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.userId).select(
       "-password -refreshToken",
     );
@@ -290,14 +284,7 @@ export const customerOnly = (req, res, next) => {
   next();
 };
 
-/**
- * Rate limiting middleware (placeholder)
- */
-export const rateLimit = (req, res, next) => {
-  // Implement rate limiting logic here
-  // You can use express-rate-limit package
-  next();
-};
+
 
 /**
  * Check if user owns resource

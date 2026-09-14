@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import mongoSanitize from "express-mongo-sanitize";
+import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import swaggerSpec from "./config/swagger.js";
 import apiRoutes from "./routes/index.route.js";
@@ -75,15 +76,27 @@ app.use(helmet());
 app.set("trust proxy", true);
 
 /**
- * Body Parser Middleware
+ * Global Rate Limiter — all routes
  */
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests, please try again later" },
+});
+app.use(globalLimiter);
 
 /**
- * Data Sanitization
+ * Body Parser Middleware
  */
-// Prevent NoSQL injection
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+
+/**
+ * NoSQL Injection Prevention
+ */
+app.use(mongoSanitize());
 
 /**
  * Logging
@@ -103,64 +116,6 @@ app.get("/api/health", (req, res) => {
     message: "Server is healthy",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-  });
-});
-
-/**
- * Temporary: Get server outbound IP (for Flutterwave whitelisting - REMOVE AFTER USE)
- */
-app.get("/api/my-ip", async (req, res) => {
-  const https = await import("https");
-  https.get("https://api.ipify.org?format=json", (resp) => {
-    let data = "";
-    resp.on("data", (chunk) => (data += chunk));
-    resp.on("end", () => res.json(JSON.parse(data)));
-  }).on("error", (err) => res.status(500).json({ error: err.message }));
-});
-
-/**
- * Debug endpoint for deployment
- */
-app.get("/api/debug", (req, res) => {
-  res.json({
-    success: true,
-    environment: process.env.NODE_ENV,
-    port: process.env.PORT,
-    frontendUrl: process.env.FRONTEND_URL,
-    backendUrl: process.env.BACKEND_URL,
-    corsOrigins: [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "https://riderr.ng",
-      "https://www.riderr.ng",
-      "https://riderrr.vercel.app",
-      process.env.FRONTEND_URL,
-      process.env.CLIENT_URL,
-    ].filter(Boolean),
-    requestOrigin: req.headers.origin,
-    timestamp: new Date().toISOString(),
-  });
-});
-
-/**
- * Test endpoint
- */
-app.get("/api/test-cors", (req, res) => {
-  res.json({
-    success: true,
-    message: "CORS is working!",
-    origin: req.headers.origin,
-    method: req.method,
-  });
-});
-
-app.post("/api/test-cors", (req, res) => {
-  console.log("Test CORS POST received:", req.body);
-  res.json({
-    success: true,
-    message: "POST request successful",
-    data: req.body,
-    origin: req.headers.origin,
   });
 });
 
