@@ -1,3 +1,4 @@
+// routes/auth.routes.js (with validation)
 import express from "express";
 import {
   signUp,
@@ -27,33 +28,8 @@ import {
   validateRefreshToken,
   validateSignUpCompanyDriver
 } from "../middlewares/validation.middleware.js";
-import rateLimit from "express-rate-limit";
 
 const router = express.Router();
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: "Too many login attempts, please try again after 15 minutes" },
-});
-
-const signupLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: "Too many accounts created from this IP, please try again after an hour" },
-});
-
-const passwordLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: "Too many password reset attempts, please try again after an hour" },
-});
 
 // ==================== PUBLIC ROUTES ====================
 
@@ -93,7 +69,7 @@ const passwordLimiter = rateLimit({
  *           application/json:
  *             schema: { $ref: '#/components/schemas/Error' }
  */
-router.post("/signup", signupLimiter, validateSignup, signUp);
+router.post("/signup", validateSignup, signUp);
 
 /**
  * @swagger
@@ -118,7 +94,7 @@ router.post("/signup", signupLimiter, validateSignup, signUp);
  *       401:
  *         description: Invalid credentials
  */
-router.post("/login", loginLimiter, validateLogin, signIn);
+router.post("/login", validateLogin, signIn);
 
 /**
  * @swagger
@@ -163,7 +139,7 @@ router.post("/verify-email", validateVerifyEmail, verifyEmail);
  *       200:
  *         description: Verification email sent
  */
-router.post("/resend-verification", passwordLimiter, validateResendVerification, resendVerification);
+router.post("/resend-verification", validateResendVerification, resendVerification);
 
 /**
  * @swagger
@@ -185,7 +161,7 @@ router.post("/resend-verification", passwordLimiter, validateResendVerification,
  *       200:
  *         description: Reset email sent
  */
-router.post("/forgot-password", passwordLimiter, validateForgotPassword, forgotPassword);
+router.post("/forgot-password", validateForgotPassword, forgotPassword);
 
 /**
  * @swagger
@@ -208,7 +184,7 @@ router.post("/forgot-password", passwordLimiter, validateForgotPassword, forgotP
  *       200:
  *         description: Password reset successful
  */
-router.post("/reset-password", passwordLimiter, validateResetPassword, resetPassword);
+router.post("/reset-password", validateResetPassword, resetPassword);
 
 /**
  * @swagger
