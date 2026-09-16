@@ -54,6 +54,30 @@ const deliverySchema = new mongoose.Schema({
     ref: "Company",
   },
 
+  // Where this delivery originated from. Existing app/website deliveries
+  // are untouched and default to "app"; deliveries created through the
+  // external Partner API are tagged "partner_api" for reporting/scoping.
+  source: {
+    type: String,
+    enum: ["app", "partner_api"],
+    default: "app",
+  },
+  partnerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Partner",
+    default: null,
+  },
+  partnerOrderRef: {
+    type: String,
+    default: null,
+  },
+  // Set once an admin alert has been sent for a partner_api delivery that
+  // sat unassigned too long, so the background job doesn't re-alert on it.
+  partnerUnassignedAlertSentAt: {
+    type: Date,
+    default: null,
+  },
+
   // Customer details
   customerName: {
     type: String,
@@ -228,6 +252,7 @@ deliverySchema.index({ status: 1 });
 deliverySchema.index({ createdAt: -1 });
 //  NEW: Index for rejection filtering
 deliverySchema.index({ 'rejectedByDrivers.driverId': 1 });
+deliverySchema.index({ partnerId: 1, status: 1 });
 
 // Generate reference ID before saving
 deliverySchema.pre("save", async function () {

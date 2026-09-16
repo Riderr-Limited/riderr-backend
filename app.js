@@ -9,6 +9,8 @@ import apiRoutes from "./routes/index.route.js";
 import newDriverRoutes from "./routes/newDriver.routes.js";
 import newDeliveryRoutes from "./routes/newDelivery.routes.js";
 import testRoutes from "./routes/test.routes.js";
+import partnerDeliveryRoutes from "./routes/partnerDelivery.routes.js";
+import partnerAdminRoutes from "./routes/partnerAdmin.routes.js";
 
 const app = express();
 
@@ -169,6 +171,16 @@ app.post("/api/test-cors", (req, res) => {
  */
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
 app.get("/api/docs.json", (req, res) => res.json(swaggerSpec));
+
+/**
+ * External Partner API (ecommerce/marketplace delivery integration)
+ * Fully separate auth (API key/secret) and routes from the main app API below.
+ * Mounted BEFORE apiRoutes because index.route.js ends with a catch-all
+ * 404 handler for any unmatched /api/* path, which would otherwise
+ * swallow these requests before they ever reach these routers.
+ */
+app.use("/api/partner/v1", partnerDeliveryRoutes);
+app.use("/api/admin/partners", partnerAdminRoutes);
 
 /**
  * API Routes

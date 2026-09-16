@@ -79,6 +79,19 @@ const UserSchema = new mongoose.Schema(
       default: false
     },
 
+    // Marks lightweight accounts auto-created for an external partner's
+    // end-customer through the Partner API (no app login, no password use).
+    isGuest: {
+      type: Boolean,
+      default: false
+    },
+
+    guestSourcePartnerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Partner",
+      default: null
+    },
+
     isActive: {
       type: Boolean,
       default: true

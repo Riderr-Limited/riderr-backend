@@ -1752,6 +1752,8 @@ export const getAllDeliveries = async (req, res) => {
       customerId,
       driverId,
       companyId,
+      source,
+      partnerId,
       startDate,
       endDate,
       search,
@@ -1768,6 +1770,8 @@ export const getAllDeliveries = async (req, res) => {
     if (customerId) query.customerId = customerId;
     if (driverId) query.driverId = driverId;
     if (companyId) query.companyId = companyId;
+    if (source) query.source = source; // "app" | "partner_api"
+    if (partnerId) query.partnerId = partnerId;
 
     // Date range
     if (startDate || endDate) {
@@ -1796,6 +1800,7 @@ export const getAllDeliveries = async (req, res) => {
         },
       })
       .populate("companyId", "name")
+      .populate("partnerId", "businessName contactEmail")
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ [sortBy]: sortOrder === "asc" ? 1 : -1 });
@@ -1836,7 +1841,8 @@ export const getDeliveryById = async (req, res) => {
           path: "userId companyId",
         },
       })
-      .populate("companyId");
+      .populate("companyId")
+      .populate("partnerId", "businessName contactEmail contactPhone status");
 
     if (!delivery) {
       return res.status(404).json({
