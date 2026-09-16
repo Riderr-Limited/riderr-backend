@@ -2232,7 +2232,7 @@ export const calculateDeliveryFare = async (req, res) => {
         isOnline: true,
         isActive: true,
         isAvailable: true,
-        approvalStatus: "approved",
+        approvalStatus: { $ne: "rejected" },
         currentDeliveryId: { $exists: false },
         $or: [
           { "location.coordinates": { $exists: true, $ne: [0, 0] } },
@@ -2650,7 +2650,7 @@ export const createDeliveryRequest = async (req, res) => {
     const nearbyDrivers = await Driver.find({
       isOnline: true,
       isActive: true,
-      approvalStatus: "approved",
+      approvalStatus: { $ne: "rejected" },
       currentDeliveryId: { $exists: false },
       $or: [
         { "location.coordinates": { $exists: true, $ne: [0, 0] } },
@@ -3052,7 +3052,7 @@ export const getNearbyAvailableDrivers = async (req, res) => {
       isOnline: true,
       isAvailable: true,
       isActive: true,
-      approvalStatus: "approved",
+      approvalStatus: { $ne: "rejected" },
       $or: [
         { currentDeliveryId: { $exists: false } },
         { currentDeliveryId: null }
@@ -4027,7 +4027,7 @@ export const assignCompanyToDelivery = async (req, res) => {
       companyId: company._id,
       isOnline: true,
       isActive: true,
-      approvalStatus: "approved",
+      approvalStatus: { $ne: "rejected" },
       currentDeliveryId: { $exists: false },
     }).populate("userId", "name phone avatarUrl");
 

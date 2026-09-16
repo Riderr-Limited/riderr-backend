@@ -181,7 +181,7 @@ const findAndAssignDriver = async (delivery, vehicleType) => {
       isAvailable: true,
       isActive: true,
       isVerified: true,
-      approvalStatus: 'approved',
+      approvalStatus: { $ne: 'rejected' },
       isSuspended: false,
       currentTripId: null,
       currentStatus: 'online',

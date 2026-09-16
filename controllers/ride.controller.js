@@ -130,7 +130,7 @@ export const createRide = async (req, res) => {
       isOnline: true,
       isAvailable: true,
       isActive: true,
-      approvalStatus: "approved",
+      approvalStatus: { $ne: "rejected" },
       vehicleType,
       currentDeliveryId: null,
     }).populate("userId", "_id");

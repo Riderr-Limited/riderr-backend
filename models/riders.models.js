@@ -360,7 +360,7 @@ DriverSchema.virtual('canAcceptRides').get(function() {
     this.isOnline &&
     this.isAvailable &&
     this.isVerified &&
-    this.approvalStatus === 'approved' &&
+    this.approvalStatus !== 'rejected' &&
     !this.isSuspended &&
     this.currentStatus !== 'on_trip'
   );
@@ -553,7 +553,7 @@ DriverSchema.statics.findNearby = function(longitude, latitude, maxDistance = 50
     isAvailable: true,
     isActive: true,
     isVerified: true,
-    approvalStatus: 'approved',
+    approvalStatus: { $ne: 'rejected' },
     isSuspended: false,
     currentStatus: { $in: ['online', 'busy'] },
     location: {
