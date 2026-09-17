@@ -2075,86 +2075,116 @@ export const assignDriver = async (req, res) => {
     const { deliveryId } = req.params;
     const { driverId } = req.body;
 
+    if (!driverId) {
+      return res.status(400).json({ success: false, message: "driverId is required" });
+    }
+
     const [delivery, driver] = await Promise.all([
       Delivery.findById(deliveryId).populate("customerId", "name"),
-      Driver.findById(driverId).populate("userId", "name"),
+      Driver.findById(driverId).populate("userId", "name phone").populate("companyId", "name"),
     ]);
 
     if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found",
-      });
+      return res.status(404).json({ success: false, message: "Delivery not found" });
     }
 
     if (!driver) {
-      return res.status(404).json({
-        success: false,
-        message: "Driver not found",
-      });
+      return res.status(404).json({ success: false, message: "Driver not found" });
     }
 
-    if (!driver.isActive || !driver.isVerified) {
-      return res.status(400).json({
-        success: false,
-        message: "Driver is not active or verified",
-      });
+    if (!driver.isActive) {
+      return res.status(400).json({ success: false, message: "Driver account is not active" });
+    }
+
+    if (driver.currentDeliveryId) {
+      return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
     }
 
     const oldDriverId = delivery.driverId;
-    delivery.driverId = driver._id;
-    delivery.status = "driver_assigned";
-    delivery.driverAssignedAt = new Date();
-    delivery.adminAssigned = true;
-    await delivery.save();
 
-    // Notify new driver
+    delivery.driverId = driver._id;
+    delivery.companyId = driver.companyId?._id || driver.companyId || delivery.companyId;
+    delivery.status = "assigned";
+    delivery.assignedAt = new Date();
+    delivery.adminAssigned = true;
+    delivery.driverDetails = {
+      driverId: driver._id,
+      userId: driver.userId._id,
+      name: driver.userId.name,
+      phone: driver.userId.phone,
+      vehicle: {
+        type: driver.vehicleType,
+        make: driver.vehicleMake || "",
+        model: driver.vehicleModel || "",
+        plateNumber: driver.plateNumber,
+      },
+    };
+
+    driver.currentDeliveryId = delivery._id;
+    driver.isAvailable = false;
+
+    await Promise.all([delivery.save(), driver.save()]);
+
     if (driver.userId) {
       await sendNotification({
         userId: driver.userId._id,
         title: "New Delivery Assigned",
-        message: "You have been assigned a new delivery by admin",
-        type: "delivery_assigned",
-        data: { deliveryId: delivery._id },
+        message: `You have been assigned delivery #${delivery.referenceId} by admin`,
+        type: "delivery",
+        subType: "new_assignment",
+        priority: "high",
+        data: { deliveryId: delivery._id, referenceId: delivery.referenceId },
       });
     }
 
-    // Notify old driver if exists
-    if (oldDriverId) {
-      const oldDriver = await Driver.findById(oldDriverId).populate("userId");
+    if (oldDriverId && oldDriverId.toString() !== driverId) {
+      const oldDriver = await Driver.findById(oldDriverId).populate("userId", "_id");
       if (oldDriver?.userId) {
         await sendNotification({
           userId: oldDriver.userId._id,
           title: "Delivery Reassigned",
-          message: "Your delivery has been reassigned to another driver",
-          type: "delivery_reassigned",
+          message: "A delivery has been reassigned to another driver by admin",
+          type: "delivery",
+          subType: "delivery_cancelled",
           data: { deliveryId: delivery._id },
         });
       }
     }
 
-    // Notify customer
     if (delivery.customerId) {
       await sendNotification({
         userId: delivery.customerId._id,
         title: "Driver Assigned",
         message: `${driver.userId.name} has been assigned to your delivery`,
-        type: "driver_assigned",
-        data: { deliveryId: delivery._id },
+        type: "delivery",
+        subType: "delivery_accepted",
+        data: { deliveryId: delivery._id, driverName: driver.userId.name },
       });
     }
 
     res.status(200).json({
       success: true,
       message: "Driver assigned successfully",
-      data: delivery,
+      data: {
+        delivery: {
+          _id: delivery._id,
+          referenceId: delivery.referenceId,
+          status: delivery.status,
+          assignedAt: delivery.assignedAt,
+        },
+        driver: {
+          _id: driver._id,
+          name: driver.userId.name,
+          phone: driver.userId.phone,
+          plateNumber: driver.plateNumber,
+          vehicleType: driver.vehicleType,
+          company: driver.companyId?.name || null,
+        },
+      },
     });
   } catch (error) {
     console.error("Assign driver error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to assign driver",
-    });
+    res.status(500).json({ success: false, message: "Failed to assign driver" });
   }
 };
 
