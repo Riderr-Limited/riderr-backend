@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "create-admin": "node scripts/createAdmin.js",
-    "create-super-admin": "node scripts/createSuperAdmin.js"
+    "create-super-admin": "node scripts/createSuperAdmin.js",
+    "seed-test": "node scripts/seedTestDeliveries.js"
   },
   "repository": {
     "type": "git",
