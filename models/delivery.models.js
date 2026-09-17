@@ -205,6 +205,12 @@ const deliverySchema = new mongoose.Schema({
     default: null,
   },
 
+  // Tracks last time admin was alerted about this delivery being unassigned
+  lastAdminAlertAt: {
+    type: Date,
+    default: null,
+  },
+
   cancelledBy: {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     role: String,

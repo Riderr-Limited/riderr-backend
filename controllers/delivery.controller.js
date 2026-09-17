@@ -9,6 +9,18 @@ import { sendNotification, NotificationTemplates } from "../utils/notification.j
 import crypto from "crypto";
 import { smartReverseGeocode } from "../utils/geocoding.js";
 import Payment from '../models/payments.models.js'
+
+// Notify all admin users
+const notifyAdmins = async (title, message, data = {}) => {
+  try {
+    const admins = await User.find({ role: "admin", isActive: true }).select("_id").lean();
+    await Promise.all(admins.map((admin) =>
+      sendNotification({ userId: admin._id, type: "delivery", subType: "alert", title, message, data, priority: "high" })
+    ));
+  } catch (err) {
+    console.error("notifyAdmins error:", err.message);
+  }
+};
 /**
  * UTILITY FUNCTIONS
  */
@@ -2581,6 +2593,13 @@ export const createDeliveryRequest = async (req, res) => {
 
     console.log(` Delivery created: ${delivery._id} (${delivery.referenceId})`);
 
+    // Notify all admins about every new delivery
+    await notifyAdmins(
+      "New Delivery Request",
+      `New delivery #${delivery.referenceId} from ${delivery.customerName}. Pickup: ${delivery.pickup.address || "N/A"}. Fare: ${delivery.fare.totalFare.toLocaleString()}`,
+      { type: "new_delivery", deliveryId: delivery._id, referenceId: delivery.referenceId, status: "created" }
+    );
+
     await sendNotification({
       userId: customer._id,
       ...NotificationTemplates.DELIVERY_CREATED(
@@ -2689,41 +2708,18 @@ export const createDeliveryRequest = async (req, res) => {
 
     console.log(` Notifying ${driversNearPickup.length} nearby drivers`);
 
-    //  NO DRIVERS FOUND  return nearby companies as fallback 
+    //  NO DRIVERS FOUND  notify admin instead of showing company list
     if (driversNearPickup.length === 0) {
-      const allCompanies = await Company.find({
-        status: "active",
-        isActive: true,
-        isDeleted: false,
-      })
-        .select("name slug city state lga address contactPhone logoUrl location lat lng stats settings.operatingHours")
-        .lean();
-
-      // Sort companies by distance to pickup location (nearest first)
-      const companiesWithDistance = allCompanies
-        .map((company) => {
-          let companyLat, companyLng;
-
-          if (company.location?.coordinates?.length >= 2) {
-            companyLng = company.location.coordinates[0];
-            companyLat = company.location.coordinates[1];
-          } else if (company.lat && company.lng) {
-            companyLat = company.lat;
-            companyLng = company.lng;
-          } else {
-            return null;
-          }
-
-          const dist = calculateDistance(pickup.lat, pickup.lng, companyLat, companyLng);
-          return { ...company, distanceFromPickup: parseFloat(dist.toFixed(2)), distanceText: `${dist.toFixed(1)} km away` };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
+      await notifyAdmins(
+        "No Drivers Available",
+        `Delivery #${delivery.referenceId} has no available drivers nearby. Customer: ${delivery.customerName}. Pickup: ${delivery.pickup.address || "N/A"}. Fare: ${delivery.fare.totalFare.toLocaleString()}`,
+        { type: "no_drivers_available", deliveryId: delivery._id, referenceId: delivery.referenceId, pickup: delivery.pickup, fare: delivery.fare }
+      );
 
       return res.status(200).json({
         success: true,
         noDriversFound: true,
-        message: "No drivers available near your pickup location. Please select a delivery company to handle your order.",
+        message: "Your delivery request has been created. We are searching for available drivers and will notify you once one is assigned.",
         data: {
           delivery: {
             _id: delivery._id,
@@ -2735,12 +2731,9 @@ export const createDeliveryRequest = async (req, res) => {
             payment: delivery.payment,
             createdAt: delivery.createdAt,
           },
-          companies: companiesWithDistance,
-          nextStep: "Pick a company and resubmit with companyId",
         },
       });
     }
-    // 
 
     for (const driver of driversNearPickup) {
       if (!driver.userId) continue;
