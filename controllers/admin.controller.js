@@ -2147,7 +2147,9 @@ export const assignDriver = async (req, res) => {
 
     const [delivery, driver] = await Promise.all([
       Delivery.findById(deliveryId).populate("customerId", "name"),
-      Driver.findById(driverId).populate("userId", "name phone").populate("companyId", "name"),
+      Driver.findById(driverId)
+        .populate("userId", "name phone")
+        .populate("companyId", "name"),
     ]);
 
     if (!delivery) {
@@ -2166,6 +2168,11 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
     }
 
+    // Safe name/phone — fallback if userId populate returned null
+    const driverName = driver.userId?.name || driver.driverName || "Driver";
+    const driverPhone = driver.userId?.phone || driver.driverPhone || "";
+    const driverUserId = driver.userId?._id || driver.userId;
+
     const oldDriverId = delivery.driverId;
 
     delivery.driverId = driver._id;
@@ -2175,9 +2182,9 @@ export const assignDriver = async (req, res) => {
     delivery.adminAssigned = true;
     delivery.driverDetails = {
       driverId: driver._id,
-      userId: driver.userId._id,
-      name: driver.userId.name,
-      phone: driver.userId.phone,
+      userId: driverUserId,
+      name: driverName,
+      phone: driverPhone,
       vehicle: {
         type: driver.vehicleType,
         make: driver.vehicleMake || "",
@@ -2191,9 +2198,10 @@ export const assignDriver = async (req, res) => {
 
     await Promise.all([delivery.save(), driver.save()]);
 
-    if (driver.userId) {
+    // Notify driver if userId exists
+    if (driverUserId) {
       await sendNotification({
-        userId: driver.userId._id,
+        userId: driverUserId,
         title: "New Delivery Assigned",
         message: `You have been assigned delivery #${delivery.referenceId} by admin`,
         type: "delivery",
@@ -2203,9 +2211,10 @@ export const assignDriver = async (req, res) => {
       });
     }
 
+    // Notify old driver if reassigning
     if (oldDriverId && oldDriverId.toString() !== driverId) {
       const oldDriver = await Driver.findById(oldDriverId).populate("userId", "_id");
-      if (oldDriver?.userId) {
+      if (oldDriver?.userId?._id) {
         await sendNotification({
           userId: oldDriver.userId._id,
           title: "Delivery Reassigned",
@@ -2217,14 +2226,15 @@ export const assignDriver = async (req, res) => {
       }
     }
 
-    if (delivery.customerId) {
+    // Notify customer
+    if (delivery.customerId?._id) {
       await sendNotification({
         userId: delivery.customerId._id,
         title: "Driver Assigned",
-        message: `${driver.userId.name} has been assigned to your delivery`,
+        message: `${driverName} has been assigned to your delivery`,
         type: "delivery",
         subType: "delivery_accepted",
-        data: { deliveryId: delivery._id, driverName: driver.userId.name },
+        data: { deliveryId: delivery._id, driverName },
       });
     }
 
@@ -2240,8 +2250,8 @@ export const assignDriver = async (req, res) => {
         },
         driver: {
           _id: driver._id,
-          name: driver.userId.name,
-          phone: driver.userId.phone,
+          name: driverName,
+          phone: driverPhone,
           plateNumber: driver.plateNumber,
           vehicleType: driver.vehicleType,
           company: driver.companyId?.name || null,
@@ -2250,7 +2260,7 @@ export const assignDriver = async (req, res) => {
     });
   } catch (error) {
     console.error("Assign driver error:", error);
-    res.status(500).json({ success: false, message: "Failed to assign driver" });
+    res.status(500).json({ success: false, message: "Failed to assign driver", error: process.env.NODE_ENV === "development" ? error.message : undefined });
   }
 };
 
