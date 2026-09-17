@@ -952,6 +952,72 @@ export const resetUserPassword = async (req, res) => {
  */
 
 /**
+ * @desc    Get all drivers for assignment dropdown (no restrictions)
+ * @route   GET /api/admin/drivers/for-assignment
+ * @access  Private (Admin)
+ */
+export const getDriversForAssignment = async (req, res) => {
+  try {
+    const { search, companyId } = req.query;
+
+    const query = {};
+    if (companyId) query.companyId = companyId;
+
+    if (search) {
+      const users = await User.find({
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { phone: { $regex: search, $options: "i" } },
+        ],
+      }).select("_id");
+      query.userId = { $in: users.map((u) => u._id) };
+    }
+
+    const drivers = await Driver.find(query)
+      .populate("userId", "name phone email avatarUrl")
+      .populate("companyId", "name")
+      .select("_id userId companyId vehicleType vehicleColor plateNumber isOnline isAvailable approvalStatus isSuspended currentDeliveryId")
+      .lean();
+
+    const data = drivers.map((d) => ({
+      _id: d._id,
+      name: d.userId?.name || "Unknown",
+      phone: d.userId?.phone || "",
+      email: d.userId?.email || "",
+      avatarUrl: d.userId?.avatarUrl || null,
+      company: d.companyId?.name || "No Company",
+      companyId: d.companyId?._id || null,
+      vehicleType: d.vehicleType,
+      vehicleColor: d.vehicleColor,
+      plateNumber: d.plateNumber,
+      isOnline: d.isOnline,
+      isAvailable: d.isAvailable,
+      approvalStatus: d.approvalStatus,
+      isSuspended: d.isSuspended,
+      hasActiveDelivery: !!d.currentDeliveryId,
+      status: d.isSuspended
+        ? "suspended"
+        : d.currentDeliveryId
+        ? "busy"
+        : d.isOnline && d.isAvailable
+        ? "available"
+        : d.isOnline
+        ? "online"
+        : "offline",
+    }));
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("getDriversForAssignment error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch drivers" });
+  }
+};
+
+/**
  * @desc    Get all drivers with filtering
  * @route   GET /api/admin/drivers
  * @access  Private (Admin)

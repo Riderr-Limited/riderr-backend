@@ -20,6 +20,7 @@ import {
 
   // Driver Management
   getAllDrivers,
+  getDriversForAssignment,
   getDriverById,
   updateDriver,
   approveDriver,
@@ -134,6 +135,7 @@ router.post("/users/:userId/reset-password", resetUserPassword);
  *         description: Drivers list
  */
 router.get("/drivers", getAllDrivers);
+router.get("/drivers/for-assignment", getDriversForAssignment);
 router.get("/drivers/:driverId", getDriverById);
 router.put("/drivers/:driverId", updateDriver);
 router.put("/drivers/:driverId/approve", approveDriver);
