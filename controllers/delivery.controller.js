@@ -2245,10 +2245,19 @@ export const calculateDeliveryFare = async (req, res) => {
         isActive: true,
         isAvailable: true,
         approvalStatus: { $ne: "rejected" },
-        currentDeliveryId: { $exists: false },
-        $or: [
-          { "location.coordinates": { $exists: true, $ne: [0, 0] } },
-          { "currentLocation.lat": { $exists: true } },
+        $and: [
+          {
+            $or: [
+              { currentDeliveryId: { $exists: false } },
+              { currentDeliveryId: null },
+            ],
+          },
+          {
+            $or: [
+              { "location.coordinates": { $exists: true, $ne: [0, 0] } },
+              { "currentLocation.lat": { $exists: true } },
+            ],
+          },
         ],
       })
         .select("currentLocation location vehicleType")
@@ -2670,10 +2679,19 @@ export const createDeliveryRequest = async (req, res) => {
       isOnline: true,
       isActive: true,
       approvalStatus: { $ne: "rejected" },
-      currentDeliveryId: { $exists: false },
-      $or: [
-        { "location.coordinates": { $exists: true, $ne: [0, 0] } },
-        { "currentLocation.lat": { $exists: true } },
+      $and: [
+        {
+          $or: [
+            { currentDeliveryId: { $exists: false } },
+            { currentDeliveryId: null },
+          ],
+        },
+        {
+          $or: [
+            { "location.coordinates": { $exists: true, $ne: [0, 0] } },
+            { "currentLocation.lat": { $exists: true } },
+          ],
+        },
       ],
     }).populate("userId", "name phone avatarUrl");
 
