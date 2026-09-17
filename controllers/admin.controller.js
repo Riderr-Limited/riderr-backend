@@ -1870,10 +1870,8 @@ export const getAllDeliveries = async (req, res) => {
       .populate("customerId", "name email phone")
       .populate({
         path: "driverId",
-        populate: {
-          path: "userId",
-          select: "name phone",
-        },
+        select: "plateNumber vehicleType vehicleColor",
+        populate: { path: "userId", select: "name phone" },
       })
       .populate("companyId", "name")
       .populate("partnerId", "businessName contactEmail")
@@ -2155,6 +2153,14 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ success: false, message: "driverId is required" });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(deliveryId)) {
+      return res.status(400).json({ success: false, message: "Invalid delivery ID" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(driverId)) {
+      return res.status(400).json({ success: false, message: "Invalid driver ID" });
+    }
+
     const [delivery, driver] = await Promise.all([
       Delivery.findById(deliveryId).populate("customerId", "name"),
       Driver.findById(driverId)
@@ -2176,6 +2182,18 @@ export const assignDriver = async (req, res) => {
 
     if (driver.currentDeliveryId) {
       return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
+    }
+
+    // Block reassignment if delivery already has a driver
+    if (delivery.driverId) {
+      return res.status(400).json({
+        success: false,
+        message: `This delivery is already assigned to a driver. Cancel it first before reassigning.`,
+        data: {
+          assignedDriverId: delivery.driverId,
+          assignedDriverName: delivery.driverDetails?.name || "Unknown",
+        },
+      });
     }
 
     // Safe name/phone — fallback if userId populate returned null
