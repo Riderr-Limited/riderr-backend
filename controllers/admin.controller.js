@@ -970,46 +970,56 @@ export const getDriversForAssignment = async (req, res) => {
           { phone: { $regex: search, $options: "i" } },
         ],
       }).select("_id");
-      query.userId = { $in: users.map((u) => u._id) };
+      query.$or = [
+        { userId: { $in: users.map((u) => u._id) } },
+        { plateNumber: { $regex: search, $options: "i" } },
+      ];
     }
 
     const drivers = await Driver.find(query)
-      .populate("userId", "name phone email avatarUrl")
+      .populate("userId", "name phone email avatarUrl isActive")
       .populate("companyId", "name")
       .select("_id userId companyId vehicleType vehicleColor plateNumber isOnline isAvailable approvalStatus isSuspended currentDeliveryId")
       .lean();
 
-    const data = drivers.map((d) => ({
-      _id: d._id,
-      name: d.userId?.name || "Unknown",
-      phone: d.userId?.phone || "",
-      email: d.userId?.email || "",
-      avatarUrl: d.userId?.avatarUrl || null,
-      company: d.companyId?.name || "No Company",
-      companyId: d.companyId?._id || null,
-      vehicleType: d.vehicleType,
-      vehicleColor: d.vehicleColor,
-      plateNumber: d.plateNumber,
-      isOnline: d.isOnline,
-      isAvailable: d.isAvailable,
-      approvalStatus: d.approvalStatus,
-      isSuspended: d.isSuspended,
-      hasActiveDelivery: !!d.currentDeliveryId,
-      status: d.isSuspended
-        ? "suspended"
-        : d.currentDeliveryId
-        ? "busy"
-        : d.isOnline && d.isAvailable
-        ? "available"
-        : d.isOnline
-        ? "online"
-        : "offline",
+    // For drivers where populate returned null, fetch user directly
+    const enriched = await Promise.all(drivers.map(async (d) => {
+      let user = d.userId;
+      if (!user && d.userId) {
+        user = await User.findById(d.userId).select("name phone email avatarUrl").lean();
+      }
+      return {
+        _id: d._id,
+        name: user?.name || "Unknown",
+        phone: user?.phone || "",
+        email: user?.email || "",
+        avatarUrl: user?.avatarUrl || null,
+        company: d.companyId?.name || "No Company",
+        companyId: d.companyId?._id || null,
+        vehicleType: d.vehicleType,
+        vehicleColor: d.vehicleColor,
+        plateNumber: d.plateNumber,
+        isOnline: d.isOnline,
+        isAvailable: d.isAvailable,
+        approvalStatus: d.approvalStatus,
+        isSuspended: d.isSuspended,
+        hasActiveDelivery: !!d.currentDeliveryId,
+        status: d.isSuspended
+          ? "suspended"
+          : d.currentDeliveryId
+          ? "busy"
+          : d.isOnline && d.isAvailable
+          ? "available"
+          : d.isOnline
+          ? "online"
+          : "offline",
+      };
     }));
 
     res.status(200).json({
       success: true,
-      count: data.length,
-      data,
+      count: enriched.length,
+      data: enriched,
     });
   } catch (error) {
     console.error("getDriversForAssignment error:", error);
