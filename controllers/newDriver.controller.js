@@ -87,6 +87,7 @@ export const uploadDocument = async (req, res) => {
     }
 
     // Check if document type already exists
+    if (!driver.documents) driver.documents = [];
     const existingDocIndex = driver.documents.findIndex(doc => doc.type === type);
     
     if (existingDocIndex > -1) {

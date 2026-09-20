@@ -128,7 +128,7 @@ export const createDelivery = async (req, res) => {
           userId: nearestDriver.userId._id,
           name: nearestDriver.userId.name,
           phone: nearestDriver.userId.phone,
-          avatarUrl: nearestDriver.documents.find(d => d.type === 'profile_photo')?.url,
+          avatarUrl: nearestDriver.documents?.find(d => d.type === 'profile_photo')?.url,
           vehicle: {
             type: nearestDriver.vehicleType,
             make: nearestDriver.vehicleMake,
@@ -254,7 +254,7 @@ export const acceptDelivery = async (req, res) => {
       userId: driver.userId._id,
       name: driver.userId.name,
       phone: driver.userId.phone,
-      avatarUrl: driver.documents.find(d => d.type === 'profile_photo')?.url,
+      avatarUrl: driver.documents?.find(d => d.type === 'profile_photo')?.url,
       vehicle: {
         type: driver.vehicleType,
         make: driver.vehicleMake,

@@ -345,12 +345,12 @@ DriverSchema.virtual('isDocumentsComplete').get(function() {
     'vehicle_photo'
   ];
   
-  const uploadedDocs = this.documents.map(d => d.type);
+  const uploadedDocs = (this.documents || []).map(d => d.type);
   return requiredDocs.every(doc => uploadedDocs.includes(doc));
 });
 
 DriverSchema.virtual('isDocumentsVerified').get(function() {
-  if (this.documents.length === 0) return false;
+  if (!this.documents || this.documents.length === 0) return false;
   return this.documents.every(d => d.verified === true);
 });
 
