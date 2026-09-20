@@ -1516,6 +1516,69 @@ export const deleteUser = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Permanently delete own account
+ * @route   DELETE /api/users/account
+ * @access  Private
+ */
+export const deleteOwnAccount = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const userId = req.user._id;
+    const { password } = req.body;
+
+    if (!password) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, message: "Password is required to delete account" });
+    }
+
+    const user = await User.findById(userId).select("+password").session(session);
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(401).json({ success: false, message: "Incorrect password" });
+    }
+
+    if (user.role === "driver") {
+      const driver = await Driver.findOne({ userId }).session(session);
+      if (driver) {
+        if (driver.currentDeliveryId) {
+          const delivery = await Delivery.findById(driver.currentDeliveryId).session(session);
+          if (delivery && !["delivered", "cancelled", "failed"].includes(delivery.status)) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: "Cannot delete account while on an active delivery" });
+          }
+        }
+        await Driver.findByIdAndDelete(driver._id).session(session);
+      }
+    }
+
+    await User.findByIdAndDelete(userId).session(session);
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({ success: true, message: "Account permanently deleted" });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Delete own account error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete account" });
+  }
+};
+
 // Helper function to send notifications
 const sendNotification = async ({ userId, title, message, data }) => {
   try {

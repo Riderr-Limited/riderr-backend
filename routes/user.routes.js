@@ -25,7 +25,8 @@ import {
   getDriverDetails,
   getAllUsers,
   updateUser,
-  deleteUser
+  deleteUser,
+  deleteOwnAccount
 } from "../controllers/user.controller.js";
 import  authenticate  from "../middlewares/authenticate.js";
 import { validateUpdateProfile, validateCreateDriver } from "../middlewares/validation.middleware.js";
@@ -119,6 +120,31 @@ router.put("/change-password", changePassword);
  *         description: Account deactivated
  */
 router.delete("/deactivate", deactivateAccount);
+
+/**
+ * @swagger
+ * /users/account:
+ *   delete:
+ *     tags: [Users]
+ *     summary: Permanently delete own account
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password: { type: string, description: Confirm with current password }
+ *     responses:
+ *       200:
+ *         description: Account permanently deleted
+ *       400:
+ *         description: Active delivery in progress
+ *       401:
+ *         description: Incorrect password
+ */
+router.delete("/account", deleteOwnAccount);
 
 /**
  * @swagger
