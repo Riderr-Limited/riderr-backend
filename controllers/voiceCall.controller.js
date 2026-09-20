@@ -3,6 +3,7 @@ import Delivery from "../models/delivery.models.js";
 import Ride from "../models/ride.model.js";
 import User from "../models/user.models.js";
 import crypto from "crypto";
+import { sendNotification } from "../utils/notification.js";
 import pkg from "agora-token";
 const { RtcTokenBuilder, RtcRole } = pkg;
 
@@ -143,6 +144,20 @@ export const initiateVoiceCall = async (req, res) => {
         },
       });
     }
+
+    // Also send a push/in-app notification (same mechanism as delivery/ride
+    // status updates) so the callee is alerted even if their socket isn't
+    // connected right now (app backgrounded/killed).
+    sendNotification({
+      userId: receiverId,
+      type: "call",
+      subType: "incoming_call",
+      title: "Incoming Call",
+      message: `${caller.name} is calling you`,
+      data: { callId, contextType, contextId, callerId, callerName: caller.name },
+      priority: "urgent",
+      actionLabel: "Answer",
+    }).catch((err) => console.error("Incoming call notification error:", err));
   } catch (error) {
     console.error("Initiate voice call error:", error);
     res.status(500).json({ success: false, message: "Failed to initiate call" });
@@ -227,6 +242,22 @@ export const endVoiceCall = async (req, res) => {
         endedBy: userId,
         duration,
       });
+    }
+
+    // If the receiver never answered, let them know they missed a call —
+    // same notification mechanism as everywhere else, so it still reaches
+    // them even if they weren't connected to the socket at the time.
+    if (call.status === "missed") {
+      const caller = await User.findById(call.caller).select("name");
+      sendNotification({
+        userId: call.receiver,
+        type: "call",
+        subType: "missed_call",
+        title: "Missed Call",
+        message: `You missed a call from ${caller?.name || "someone"}`,
+        data: { callId, callerId: call.caller },
+        priority: "high",
+      }).catch((err) => console.error("Missed call notification error:", err));
     }
   } catch (error) {
     console.error("End voice call error:", error);

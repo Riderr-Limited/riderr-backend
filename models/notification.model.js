@@ -39,7 +39,8 @@ const NotificationSchema = new mongoose.Schema(
         "support",       // Support messages
         "driver",        // Driver specific
         "company",       // Company admin specific
-        "announcement"   // General announcements
+        "announcement",  // General announcements
+        "call"           // Voice call related
       ],
       default: "system",
       index: true
@@ -90,7 +91,11 @@ const NotificationSchema = new mongoose.Schema(
         "welcome",
         "verification",
         "reminder",
-        "alert"
+        "alert",
+
+        // Call related
+        "incoming_call",
+        "missed_call"
       ],
       index: true
     },
