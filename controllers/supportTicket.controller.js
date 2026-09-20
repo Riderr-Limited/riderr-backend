@@ -1,5 +1,4 @@
 import SupportTicket from "../models/supportTicket.model.js";
-import ChatMessage from "../models/chatMessage.model.js";
 import { validationResult } from "express-validator";
 import { sendNotification, NotificationTemplates } from "../utils/notification.js";
 import User from "../models/user.models.js";
@@ -94,6 +93,36 @@ export const getTicketMessages = async (req, res) => {
     const userId = req.user._id;
     const isAdmin = req.user.role === "admin";
 
+    const ticket = await SupportTicket.findOne({ ticketId }).populate(
+      "messages.senderId",
+      "name email role"
+    );
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: "Ticket not found" });
+    }
+
+    if (!isAdmin && ticket.user.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    return res.status(200).json({ success: true, data: ticket.messages });
+  } catch (error) {
+    console.error("Get messages error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const sendTicketMessage = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { message } = req.body;
+    const userId = req.user._id;
+    const isAdmin = req.user.role === "admin";
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, message: "Message is required" });
+    }
+
     const ticket = await SupportTicket.findOne({ ticketId });
     if (!ticket) {
       return res.status(404).json({ success: false, message: "Ticket not found" });
@@ -103,13 +132,40 @@ export const getTicketMessages = async (req, res) => {
       return res.status(403).json({ success: false, message: "Unauthorized" });
     }
 
-    const messages = await ChatMessage.find({ ticketId })
-      .populate("senderId", "name email")
-      .sort({ timestamp: 1 });
+    const newMessage = {
+      senderId: userId,
+      senderRole: req.user.role,
+      message: message.trim(),
+      createdAt: new Date(),
+    };
+    ticket.messages.push(newMessage);
+    await ticket.save();
 
-    return res.status(200).json({ success: true, data: messages });
+    // Notify the other party: admin sent a reply -> notify ticket owner;
+    // ticket owner sent a message -> notify every admin.
+    if (isAdmin) {
+      await sendNotification({
+        userId: ticket.user,
+        ...NotificationTemplates.SUPPORT_NEW_MESSAGE(ticket.ticketId, req.user.name),
+      });
+    } else {
+      const admins = await User.find({ role: "admin", isActive: true, isDeleted: false }).select("_id");
+      await Promise.all(
+        admins.map((admin) =>
+          sendNotification({
+            userId: admin._id,
+            ...NotificationTemplates.SUPPORT_NEW_MESSAGE(ticket.ticketId, req.user.name),
+          })
+        )
+      );
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: ticket.messages[ticket.messages.length - 1],
+    });
   } catch (error) {
-    console.error("Get messages error:", error);
+    console.error("Send ticket message error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

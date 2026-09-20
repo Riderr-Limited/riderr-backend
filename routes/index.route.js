@@ -80,11 +80,15 @@ router.use("/pod", podRoutes);
 router.use("/errands", errandRoutes);
 router.use("/company-dashboard", companyDashboardRoutes);
 
+// Admin chat routes (mounted before /admin so it isn't shadowed by
+// admin.routes.js). Kept at both paths: /admin-chat is the original path,
+// /admin/chat is an alias for the admin dashboard, which was calling this
+// path and getting 404s because only /admin-chat existed.
+router.use("/admin-chat", adminChatRoutes);
+router.use("/admin/chat", adminChatRoutes);
+
 // Admin routes
 router.use("/admin", adminRoutes);
-
-// Admin chat routes
-router.use("/admin-chat", adminChatRoutes);
 
 // Contact form routes
 router.use("/contact", contactRoutes);

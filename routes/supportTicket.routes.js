@@ -10,6 +10,7 @@ import {
   getTickets,
   getTicketById,
   getTicketMessages,
+  sendTicketMessage,
   updateTicketStatus,
 } from "../controllers/supportTicket.controller.js";
 import { createSupportTicketValidator } from "../middlewares/supportTicket.validator.js";
@@ -87,6 +88,7 @@ router.get("/tickets", authenticate, getTickets);
  */
 router.get("/tickets/:ticketId", authenticate, getTicketById);
 router.get("/tickets/:ticketId/messages", authenticate, getTicketMessages);
+router.post("/tickets/:ticketId/messages", authenticate, sendTicketMessage);
 router.patch("/tickets/:ticketId", authenticate, updateTicketStatus);
 
 export default router;

@@ -2658,6 +2658,17 @@ export const updateSupportTicket = async (req, res) => {
       });
     }
 
+    // A response is also a message in the shared thread the ticket owner sees
+    if (response !== undefined) {
+      ticket.messages.push({
+        senderId: req.user._id,
+        senderRole: "admin",
+        message: response,
+        createdAt: new Date(),
+      });
+      await ticket.save();
+    }
+
     // Notify user if status changed or response added
     if ((status || response) && ticket.user) {
       await sendNotification({
@@ -2666,7 +2677,8 @@ export const updateSupportTicket = async (req, res) => {
         message:
           response ||
           `Your support ticket status has been updated to: ${status}`,
-        type: "ticket_update",
+        type: "support",
+        subType: "alert",
         data: {
           ticketId: ticket._id,
           ticketNumber: ticket.ticketId,
