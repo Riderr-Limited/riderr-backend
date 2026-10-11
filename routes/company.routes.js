@@ -37,6 +37,14 @@ import { body } from "express-validator";
 
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
+import {
+  getOpenDeliveryRequests,
+  companyAcceptDelivery,
+  companyAssignDriver,
+  getCompanyManagedDeliveries,
+  companyUpdateDeliveryStatus,
+  getCompanyDeliveryStats,
+} from '../controllers/companyDelivery.controller.js';
 
 const router = express.Router();
 
@@ -218,5 +226,19 @@ router.post('/documents', handleUploadError, manageCompanyDocuments);
  */
 // ============ COMPANY NOTIFICATIONS ============
 router.get('/notifications', getCompanyNotifications);
+
+// ============ COMPANY DELIVERY MANAGEMENT ============
+// Get all open delivery requests (no location filter)
+router.get('/delivery-requests', getOpenDeliveryRequests);
+// Accept a delivery request
+router.post('/delivery-requests/:deliveryId/accept', companyAcceptDelivery);
+// Assign one of the company's drivers to an accepted delivery
+router.post('/delivery-requests/:deliveryId/assign-driver', companyAssignDriver);
+// Get all deliveries managed by this company
+router.get('/managed-deliveries', getCompanyManagedDeliveries);
+// Update delivery status (picked_up / delivered / cancelled)
+router.patch('/managed-deliveries/:deliveryId/status', companyUpdateDeliveryStatus);
+// Delivery stats for company dashboard
+router.get('/delivery-stats', getCompanyDeliveryStats);
 
 export default router;
