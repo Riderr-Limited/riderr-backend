@@ -107,7 +107,11 @@ const startServer = async () => {
       cors: {
         origin: [
           "http://localhost:3000",
-          "http://localhost:3001", 
+          "http://localhost:3001",
+          "http://127.0.0.1:3000",
+          "http://localhost:8081",
+          "http://127.0.0.1:8081",
+          "http://localhost:19006",
           "https://riderr.ng",
           "https://www.riderr.ng",
           "https://riderrr.vercel.app",
