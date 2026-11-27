@@ -2096,6 +2096,20 @@ export const handlePaystackWebhook = async (req, res) => {
           delivery.waitingForPayment = false;
           await delivery.save();
 
+          // Tell the customer too (push, and WhatsApp if they booked there)
+          await sendNotification({
+            userId: payment.customerId,
+            type: "payment",
+            subType: "payment_success",
+            title: "Payment Confirmed",
+            message: `We received ${payment.amount.toLocaleString()} NGN for delivery #${delivery.referenceId}. Thank you!`,
+            data: {
+              type: "payment_success",
+              deliveryId: delivery._id,
+              paymentId: payment._id,
+            },
+          });
+
           if (delivery.driverId) {
             const driver = await Driver.findById(delivery.driverId).populate(
               "userId",
