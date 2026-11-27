@@ -1,6 +1,7 @@
 import Notification from "../models/notification.model.js";
 import User from "../models/user.models.js";
 import { Expo } from "expo-server-sdk";
+import { notifyUserOnWhatsApp } from "../services/whatsapp/client.js";
 
 const expo = new Expo();
 
@@ -48,6 +49,9 @@ export const sendNotification = async ({
           "deliveryMethods.push.sentAt": new Date(),
         });
       }
+
+      // Also send to WhatsApp for customers who use Riderr there (no-op otherwise)
+      notifyUserOnWhatsApp(userId, { title, message, data }).catch(() => null);
     }
 
     return notification;

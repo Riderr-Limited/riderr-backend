@@ -11,6 +11,7 @@ import newDeliveryRoutes from "./routes/newDelivery.routes.js";
 import testRoutes from "./routes/test.routes.js";
 import partnerDeliveryRoutes from "./routes/partnerDelivery.routes.js";
 import partnerAdminRoutes from "./routes/partnerAdmin.routes.js";
+import whatsappRoutes from "./routes/whatsapp.routes.js";
 
 const app = express();
 
@@ -78,6 +79,12 @@ app.use(cors(corsOptions));
  */
 app.use(helmet());
 app.set("trust proxy", true);
+
+/**
+ * WhatsApp Cloud API webhook. Mounted before the JSON body parser because
+ * Meta's signature check needs the raw request body.
+ */
+app.use("/api/whatsapp", whatsappRoutes);
 
 /**
  * Body Parser Middleware
