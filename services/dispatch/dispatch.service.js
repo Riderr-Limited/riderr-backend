@@ -1,5 +1,5 @@
 // services/dispatch/dispatch.service.js
-// Priority dispatch for delivery requests.
+// Priority dispatch for delivery AND ride requests.
 //
 // Instead of pinging every nearby rider at once (first tap wins), riders are
 // ranked and offered the job in waves:
@@ -9,12 +9,13 @@
 // A new wave starts after DISPATCH_WAVE_SECONDS (default 30s) with no accept,
 // or straight away if everyone in the current wave declines.
 //
-// Rank = distance (closer is better) + rating (weighted by how many reviews)
-//        + reliability (completed vs. cancelled/failed jobs).
-// Ratings and reliability are calculated from real Delivery records, not the
-// Driver.rating / Driver.stats counters (those were never kept up to date).
+// Rank = rating weighted by review count (50%) + distance (30%)
+//        + reliability: completed vs. cancelled/failed jobs (20%).
+// Ratings and reliability are calculated from real Delivery and Ride records,
+// not the Driver.rating / Driver.stats counters (those were never kept up to date).
 import mongoose from "mongoose";
 import Delivery from "../../models/delivery.models.js";
+import Ride from "../../models/ride.model.js";
 import Driver from "../../models/riders.models.js";
 import { sendNotification, NotificationTemplates } from "../../utils/notification.js";
 
@@ -47,7 +48,9 @@ export const dispatchConfig = () => {
     ratingPriorWeight: num(process.env.DISPATCH_RATING_PRIOR_WEIGHT, 10),
     reliabilityPrior: 0.9,
     reliabilityPriorWeight: 5,
-    historyDays: num(process.env.DISPATCH_HISTORY_DAYS, 180)
+    historyDays: num(process.env.DISPATCH_HISTORY_DAYS, 180),
+    // Rides nobody accepts are cancelled after this long so the customer isn't left waiting.
+    rideSearchTimeoutMinutes: num(process.env.RIDE_SEARCH_TIMEOUT_MINUTES, 5)
   };
 };
 
@@ -77,14 +80,16 @@ export const driverCoords = (driver) => {
 };
 
 /** Riders who can take a job right now. Individual riders must be KYC-approved. */
-const eligibleDriverQuery = () => ({
+const eligibleDriverQuery = (vehicleType) => ({
   isOnline: true,
   isActive: true,
   isAvailable: true,
   isSuspended: { $ne: true },
   approvalStatus: { $ne: "rejected" },
+  ...(vehicleType ? { vehicleType } : {}),
   $and: [
     { $or: [{ currentDeliveryId: { $exists: false } }, { currentDeliveryId: null }] },
+    { $or: [{ currentTripId: { $exists: false } }, { currentTripId: null }] },
     { $or: [{ onboardingType: { $ne: "individual" } }, { "kyc.status": "approved" }] },
     {
       $or: [
@@ -96,33 +101,65 @@ const eligibleDriverQuery = () => ({
 });
 
 /**
- * Per-rider history from Delivery records: average customer rating, number
- * of ratings, and how often they finish what they accept.
+ * Per-rider history from Delivery and Ride records: customer ratings, and how
+ * often they finish what they accept.
  */
 export const getDriverHistory = async (driverIds) => {
   const { historyDays } = dispatchConfig();
   if (!driverIds.length) return new Map();
   const since = new Date(Date.now() - historyDays * 24 * 3600 * 1000);
-  const rows = await Delivery.aggregate([
-    { $match: { driverId: { $in: driverIds.map((id) => new mongoose.Types.ObjectId(String(id))) }, createdAt: { $gte: since } } },
-    {
-      $group: {
-        _id: "$driverId",
-        ratingSum: { $sum: { $cond: [{ $gte: ["$rating", 1] }, "$rating", 0] } },
-        ratingCount: { $sum: { $cond: [{ $gte: ["$rating", 1] }, 1, 0] } },
-        completed: { $sum: { $cond: [{ $in: ["$status", ["delivered", "completed"]] }, 1, 0] } },
-        failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
-        driverCancelled: {
-          $sum: { $cond: [{ $and: [{ $eq: ["$status", "cancelled"] }, { $eq: ["$cancelledBy.role", "driver"] }] }, 1, 0] }
+  const ids = driverIds.map((id) => new mongoose.Types.ObjectId(String(id)));
+
+  const [deliveries, rides] = await Promise.all([
+    Delivery.aggregate([
+      { $match: { driverId: { $in: ids }, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: "$driverId",
+          ratingSum: { $sum: { $cond: [{ $gte: ["$rating", 1] }, "$rating", 0] } },
+          ratingCount: { $sum: { $cond: [{ $gte: ["$rating", 1] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $in: ["$status", ["delivered", "completed"]] }, 1, 0] } },
+          failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
+          driverCancelled: {
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "cancelled"] }, { $eq: ["$cancelledBy.role", "driver"] }] }, 1, 0] }
+          }
         }
       }
-    }
+    ]),
+    Ride.aggregate([
+      { $match: { driverId: { $in: ids }, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: "$driverId",
+          ratingSum: { $sum: { $cond: [{ $gte: ["$rating.byCustomer.score", 1] }, "$rating.byCustomer.score", 0] } },
+          ratingCount: { $sum: { $cond: [{ $gte: ["$rating.byCustomer.score", 1] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          failed: { $sum: 0 },
+          driverCancelled: {
+            $sum: {
+              $cond: [{ $and: [{ $eq: ["$status", "cancelled"] }, { $eq: ["$cancellation.cancelledBy", "driver"] }] }, 1, 0]
+            }
+          }
+        }
+      }
+    ])
   ]);
-  return new Map(rows.map((r) => [String(r._id), r]));
+
+  const merged = new Map();
+  for (const row of [...deliveries, ...rides]) {
+    const key = String(row._id);
+    const cur = merged.get(key) || { ratingSum: 0, ratingCount: 0, completed: 0, failed: 0, driverCancelled: 0 };
+    for (const f of Object.keys(cur)) cur[f] += row[f] || 0;
+    merged.set(key, cur);
+  }
+  return merged;
 };
 
 /** Score one rider from 0 to 1. Exported so it can be unit-tested. */
-export const scoreDriver = ({ distanceKm: d, ratingSum = 0, ratingCount = 0, completed = 0, failed = 0, driverCancelled = 0 }, cfg = dispatchConfig()) => {
+export const scoreDriver = (
+  { distanceKm: d, ratingSum = 0, ratingCount = 0, completed = 0, failed = 0, driverCancelled = 0 },
+  cfg = dispatchConfig()
+) => {
   const distanceScore = Math.max(0, 1 - d / cfg.radiusKm);
 
   // Bayesian average: few ratings pull toward the prior, many ratings speak for themselves.
@@ -145,11 +182,11 @@ export const scoreDriver = ({ distanceKm: d, ratingSum = 0, ratingCount = 0, com
 };
 
 /** Eligible riders near the pickup, best first. */
-export const rankDriversForPickup = async (pickup, { excludeDriverIds = [] } = {}) => {
+export const rankDriversForPickup = async (pickup, { excludeDriverIds = [], vehicleType } = {}) => {
   const cfg = dispatchConfig();
   const exclude = new Set(excludeDriverIds.map(String));
-  const drivers = await Driver.find(eligibleDriverQuery())
-    .select("userId location currentLocation lat lng onboardingType kyc.status")
+  const drivers = await Driver.find(eligibleDriverQuery(vehicleType))
+    .select("userId location currentLocation lat lng onboardingType kyc.status vehicleType")
     .populate("userId", "_id name")
     .lean();
 
@@ -171,31 +208,6 @@ export const rankDriversForPickup = async (pickup, { excludeDriverIds = [] } = {
     .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
 };
 
-const notifyDrivers = async (delivery, ranked, io) => {
-  for (const r of ranked) {
-    try {
-      await sendNotification({
-        userId: r.driver.userId._id,
-        ...NotificationTemplates.NEW_DELIVERY_REQUEST(delivery._id, r.distanceKm, delivery.fare?.totalFare || 0)
-      });
-    } catch (e) {
-      console.error("Dispatch notify failed:", e.message);
-    }
-    if (io) {
-      io.to(`user_${r.driver.userId._id}`).emit("delivery:new_request", {
-        deliveryId: delivery._id,
-        referenceId: delivery.referenceId,
-        pickup: delivery.pickup,
-        dropoff: delivery.dropoff,
-        fare: delivery.fare,
-        payment: delivery.payment,
-        itemDetails: delivery.itemDetails,
-        distanceKm: Math.round(r.distanceKm * 10) / 10
-      });
-    }
-  }
-};
-
 const rankingSnapshot = (ranked, wave) =>
   ranked.slice(0, 20).map((r) => ({
     driverId: r.driver._id,
@@ -207,58 +219,103 @@ const rankingSnapshot = (ranked, wave) =>
     wave
   }));
 
-const isPayable = (delivery) => {
-  const method = delivery.payment?.method;
-  return !method || method === "cash" || delivery.payment?.status === "paid";
-};
-
 // ---------------------------------------------------------------------------
-// public API
+// job kinds: what differs between deliveries and rides
 // ---------------------------------------------------------------------------
 
-/**
- * Mongo filter so a rider only sees requests that have been offered to them.
- * Older deliveries (no dispatch.enabled) stay visible to everyone.
- */
-export const visibleToDriverFilter = (driverId) => ({
-  $or: [{ "dispatch.enabled": { $ne: true } }, { "dispatch.openToAll": true }, { "dispatch.notifiedDriverIds": driverId }]
-});
-
-/** Same rule for a delivery document already in memory. */
-export const isOfferedTo = (delivery, driverId) => {
-  const d = delivery.dispatch;
-  if (!d?.enabled || d.openToAll) return true;
-  return (d.notifiedDriverIds || []).some((id) => String(id) === String(driverId));
+const safeNotify = async (payload) => {
+  try {
+    await sendNotification(payload);
+  } catch (e) {
+    console.error("Dispatch notify failed:", e.message);
+  }
 };
 
-/**
- * Called when a delivery is created. Returns how many riders are nearby, and
- * how many were notified. Non-cash deliveries wait for payment; the dispatch
- * job starts them once they're paid.
- */
-export const startDispatch = async (delivery, io) => {
+const KINDS = {
+  delivery: {
+    Model: Delivery,
+    open: { status: "created", driverId: null },
+    pickupOf: (d) => ({ lat: d.pickup?.lat, lng: d.pickup?.lng }),
+    vehicleTypeOf: () => undefined,
+    isPayable: (d) => {
+      const method = d.payment?.method;
+      return !method || method === "cash" || d.payment?.status === "paid";
+    },
+    notify: async (d, r, io) => {
+      await safeNotify({
+        userId: r.driver.userId._id,
+        ...NotificationTemplates.NEW_DELIVERY_REQUEST(d._id, r.distanceKm, d.fare?.totalFare || 0)
+      });
+      io?.to(`user_${r.driver.userId._id}`).emit("delivery:new_request", {
+        deliveryId: d._id,
+        referenceId: d.referenceId,
+        pickup: d.pickup,
+        dropoff: d.dropoff,
+        fare: d.fare,
+        payment: d.payment,
+        itemDetails: d.itemDetails,
+        distanceKm: Math.round(r.distanceKm * 10) / 10
+      });
+    }
+  },
+  ride: {
+    Model: Ride,
+    open: { status: "searching", driverId: null },
+    pickupOf: (r) => {
+      const c = r.pickup?.location?.coordinates || [];
+      return { lat: c[1], lng: c[0] };
+    },
+    vehicleTypeOf: (r) => r.vehicleType,
+    // Rides are paid at the end (cash) as before, so they go out straight away.
+    isPayable: () => true,
+    notify: async (ride, r, io) => {
+      await safeNotify({
+        userId: r.driver.userId._id,
+        ...NotificationTemplates.NEW_RIDE_REQUEST(ride._id, ride.pickup?.address),
+        data: { rideId: ride._id, distanceKm: Math.round(r.distanceKm * 10) / 10, fare: ride.estimatedFare }
+      });
+      io?.to(`user_${r.driver.userId._id}`).emit("ride:new_request", {
+        rideId: ride._id,
+        referenceId: ride.referenceId,
+        pickup: ride.pickup,
+        dropoff: ride.dropoff,
+        vehicleType: ride.vehicleType,
+        estimatedFare: ride.estimatedFare,
+        estimatedDistance: ride.estimatedDistance,
+        payment: ride.payment,
+        distanceKm: Math.round(r.distanceKm * 10) / 10
+      });
+    }
+  }
+};
+
+const rankFor = (kind, doc, excludeDriverIds) =>
+  rankDriversForPickup(kind.pickupOf(doc), { excludeDriverIds, vehicleType: kind.vehicleTypeOf(doc) });
+
+const rejectedIds = (doc) => (doc.rejectedByDrivers || []).map((r) => r.driverId);
+
+const start = async (kind, doc, io) => {
   const cfg = dispatchConfig();
-  const ranked = await rankDriversForPickup(delivery.pickup, {
-    excludeDriverIds: (delivery.rejectedByDrivers || []).map((r) => r.driverId)
-  });
+  const ranked = await rankFor(kind, doc, rejectedIds(doc));
 
   // Old behaviour: notify everyone nearby at once.
   if (!cfg.enabled) {
-    if (isPayable(delivery)) await notifyDrivers(delivery, ranked, io);
-    return { candidateCount: ranked.length, notifiedCount: isPayable(delivery) ? ranked.length : 0, deferred: false };
+    const payable = kind.isPayable(doc);
+    if (payable) for (const r of ranked) await kind.notify(doc, r, io);
+    return { candidateCount: ranked.length, notifiedCount: payable ? ranked.length : 0, deferred: false };
   }
 
-  if (!isPayable(delivery)) {
-    await Delivery.updateOne({ _id: delivery._id }, { $set: { "dispatch.enabled": true } });
+  if (!kind.isPayable(doc)) {
+    await kind.Model.updateOne({ _id: doc._id }, { $set: { "dispatch.enabled": true } });
     return { candidateCount: ranked.length, notifiedCount: 0, deferred: true };
   }
 
   const firstWave = cfg.waveSizes.length ? ranked.slice(0, cfg.waveSizes[0]) : ranked;
   const openToAll = cfg.waveSizes.length === 0;
   const now = new Date();
-  // Claim it so the background job can't start the same delivery twice.
-  const claimed = await Delivery.findOneAndUpdate(
-    { _id: delivery._id, "dispatch.startedAt": null },
+  // Claim it so the background job can't start the same job twice.
+  const claimed = await kind.Model.findOneAndUpdate(
+    { _id: doc._id, "dispatch.startedAt": null },
     {
       $set: {
         "dispatch.enabled": true,
@@ -274,19 +331,17 @@ export const startDispatch = async (delivery, io) => {
   );
   if (!claimed) return { candidateCount: ranked.length, notifiedCount: 0, deferred: false };
 
-  await notifyDrivers(claimed, firstWave, io);
+  for (const r of firstWave) await kind.notify(claimed, r, io);
   return { candidateCount: ranked.length, notifiedCount: firstWave.length, deferred: false };
 };
 
-/** Offer an unaccepted delivery to the next wave. Safe to run on many servers at once. */
-export const runNextWave = async (deliveryId, io) => {
+const nextWave = async (kind, id, io) => {
   const cfg = dispatchConfig();
   const now = new Date();
-  const delivery = await Delivery.findOneAndUpdate(
+  const doc = await kind.Model.findOneAndUpdate(
     {
-      _id: deliveryId,
-      status: "created",
-      driverId: null,
+      _id: id,
+      ...kind.open,
       "dispatch.enabled": true,
       "dispatch.openToAll": false,
       "dispatch.startedAt": { $ne: null },
@@ -295,25 +350,20 @@ export const runNextWave = async (deliveryId, io) => {
     { $set: { "dispatch.nextWaveAt": new Date(now.getTime() + cfg.waveSeconds * 1000) } },
     { new: true }
   );
-  if (!delivery) return null;
+  if (!doc) return null;
 
-  const already = [
-    ...(delivery.dispatch.notifiedDriverIds || []),
-    ...(delivery.rejectedByDrivers || []).map((r) => r.driverId)
-  ];
-  const ranked = await rankDriversForPickup(delivery.pickup, { excludeDriverIds: already });
-
-  const waveIndex = delivery.dispatch.wave; // 0-based index of the wave about to go out
+  const ranked = await rankFor(kind, doc, [...(doc.dispatch.notifiedDriverIds || []), ...rejectedIds(doc)]);
+  const waveIndex = doc.dispatch.wave; // 0-based index of the wave about to go out
   const isFinal = waveIndex >= cfg.waveSizes.length;
   const wave = isFinal ? ranked : ranked.slice(0, cfg.waveSizes[waveIndex]);
 
-  const updated = await Delivery.findOneAndUpdate(
-    { _id: delivery._id, status: "created", driverId: null },
+  const updated = await kind.Model.findOneAndUpdate(
+    { _id: doc._id, ...kind.open },
     {
       $set: {
         "dispatch.wave": waveIndex + 1,
         "dispatch.openToAll": isFinal,
-        "dispatch.nextWaveAt": isFinal ? null : delivery.dispatch.nextWaveAt,
+        "dispatch.nextWaveAt": isFinal ? null : doc.dispatch.nextWaveAt,
         "dispatch.lastRanking": rankingSnapshot(ranked, waveIndex + 1)
       },
       $addToSet: { "dispatch.notifiedDriverIds": { $each: wave.map((r) => r.driver._id) } }
@@ -322,29 +372,95 @@ export const runNextWave = async (deliveryId, io) => {
   );
   if (!updated) return null; // accepted or cancelled in the meantime
 
-  await notifyDrivers(updated, wave, io);
+  for (const r of wave) await kind.notify(updated, r, io);
   return { wave: waveIndex + 1, notified: wave.length, openToAll: isFinal };
 };
 
-/** If every rider offered the job so far has declined it, move on now. */
-export const onDriverRejected = async (deliveryId) => {
+const onRejected = async (kind, id) => {
   try {
-    const d = await Delivery.findById(deliveryId).select("status dispatch rejectedByDrivers").lean();
-    if (!d?.dispatch?.enabled || d.dispatch.openToAll || d.status !== "created") return;
-    const rejected = new Set((d.rejectedByDrivers || []).map((r) => String(r.driverId)));
+    const d = await kind.Model.findById(id).select("status driverId dispatch rejectedByDrivers").lean();
+    if (!d?.dispatch?.enabled || d.dispatch.openToAll || d.status !== kind.open.status || d.driverId) return;
+    const rejected = new Set(rejectedIds(d).map(String));
     const offered = (d.dispatch.notifiedDriverIds || []).map(String);
-    if (offered.length && offered.every((id) => rejected.has(id))) {
-      await Delivery.updateOne({ _id: deliveryId, "dispatch.openToAll": false }, { $set: { "dispatch.nextWaveAt": new Date() } });
+    if (offered.length && offered.every((x) => rejected.has(x))) {
+      await kind.Model.updateOne({ _id: id, "dispatch.openToAll": false }, { $set: { "dispatch.nextWaveAt": new Date() } });
     }
   } catch (e) {
-    console.error("Dispatch onDriverRejected failed:", e.message);
+    console.error("Dispatch onRejected failed:", e.message);
   }
 };
 
-/** Background tick: start paid deliveries and push due waves. */
+// ---------------------------------------------------------------------------
+// public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Mongo filter so a rider only sees requests that have been offered to them.
+ * Older records (no dispatch.enabled) stay visible to everyone.
+ */
+export const visibleToDriverFilter = (driverId) => ({
+  $or: [{ "dispatch.enabled": { $ne: true } }, { "dispatch.openToAll": true }, { "dispatch.notifiedDriverIds": driverId }]
+});
+
+/** Same rule for a document already in memory. */
+export const isOfferedTo = (doc, driverId) => {
+  const d = doc.dispatch;
+  if (!d?.enabled || d.openToAll) return true;
+  return (d.notifiedDriverIds || []).some((id) => String(id) === String(driverId));
+};
+
+// Deliveries
+export const startDispatch = (delivery, io) => start(KINDS.delivery, delivery, io);
+export const runNextWave = (deliveryId, io) => nextWave(KINDS.delivery, deliveryId, io);
+export const onDriverRejected = (deliveryId) => onRejected(KINDS.delivery, deliveryId);
+
+// Rides
+export const startRideDispatch = (ride, io) => start(KINDS.ride, ride, io);
+export const runNextRideWave = (rideId, io) => nextWave(KINDS.ride, rideId, io);
+export const onRideRejected = (rideId) => onRejected(KINDS.ride, rideId);
+
+/** Cancel rides nobody accepted in time, and tell the customer. */
+const expireUnacceptedRides = async (io) => {
+  const { rideSearchTimeoutMinutes } = dispatchConfig();
+  const cutoff = new Date(Date.now() - rideSearchTimeoutMinutes * 60 * 1000);
+  const stale = await Ride.find({
+    status: "searching",
+    driverId: null,
+    "dispatch.enabled": true,
+    "dispatch.startedAt": { $lte: cutoff }
+  })
+    .select("_id")
+    .limit(100)
+    .lean();
+  let expired = 0;
+  for (const { _id } of stale) {
+    const ride = await Ride.findOneAndUpdate(
+      { _id, status: "searching", driverId: null },
+      {
+        $set: {
+          status: "cancelled",
+          cancelledAt: new Date(),
+          "cancellation.cancelledBy": "system",
+          "cancellation.reason": "No rider accepted the request"
+        }
+      },
+      { new: true }
+    );
+    if (!ride) continue;
+    expired++;
+    await safeNotify({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_CANCELLED(ride._id, "system", "No rider was available nearby. Please try again.")
+    });
+    io?.to(`user_${ride.customerId}`).emit("ride:no_driver", { rideId: ride._id });
+  }
+  return expired;
+};
+
+/** Background tick: start paid deliveries, push due waves, expire stale rides. */
 export const processDispatchQueue = async (io) => {
   const cfg = dispatchConfig();
-  if (!cfg.enabled) return { started: 0, waves: 0 };
+  if (!cfg.enabled) return { started: 0, waves: 0, expiredRides: 0 };
 
   // 1. Card/transfer deliveries that have just been paid.
   const waiting = await Delivery.find({
@@ -360,21 +476,24 @@ export const processDispatchQueue = async (io) => {
     if (r.notifiedCount || r.candidateCount === 0) started++;
   }
 
-  // 2. Waves that are due.
-  const due = await Delivery.find({
-    status: "created",
-    driverId: null,
-    "dispatch.enabled": true,
-    "dispatch.openToAll": false,
-    "dispatch.startedAt": { $ne: null },
-    "dispatch.nextWaveAt": { $lte: new Date() }
-  })
-    .select("_id")
-    .limit(100)
-    .lean();
+  // 2. Waves that are due, for both kinds.
   let waves = 0;
-  for (const d of due) {
-    if (await runNextWave(d._id, io)) waves++;
+  for (const kind of Object.values(KINDS)) {
+    const due = await kind.Model.find({
+      ...kind.open,
+      "dispatch.enabled": true,
+      "dispatch.openToAll": false,
+      "dispatch.startedAt": { $ne: null },
+      "dispatch.nextWaveAt": { $lte: new Date() }
+    })
+      .select("_id")
+      .limit(100)
+      .lean();
+    for (const d of due) if (await nextWave(kind, d._id, io)) waves++;
   }
-  return { started, waves };
+
+  // 3. Rides nobody took.
+  const expiredRides = await expireUnacceptedRides(io);
+
+  return { started, waves, expiredRides };
 };

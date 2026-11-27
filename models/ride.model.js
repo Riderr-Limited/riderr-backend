@@ -179,6 +179,7 @@ const RideSchema = new mongoose.Schema(
         'accepted',      // Driver accepted
         'arrived',       // Driver at pickup
         'picked_up',     // Customer in vehicle
+        'started',       // Trip started (used by the ride controller; was missing, so starting a ride always failed)
         'ongoing',       // En route to destination
         'completed',     // Successfully completed
         'cancelled'      // Cancelled by customer/driver/system
@@ -254,6 +255,38 @@ const RideSchema = new mongoose.Schema(
       }
     },
 
+    // Riders who declined this request (so it isn't offered to them again)
+    rejectedByDrivers: [
+      {
+        _id: false,
+        driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', required: true },
+        rejectedAt: { type: Date, default: Date.now },
+        reason: String
+      }
+    ],
+
+    // Priority dispatch (services/dispatch/dispatch.service.js)
+    dispatch: {
+      enabled: { type: Boolean, default: false },
+      startedAt: { type: Date, default: null },
+      wave: { type: Number, default: 0 },
+      nextWaveAt: { type: Date, default: null },
+      openToAll: { type: Boolean, default: false },
+      notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+      lastRanking: [
+        {
+          _id: false,
+          driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+          score: Number,
+          distanceKm: Number,
+          rating: Number,
+          ratingCount: Number,
+          reliability: Number,
+          wave: Number
+        }
+      ]
+    },
+
     // Additional Details
     notes: String,
     
@@ -326,6 +359,7 @@ RideSchema.index({ companyId: 1, status: 1 });
 RideSchema.index({ referenceId: 1 }, { unique: true });
 RideSchema.index({ status: 1, requestedAt: -1 });
 RideSchema.index({ createdAt: -1 });
+RideSchema.index({ status: 1, 'dispatch.enabled': 1, 'dispatch.nextWaveAt': 1 });
 
 // ========== VIRTUAL FIELDS ==========
 RideSchema.virtual('duration').get(function() {
@@ -371,11 +405,16 @@ RideSchema.virtual('finalFare').get(function() {
 });
 
 // ========== PRE-SAVE MIDDLEWARE ==========
-RideSchema.pre('save', async function() {
-  // Generate reference ID if not exists
+// Generate the reference ID before validation runs. (It used to be generated
+// in pre('save'), which runs AFTER validation, so the required check always
+// failed and no ride could ever be created.)
+RideSchema.pre('validate', function() {
   if (this.isNew && !this.referenceId) {
-    this.referenceId = `RIDE-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    this.referenceId = `RIDE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
   }
+});
+
+RideSchema.pre('save', async function() {
 
   // Calculate actual duration when completed
   if (this.status === 'completed' && this.pickedUpAt && this.completedAt) {

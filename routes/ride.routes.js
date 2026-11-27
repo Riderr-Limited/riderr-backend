@@ -14,7 +14,9 @@ import {
   getDriverRides,
   getRideById,
   getAllRides,
-  getRideStatistics
+  getRideStatistics,
+  getNearbyRideRequests,
+  rejectRide
 } from '../controllers/ride.controller.js';
 import { authenticate, authorize } from '../middlewares/auth.middleware.js';
 
@@ -84,6 +86,7 @@ router.get('/my-rides', authenticate, authorize('customer'), getMyRides);
 router.get('/active', authenticate, authorize('customer', 'driver'), getActiveRide);
 router.get('/statistics', authenticate, getRideStatistics);
 router.get('/driver/my-rides', authenticate, authorize('driver'), getDriverRides);
+router.get('/driver/nearby', authenticate, authorize('driver'), getNearbyRideRequests);
 router.get('/admin/all', authenticate, authorize('admin'), getAllRides);
 
 /**
@@ -119,6 +122,7 @@ router.get('/companies/:companyId/rides', authenticate, authorize('company_admin
  *         description: Ride accepted
  */
 router.post('/:rideId/accept', authenticate, authorize('driver'), acceptRide);
+router.post('/:rideId/reject', authenticate, authorize('driver'), rejectRide);
 router.post('/:rideId/arrive', authenticate, authorize('driver'), arriveAtPickup);
 router.post('/:rideId/start', authenticate, authorize('driver'), startRide);
 router.post('/:rideId/complete', authenticate, authorize('driver'), completeRide);
