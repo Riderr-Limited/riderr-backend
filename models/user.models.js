@@ -303,8 +303,9 @@ UserSchema.pre('save', async function(next) {
       }
     }
     
-    // Validate companyId for company_admin and driver roles
-    if (this.role === 'company_admin' || this.role === 'driver') {
+    // Validate companyId for company_admin. Drivers may be individuals
+    // (onboarded directly by Riderr) and have no company.
+    if (this.role === 'company_admin') {
       if (!this.companyId) {
         throw new Error(`${this.role} must have a companyId`);
       }

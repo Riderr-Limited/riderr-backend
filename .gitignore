@@ -1,1 +1,3 @@
 .env
+# Private KYC files (selfies). Never commit or serve publicly.
+private_uploads/

@@ -512,6 +512,17 @@ export const toggleDriverOnlineStatus = async (req, res) => {
       });
     }
 
+    // Individual riders must pass Riderr KYC before they can work.
+    // Company riders are vouched for by their company (unchanged behaviour).
+    if (isOnline && !driver.isKycCleared()) {
+      return res.status(403).json({
+        success: false,
+        message: "Complete identity verification before going online",
+        code: "KYC_REQUIRED",
+        kycStatus: driver.kyc?.status || "not_started",
+      });
+    }
+
     // Validate if driver can go online
     // if (isOnline) {
     //   const validation = await validateDriverForOnline(driver);

@@ -540,6 +540,128 @@ export const signUpCompanyDriver = async (req, res) => {
 };
 
 /**
+ * @desc    Sign up an INDIVIDUAL rider (no company). They can log in straight
+ *          away but can't go online until they pass KYC (see /api/kyc/*).
+ * @route   POST /api/auth/signup-individual-driver
+ * @access  Public
+ */
+export const signUpIndividualDriver = async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { name, email, password, phone, vehicleType, plateNumber, vehicleColor } = req.body;
+
+    const errors = [];
+    if (!name || String(name).trim().split(/\s+/).length < 2) errors.push("Enter your full name exactly as it appears on your NIN");
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) errors.push("A valid email is required");
+    if (!password || String(password).length < 8) errors.push("Password must be at least 8 characters");
+    if (!phone || !/^(?:\+234\d{10}|0\d{10})$/.test(String(phone).trim())) {
+      errors.push("Provide a valid Nigerian phone number (e.g. 08012345678 or +2348012345678)");
+    }
+    if (!["bike", "car", "van", "truck"].includes(vehicleType)) errors.push("vehicleType must be bike, car, van or truck");
+    if (!plateNumber || String(plateNumber).trim().length < 5) errors.push("A valid plate number is required");
+    if (!vehicleColor) errors.push("Vehicle color is required");
+    if (errors.length) {
+      session.endSession();
+      return res.status(400).json({ success: false, message: errors[0], errors });
+    }
+
+    const cleanEmail = String(email).toLowerCase().trim();
+    const cleanPhone = String(phone).trim();
+    const cleanPlate = String(plateNumber).toUpperCase().trim();
+
+    let newUser;
+    let emailCode;
+    await session.withTransaction(async () => {
+      if (await User.exists({ $or: [{ email: cleanEmail }, { phone: cleanPhone }] }).session(session)) {
+        throw Object.assign(new Error("A user with this email or phone already exists"), { statusCode: 409 });
+      }
+      if (await Driver.exists({ plateNumber: cleanPlate }).session(session)) {
+        throw Object.assign(new Error("A vehicle with this plate number is already registered"), { statusCode: 409 });
+      }
+
+      emailCode = generateVerificationCode();
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      [newUser] = await User.create(
+        [
+          {
+            name: String(name).trim(),
+            email: cleanEmail,
+            password: hashedPassword,
+            phone: cleanPhone,
+            role: "driver",
+            companyId: null,
+            emailVerificationToken: emailCode,
+            emailVerificationExpires: Date.now() + 10 * 60 * 1000,
+            isActive: true,
+            isVerified: false
+          }
+        ],
+        { session }
+      );
+
+      await Driver.create(
+        [
+          {
+            userId: newUser._id,
+            companyId: null,
+            onboardingType: "individual",
+            vehicleType,
+            vehicleColor,
+            plateNumber: cleanPlate,
+            approvalStatus: "pending",
+            isVerified: false,
+            isOnline: false,
+            isAvailable: false,
+            kyc: { status: "not_started" }
+          }
+        ],
+        { session }
+      );
+
+      newUser.refreshToken = generateRefreshToken({ userId: newUser._id });
+      await newUser.save({ session });
+    });
+    session.endSession();
+
+    const emailResult = await sendVerificationEmail(newUser.email, emailCode, newUser.name);
+    const accessToken = generateAccessToken({ userId: newUser._id, role: newUser.role, isVerified: false });
+
+    return res.status(201).json({
+      success: true,
+      message: "Account created. Verify your email, then complete identity verification to start working.",
+      data: {
+        accessToken,
+        refreshToken: newUser.refreshToken,
+        user: {
+          _id: newUser._id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone,
+          role: newUser.role,
+          companyId: null,
+          onboardingType: "individual"
+        },
+        kyc: { status: "not_started", nextStep: "submit_nin" },
+        ...(process.env.NODE_ENV === "development" && {
+          debug: { verificationCode: emailCode, emailSent: emailResult?.success || false }
+        })
+      }
+    });
+  } catch (error) {
+    session.endSession();
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    if (error.code === 11000) return res.status(409).json({ success: false, message: "Account or plate number already exists" });
+    console.error(" Individual driver signup error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Signup failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+};
+
+/**
  * @desc    Sign in user
  * @route   POST /api/auth/login
  * @access  Public

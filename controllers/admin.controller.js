@@ -2180,6 +2180,14 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ success: false, message: "Driver account is not active" });
     }
 
+    if (!driver.isKycCleared()) {
+      return res.status(400).json({
+        success: false,
+        message: "This individual rider hasn't passed identity verification yet",
+        code: "KYC_REQUIRED",
+      });
+    }
+
     if (driver.currentDeliveryId) {
       return res.status(400).json({ success: false, message: "Driver already has an active delivery" });
     }
