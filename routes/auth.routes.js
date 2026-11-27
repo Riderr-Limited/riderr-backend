@@ -3,6 +3,7 @@ import express from "express";
 import {
   signUp,
   signUpCompanyDriver,
+  signUpIndividualDriver,
   signIn,
   verifyEmail,
   forgotPassword,
@@ -70,6 +71,33 @@ const router = express.Router();
  *             schema: { $ref: '#/components/schemas/Error' }
  */
 router.post("/signup", validateSignup, signUp);
+
+/**
+ * @swagger
+ * /auth/signup-individual-driver:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Sign up as an individual rider (no company). Must pass KYC before going online.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, email, phone, password, vehicleType, plateNumber, vehicleColor]
+ *             properties:
+ *               name: { type: string, description: "Full name exactly as on NIN" }
+ *               email: { type: string }
+ *               phone: { type: string, example: "08012345678" }
+ *               password: { type: string, minLength: 8 }
+ *               vehicleType: { type: string, enum: [bike, car, van, truck] }
+ *               plateNumber: { type: string }
+ *               vehicleColor: { type: string }
+ *     responses:
+ *       201:
+ *         description: Account created
+ */
+router.post("/signup-individual-driver", signUpIndividualDriver);
 
 /**
  * @swagger

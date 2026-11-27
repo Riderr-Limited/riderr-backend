@@ -1,5 +1,71 @@
 import mongoose from 'mongoose';
 
+const CHECK_STATUSES = ["not_started", "pending", "passed", "failed", "manual_review"];
+
+const KycSchema = new mongoose.Schema(
+  {
+    // not_started -> in_progress -> pending_review -> approved | rejected
+    status: {
+      type: String,
+      enum: ["not_started", "in_progress", "pending_review", "approved", "rejected"],
+      default: "not_started",
+      index: true
+    },
+    consentAt: Date,
+    consentIp: String,
+
+    nin: {
+      status: { type: String, enum: CHECK_STATUSES, default: "not_started" },
+      encrypted: { type: String, select: false }, // AES-256-GCM, see utils/kycCrypto.js
+      hash: { type: String, select: false },      // HMAC, used to stop one NIN on many accounts
+      last4: String,
+      providerName: {                              // name returned by NIMC via provider
+        firstName: String,
+        middleName: String,
+        lastName: String
+      },
+      dateOfBirth: String,
+      nameMatchScore: Number,
+      providerRef: String,
+      attempts: { type: Number, default: 0 },
+      failureReason: String,
+      verifiedAt: Date
+    },
+
+    face: {
+      status: { type: String, enum: CHECK_STATUSES, default: "not_started" },
+      selfiePath: { type: String, select: false }, // private storage, never served statically
+      livenessScore: Number,
+      matchScore: Number,
+      providerRef: String,
+      attempts: { type: Number, default: 0 },
+      failureReason: String,
+      verifiedAt: Date
+    },
+
+    guarantors: {
+      status: { type: String, enum: CHECK_STATUSES, default: "not_started" },
+      required: { type: Number, default: 2 },
+      confirmedCount: { type: Number, default: 0 }
+    },
+
+    submittedAt: Date,
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    reviewedAt: Date,
+    rejectionReason: String,
+
+    history: [
+      {
+        action: String,
+        by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        note: String,
+        at: { type: Date, default: Date.now }
+      }
+    ]
+  },
+  { _id: false }
+);
+
 const DriverSchema = new mongoose.Schema(
   {
     userId: {
@@ -9,12 +75,25 @@ const DriverSchema = new mongoose.Schema(
       unique: true
     },
 
+    // Optional: individual riders onboarded directly by Riderr have no company.
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
-      required: [true, "Company ID is required"],
+      default: null,
       index: true
     },
+
+    // "company"    = added by a company, the company vouches for them (no KYC)
+    // "individual" = signed up directly, must pass Riderr KYC before working
+    // Existing records default to "company" (they all have a companyId).
+    onboardingType: {
+      type: String,
+      enum: ["company", "individual"],
+      default: "company",
+      index: true
+    },
+
+    kyc: { type: KycSchema, default: () => ({}) },
 
     
 
@@ -334,6 +413,8 @@ DriverSchema.index({ userId: 1 }, { unique: true });
 DriverSchema.index({ plateNumber: 1 }, { unique: true });
 DriverSchema.index({ isOnline: 1, isAvailable: 1, vehicleType: 1 });
 DriverSchema.index({ currentStatus: 1, location: '2dsphere' });
+DriverSchema.index({ 'kyc.nin.hash': 1 }, { unique: true, partialFilterExpression: { 'kyc.nin.hash': { $type: 'string' } } });
+DriverSchema.index({ onboardingType: 1, 'kyc.status': 1 });
 
 // ========== VIRTUAL FIELDS ==========
 DriverSchema.virtual('isDocumentsComplete').get(function() {
@@ -354,8 +435,16 @@ DriverSchema.virtual('isDocumentsVerified').get(function() {
   return this.documents.every(d => d.verified === true);
 });
 
+// Individual riders must pass Riderr KYC. Company riders are vouched for by
+// their company, so this is always true for them (existing behaviour).
+DriverSchema.methods.isKycCleared = function() {
+  if (this.onboardingType !== 'individual') return true;
+  return this.kyc?.status === 'approved';
+};
+
 DriverSchema.virtual('canAcceptRides').get(function() {
   return (
+    this.isKycCleared() &&
     this.isActive &&
     this.isOnline &&
     this.isAvailable &&

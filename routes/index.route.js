@@ -19,6 +19,7 @@ import riderRoutes from "./rider.routes.js";
 import podRoutes from "./pod.routes.js";
 import errandRoutes from "./errand.routes.js";
 import companyDashboardRoutes from "./companyDashboard.routes.js";
+import { riderKycRouter, guarantorRouter, adminKycRouter } from "./kyc.routes.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { getActiveCompanies } from "../controllers/company.controller.js";
 
@@ -80,12 +81,19 @@ router.use("/pod", podRoutes);
 router.use("/errands", errandRoutes);
 router.use("/company-dashboard", companyDashboardRoutes);
 
+// Individual rider KYC (NIN, selfie, guarantors)
+router.use("/kyc", riderKycRouter);
+router.use("/guarantors", guarantorRouter); // public, token-based
+
 // Admin chat routes (mounted before /admin so it isn't shadowed by
 // admin.routes.js). Kept at both paths: /admin-chat is the original path,
 // /admin/chat is an alias for the admin dashboard, which was calling this
 // path and getting 404s because only /admin-chat existed.
 router.use("/admin-chat", adminChatRoutes);
 router.use("/admin/chat", adminChatRoutes);
+
+// Admin KYC review (before /admin so admin.routes.js doesn't shadow it)
+router.use("/admin/kyc", adminKycRouter);
 
 // Admin routes
 router.use("/admin", adminRoutes);
