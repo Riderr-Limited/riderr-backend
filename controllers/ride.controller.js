@@ -12,7 +12,19 @@ import {
   distanceKm,
   driverCoords,
   dispatchConfig,
+  redispatchRide,
 } from "../services/dispatch/dispatch.service.js";
+import Payment from "../models/payments.models.js";
+import { getRoute } from "../services/maps/routing.service.js";
+import {
+  allowedRidePaymentMethods,
+  normaliseRidePaymentMethod,
+  createRideCardPayment,
+  refundRide,
+  payoutRide,
+  recordCashRideCommission,
+  RIDE_PAYMENT_WINDOW_MINUTES,
+} from "../services/payments/ridePayment.service.js";
 
 /**
  * Calculate fare based on distance and vehicle type
@@ -33,136 +45,193 @@ const calculateFare = (distanceMeters, vehicleType) => {
   return Math.ceil(fare);
 };
 
+const VEHICLE_TYPES = ['bike', 'car', 'van', 'truck'];
+
+const parsePoints = (b) => {
+  const [pLat, pLng, dLat, dLng] = [b.pickupLat, b.pickupLng, b.dropoffLat, b.dropoffLng].map(parseFloat);
+  if (![pLat, pLng, dLat, dLng].every(Number.isFinite)) return null;
+  return { pickup: { lat: pLat, lng: pLng }, dropoff: { lat: dLat, lng: dLng } };
+};
+
+/**
+ * @desc    Price a ride before booking, using road distance from the maps service
+ * @route   POST /api/rides/quote
+ * @access  Private (Customer)
+ * @body    { pickupLat, pickupLng, dropoffLat, dropoffLng, vehicleType? }
+ */
+export const getRideQuote = async (req, res) => {
+  try {
+    const points = parsePoints(req.body || {});
+    if (!points) {
+      return res.status(400).json({ success: false, message: "pickupLat, pickupLng, dropoffLat and dropoffLng are required" });
+    }
+    const { vehicleType } = req.body;
+    if (vehicleType && !VEHICLE_TYPES.includes(vehicleType)) {
+      return res.status(400).json({ success: false, message: "Invalid vehicle type" });
+    }
+    const route = await getRoute(points.pickup, points.dropoff);
+    const types = vehicleType ? [vehicleType] : VEHICLE_TYPES;
+    res.status(200).json({
+      success: true,
+      data: {
+        distanceMeters: route.distanceMeters,
+        distanceKm: Math.round(route.distanceMeters / 100) / 10,
+        durationSeconds: route.durationSeconds,
+        durationMinutes: Math.ceil(route.durationSeconds / 60),
+        routeSource: route.provider,
+        currency: "NGN",
+        fares: types.map((t) => ({ vehicleType: t, fare: calculateFare(route.distanceMeters, t) })),
+        paymentMethods: allowedRidePaymentMethods(),
+        validForMinutes: 15
+      }
+    });
+  } catch (error) {
+    console.error("Ride quote error:", error);
+    res.status(500).json({ success: false, message: "Couldn't price this ride. Please try again." });
+  }
+};
+
 /**
  * @desc    Create a ride request (Customer only)
  * @route   POST /api/rides
  * @access  Private (Customer)
+ * @body    ... paymentMethod: "card" | "bank_transfer" (| "cash" if RIDE_ALLOW_CASH=true)
  */
 export const createRide = async (req, res) => {
   try {
     const customer = req.user;
-    
+
     if (customer.role !== "customer") {
-      return res.status(403).json({
-        success: false,
-        message: "Only customers can create rides"
-      });
+      return res.status(403).json({ success: false, message: "Only customers can create rides" });
     }
 
     const {
-      pickupAddress, pickupLat, pickupLng, pickupLandmark, pickupInstructions,
-      dropoffAddress, dropoffLat, dropoffLng, dropoffLandmark, dropoffInstructions,
+      pickupAddress, pickupLandmark, pickupInstructions,
+      dropoffAddress, dropoffLandmark, dropoffInstructions,
       vehicleType, customerName, customerPhone,
-      estimatedDistance, estimatedDuration,
       specialRequests, notes
     } = req.body;
 
-    // Validate required fields
-    if (!pickupAddress || !pickupLat || !pickupLng ||
-        !dropoffAddress || !dropoffLat || !dropoffLng ||
-        !vehicleType || !customerName || !customerPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
+    if (!pickupAddress || !dropoffAddress || !vehicleType || !customerName || !customerPhone) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
     }
-
-    // Validate vehicle type
-    if (!['bike', 'car', 'van', 'truck'].includes(vehicleType)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid vehicle type"
-      });
-    }
-
-    const coords = [pickupLat, pickupLng, dropoffLat, dropoffLng].map(parseFloat);
-    if (coords.some((c) => !Number.isFinite(c))) {
+    const points = parsePoints(req.body);
+    if (!points) {
       return res.status(400).json({ success: false, message: "Invalid pickup or dropoff coordinates" });
     }
+    if (!VEHICLE_TYPES.includes(vehicleType)) {
+      return res.status(400).json({ success: false, message: "Invalid vehicle type" });
+    }
 
-    // Calculate estimated fare. Distance is worked out on the server from the
-    // coordinates (straight line), so a client can't send a tiny distance to
-    // get a cheap ride. The app's own estimate is used if it's longer (roads).
-    const straightLineMeters = Math.round(distanceKm(coords[0], coords[1], coords[2], coords[3]) * 1000);
-    const distance = Math.max(straightLineMeters, Number(estimatedDistance) || 0);
-    const estimatedFare = calculateFare(distance, vehicleType);
+    // Payments happen in the app (card or transfer) so Riderr's commission is
+    // always collected. Cash only if RIDE_ALLOW_CASH=true.
+    const allowedMethods = allowedRidePaymentMethods();
+    const paymentMethod = normaliseRidePaymentMethod(req.body.paymentMethod || allowedMethods[0]);
+    if (!allowedMethods.includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment method must be one of: ${allowedMethods.join(", ")}`,
+        code: "PAYMENT_METHOD_NOT_ALLOWED"
+      });
+    }
 
-    // Check if customer has active ride
     const activeRide = await Ride.findOne({
       customerId: customer._id,
       status: { $in: ['searching', 'assigned', 'accepted', 'arrived', 'started'] }
     });
-    
     if (activeRide) {
+      return res.status(400).json({ success: false, message: "You already have an active ride", data: { rideId: activeRide._id } });
+    }
+
+    // Price from the road distance (maps routing service). The client's own
+    // distance/fare is never trusted. Same cached route as the quote.
+    const route = await getRoute(points.pickup, points.dropoff);
+    const estimatedFare = calculateFare(route.distanceMeters, vehicleType);
+    if (req.body.expectedFare && Math.abs(Number(req.body.expectedFare) - estimatedFare) > 50) {
       return res.status(400).json({
         success: false,
-        message: "You already have an active ride"
+        message: "The fare has changed. Please get a new quote.",
+        code: "FARE_CHANGED",
+        data: { previousFare: Number(req.body.expectedFare), currentFare: estimatedFare }
       });
     }
 
-    // Create ride
+    const prepaid = paymentMethod !== "cash";
     const ride = new Ride({
       customerId: customer._id,
       customerName,
       customerPhone,
       pickup: {
         address: pickupAddress,
-        location: {
-          type: 'Point',
-          coordinates: [parseFloat(pickupLng), parseFloat(pickupLat)]
-        },
+        location: { type: 'Point', coordinates: [points.pickup.lng, points.pickup.lat] },
         landmark: pickupLandmark,
         instructions: pickupInstructions
       },
       dropoff: {
         address: dropoffAddress,
-        location: {
-          type: 'Point',
-          coordinates: [parseFloat(dropoffLng), parseFloat(dropoffLat)]
-        },
+        location: { type: 'Point', coordinates: [points.dropoff.lng, points.dropoff.lat] },
         landmark: dropoffLandmark,
         instructions: dropoffInstructions
       },
       vehicleType,
-      estimatedDistance: distance,
-      estimatedDuration: estimatedDuration || 600, // Default 10 minutes
+      estimatedDistance: route.distanceMeters,
+      estimatedDuration: route.durationSeconds,
       estimatedFare,
       baseFare: calculateFare(0, vehicleType),
       distanceFare: estimatedFare - calculateFare(0, vehicleType),
       specialRequests: specialRequests || [],
       notes,
       status: 'searching',
+      payment: { method: paymentMethod, status: 'pending' },
+      paymentExpiresAt: prepaid ? new Date(Date.now() + RIDE_PAYMENT_WINDOW_MINUTES() * 60 * 1000) : null,
+      dispatch: { enabled: dispatchConfig().enabled },
       metadata: {
         platform: req.headers['x-platform'] || 'web',
         appVersion: req.headers['x-app-version'],
         ipAddress: req.ip,
-        userAgent: req.headers['user-agent']
+        userAgent: req.headers['user-agent'],
+        routeSource: route.provider
       }
     });
-
     await ride.save();
 
-    // Offer the ride to the best-ranked nearby riders with the right vehicle,
-    // in waves (see services/dispatch/dispatch.service.js).
-    const dispatchResult = await startRideDispatch(ride, req.app.get("io"));
+    // Card: create the payment now; the app charges it with /api/payments/charge-card.
+    // Transfer: the app gets bank details from /api/payments/initiate-bank-transfer { rideId }.
+    let payment = null;
+    if (paymentMethod === "card") {
+      const p = await createRideCardPayment(ride, customer);
+      payment = { ...p, paymentMethod, nextAction: "show_card_form", chargeUrl: "/api/payments/charge-card" };
+    } else if (paymentMethod === "bank_transfer") {
+      payment = {
+        amount: estimatedFare,
+        paymentMethod,
+        nextAction: "show_bank_details",
+        initiateUrl: "/api/payments/initiate-bank-transfer",
+        body: { rideId: ride._id }
+      };
+    }
 
+    // Cash rides go to riders now; prepaid rides go out once payment succeeds
+    // (the dispatch job picks them up within ~10 seconds).
+    const dispatchResult = await startRideDispatch(ride, req.app.get("io"));
     const fresh = await Ride.findById(ride._id);
+
     res.status(201).json({
       success: true,
-      message:
-        dispatchResult.candidateCount === 0
+      message: prepaid
+        ? `Ride created. Complete payment within ${RIDE_PAYMENT_WINDOW_MINUTES()} minutes and we'll find you a rider.`
+        : dispatchResult.candidateCount === 0
           ? "Ride request created. No riders are available nearby right now; we'll keep looking."
           : "Ride request created successfully. Searching for nearby drivers...",
       data: fresh || ride,
-      dispatch: { ridersNearby: dispatchResult.candidateCount, notified: dispatchResult.notifiedCount }
+      requiresPayment: prepaid,
+      payment,
+      route: { distanceMeters: route.distanceMeters, durationSeconds: route.durationSeconds, source: route.provider },
+      dispatch: { ridersNearby: dispatchResult.candidateCount, notified: dispatchResult.notifiedCount, waitingForPayment: dispatchResult.deferred }
     });
-
   } catch (error) {
     console.error("Create ride error:", error);
-    res.status(500).json({
-      success: false,
-      message: error.message || "Server error"
-    });
+    res.status(500).json({ success: false, message: "Couldn't create the ride. Please try again." });
   }
 };
 
@@ -506,6 +575,9 @@ export const acceptRide = async (req, res) => {
       if (driver.vehicleType !== ride.vehicleType) {
         return res.status(400).json({ success: false, message: `This ride needs a ${ride.vehicleType}` });
       }
+      if (ride.payment?.method !== "cash" && ride.payment?.status !== "paid") {
+        return res.status(400).json({ success: false, message: "The customer hasn't paid for this ride yet", code: "AWAITING_PAYMENT" });
+      }
       if (!isOfferedTo(ride, driver._id)) {
         return res.status(403).json({
           success: false,
@@ -554,6 +626,11 @@ export const acceptRide = async (req, res) => {
         );
         return res.status(409).json({ success: false, message: "Another rider accepted this ride first", code: "RIDE_TAKEN" });
       }
+      // Link the in-app payment to this rider, for the payout at the end.
+      await Payment.updateOne(
+        { rideId: ride._id, status: "successful", paymentMethod: { $ne: "cash" } },
+        { $set: { driverId: driver._id, companyId: driver.companyId || null } }
+      );
     }
 
     const accepted = await Ride.findById(ride._id).populate([
@@ -786,7 +863,9 @@ export const completeRide = async (req, res) => {
     ride.status = 'completed';
     ride.completedAt = new Date();
     ride.actualDistance = actualDistance || ride.estimatedDistance;
-    ride.actualFare = actualFare || ride.estimatedFare;
+    // Upfront pricing: the customer pays the quoted fare. A rider can't change
+    // the price at the end (prepaid rides are already paid that amount).
+    ride.actualFare = ride.estimatedFare;
     await ride.save({ session });
 
     // Update driver stats and make available again
@@ -799,6 +878,31 @@ export const completeRide = async (req, res) => {
     await driver.save({ session });
 
     await session.commitTransaction();
+
+    // Pay the rider/company their share (fare minus Riderr's commission), or
+    // for cash rides record the commission the rider owes.
+    let payout = null;
+    try {
+      if (ride.payment?.method === 'cash') {
+        const cash = await recordCashRideCommission(ride, driver);
+        payout = { method: 'cash', commissionOwed: cash?.platformFee ?? null };
+      } else {
+        const r = await payoutRide(ride._id, driver);
+        payout = { method: ride.payment?.method, status: r.success ? 'paid' : 'pending', amount: r.amount, error: r.success ? undefined : r.error, requiresAction: r.requiresAction };
+        if (!r.success && r.requiresAction === 'rider_add_bank_account') {
+          await sendNotification({
+            userId: driverUser._id,
+            type: "payment",
+            title: "Add your bank account to get paid",
+            message: "Your earnings for this ride are waiting. Add a bank account in your profile to receive them.",
+            data: { rideId: ride._id, type: "payout_pending" }
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error("Ride payout error:", e.message);
+      payout = { status: 'pending', error: 'Payout will be retried' };
+    }
 
     // Notify customer ride is complete
     await sendNotification({
@@ -815,7 +919,8 @@ export const completeRide = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Ride completed successfully",
-      data: ride
+      data: ride,
+      payout
     });
 
   } catch (error) {
@@ -834,130 +939,181 @@ export const completeRide = async (req, res) => {
  * @desc    Cancel ride
  * @route   POST /api/rides/:rideId/cancel
  * @access  Private (Customer/Driver)
+ *
+ * Rider cancels after accepting -> the ride goes back out to other riders
+ * (up to RIDE_MAX_REDISPATCHES times); the customer keeps their booking.
+ * Customer cancels -> refund (minus the cancellation fee once a rider accepted).
+ * Nobody can cancel once the trip has started.
  */
 export const cancelRide = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const user = req.user;
     const { rideId } = req.params;
-    const { reason } = req.body;
+    const reason = req.body?.reason || 'No reason provided';
 
-    const ride = await Ride.findById(rideId).session(session);
-
-    if (!ride) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Ride not found"
-      });
+    if (!mongoose.Types.ObjectId.isValid(rideId)) {
+      return res.status(404).json({ success: false, message: "Ride not found" });
     }
-
+    const ride = await Ride.findById(rideId);
+    if (!ride) {
+      return res.status(404).json({ success: false, message: "Ride not found" });
+    }
     if (['completed', 'cancelled'].includes(ride.status)) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({ success: false, message: `Ride is already ${ride.status}` });
     }
-
-    // Verify user can cancel this ride
-    let cancelledBy;
-    let cancellationFee = 0;
-
-    if (user.role === 'customer') {
-      if (ride.customerId.toString() !== user._id.toString()) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(403).json({
-          success: false,
-          message: "Not authorized to cancel this ride"
-        });
-      }
-      cancelledBy = 'customer';
-      
-      // Apply cancellation fee if driver already accepted
-      if (['accepted', 'arrived'].includes(ride.status)) {
-        cancellationFee = 200; // 200 cancellation fee
-      }
-    } else if (user.role === 'driver') {
-      const driver = await Driver.findOne({ userId: user._id }).session(session);
-      if (!driver || ride.driverId?.toString() !== driver._id.toString()) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(403).json({
-          success: false,
-          message: "Not authorized to cancel this ride"
-        });
-      }
-      cancelledBy = 'driver';
-    } else {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
+    if (['started', 'picked_up', 'ongoing'].includes(ride.status)) {
+      return res.status(400).json({
         success: false,
-        message: "Invalid user role"
+        message: "The trip has already started. Complete it, or contact support if there's a problem.",
+        code: "TRIP_IN_PROGRESS"
       });
     }
 
-    // Cancel the ride
-    ride.status = 'cancelled';
-    ride.cancelledAt = new Date();
-    // These live under ride.cancellation in the schema (writing them at the top
-    // level was silently dropped before).
-    ride.cancellation = {
-      cancelledBy,
-      reason: reason || 'No reason provided',
-      cancellationFee,
-    };
-    await ride.save({ session });
+    const io = req.app.get("io");
 
-    // If driver was assigned, make them available again
-    if (ride.driverId) {
-      const driver = await Driver.findById(ride.driverId).session(session);
-      if (driver && driver.currentTripId?.toString() === ride._id.toString()) {
-        driver.currentTripId = null;
-        driver.isAvailable = true;
-        await driver.save({ session });
+    // ---------------- rider cancels ----------------
+    if (user.role === 'driver') {
+      const driver = await Driver.findOne({ userId: user._id });
+      if (!driver || ride.driverId?.toString() !== driver._id.toString()) {
+        return res.status(403).json({ success: false, message: "Not authorized to cancel this ride" });
       }
+
+      const maxRedispatch = Number(process.env.RIDE_MAX_REDISPATCHES) || 3;
+      const canRedispatch = ride.redispatchCount < maxRedispatch;
+
+      // Release the ride from this rider atomically (they might be racing a
+      // customer cancel).
+      const update = canRedispatch
+        ? {
+            $set: {
+              status: 'searching',
+              driverId: null,
+              companyId: null,
+              assignedAt: null,
+              acceptedAt: null,
+              arrivedAt: null,
+              'dispatch.startedAt': null,
+              'dispatch.wave': 0,
+              'dispatch.nextWaveAt': null,
+              'dispatch.openToAll': false,
+              'dispatch.notifiedDriverIds': []
+            },
+            $inc: { redispatchCount: 1 },
+            $push: {
+              driverCancellations: { driverId: driver._id, reason, at: new Date() },
+              rejectedByDrivers: { driverId: driver._id, rejectedAt: new Date(), reason: `Cancelled after accepting: ${reason}` }
+            }
+          }
+        : {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              cancellation: { cancelledBy: 'driver', reason, cancellationFee: 0 }
+            },
+            $push: { driverCancellations: { driverId: driver._id, reason, at: new Date() } }
+          };
+      const released = await Ride.findOneAndUpdate(
+        { _id: ride._id, driverId: driver._id, status: { $in: ['assigned', 'accepted', 'arrived'] } },
+        update,
+        { new: true }
+      );
+      if (!released) {
+        return res.status(400).json({ success: false, message: "This ride can no longer be cancelled" });
+      }
+
+      await Driver.updateOne(
+        { _id: driver._id, currentTripId: ride._id },
+        { $set: { currentTripId: null, isAvailable: true, currentStatus: driver.isOnline ? 'online' : 'offline' } }
+      );
+      await Payment.updateOne({ rideId: ride._id, driverId: driver._id }, { $set: { driverId: null, companyId: null } });
+
+      if (canRedispatch) {
+        const result = await redispatchRide(ride._id, io);
+        await sendNotification({
+          userId: ride.customerId,
+          type: "delivery",
+          title: "Finding you another rider",
+          message: "Your rider had to cancel. We're finding you another one now.",
+          data: { rideId: ride._id, type: "ride_redispatched" }
+        }).catch(() => {});
+        io?.to(`user_${ride.customerId}`).emit("ride:redispatched", { rideId: ride._id, ridersNearby: result?.candidateCount ?? 0 });
+        return res.status(200).json({
+          success: true,
+          message: "Ride cancelled. It has been offered to other riders.",
+          data: { rideId: ride._id, redispatched: true }
+        });
+      }
+
+      // Too many rider cancellations: cancel and refund in full.
+      const refund = await refundRide(ride._id, `Ride cancelled by rider: ${reason}`);
+      await sendNotification({
+        userId: ride.customerId,
+        ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'driver', `We couldn't keep a rider for this trip.${refund.refundAmount ? " Your payment has been refunded." : ""}`)
+      }).catch(() => {});
+      return res.status(200).json({ success: true, message: "Ride cancelled", data: { rideId: ride._id, redispatched: false } });
     }
 
-    await session.commitTransaction();
+    // ---------------- customer cancels ----------------
+    if (user.role !== 'customer' || ride.customerId.toString() !== user._id.toString()) {
+      return res.status(403).json({ success: false, message: "Not authorized to cancel this ride" });
+    }
 
-    // Notify the other party about cancellation
-    if (cancelledBy === 'customer' && ride.driverId) {
-      const driver = await Driver.findById(ride.driverId).populate('userId', '_id');
+    // Cancellation fee once a rider is on the way.
+    const fee = ['assigned', 'accepted', 'arrived'].includes(ride.status)
+      ? Number(process.env.RIDE_CANCELLATION_FEE ?? 200)
+      : 0;
+
+    const cancelled = await Ride.findOneAndUpdate(
+      { _id: ride._id, status: { $in: ['pending', 'searching', 'assigned', 'accepted', 'arrived'] } },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: new Date(),
+          cancellation: { cancelledBy: 'customer', reason, cancellationFee: fee },
+          'dispatch.nextWaveAt': null
+        }
+      },
+      { new: true }
+    );
+    if (!cancelled) {
+      return res.status(400).json({ success: false, message: "This ride can no longer be cancelled" });
+    }
+
+    if (cancelled.driverId) {
+      await Driver.updateOne(
+        { _id: cancelled.driverId, currentTripId: cancelled._id },
+        { $set: { currentTripId: null, isAvailable: true, currentStatus: 'online' } }
+      );
+      const driver = await Driver.findById(cancelled.driverId).populate('userId', '_id');
       if (driver?.userId) {
         await sendNotification({
           userId: driver.userId._id,
-          ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'customer', reason),
-        });
+          ...NotificationTemplates.RIDE_CANCELLED(cancelled._id, 'customer', reason),
+        }).catch(() => {});
+        io?.to(`user_${driver.userId._id}`).emit("ride:cancelled", { rideId: cancelled._id, by: "customer" });
       }
-    } else if (cancelledBy === 'driver') {
-      await sendNotification({
-        userId: ride.customerId,
-        ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'driver', reason),
-      });
+    }
+
+    // Refund what was paid in the app, keeping the cancellation fee.
+    let refund = { noRefundNeeded: true, refundAmount: 0 };
+    if (cancelled.payment?.status === 'paid') {
+      refund = await refundRide(cancelled._id, `Cancelled by customer: ${reason}`, fee);
     }
 
     res.status(200).json({
       success: true,
       message: "Ride cancelled",
       data: {
-        ride,
-        cancellationFee
+        ride: cancelled,
+        cancellationFee: fee,
+        refund: refund.noRefundNeeded
+          ? null
+          : { amount: refund.refundAmount, status: refund.success ? "refunded" : "pending" }
       }
     });
-
   } catch (error) {
-    await session.abortTransaction();
     console.error("Cancel ride error:", error);
-    res.status(500).json({
-      success: false,
-      message: error.message || "Server error"
-    });
-  } finally {
-    session.endSession();
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 

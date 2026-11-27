@@ -23,6 +23,8 @@ import crypto from "crypto";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
+import { settlePaymentToDriver, splitAmount } from "../services/payments/payout.service.js";
+import Ride from "../models/ride.model.js";
 
 /**
  * MOBILE-FIRST PAYMENT FLOW
@@ -724,7 +726,8 @@ export const chargeCard = async (req, res) => {
           pin: cardDetails.pin || null,
         },
         metadata: {
-          deliveryId: payment.deliveryId.toString(),
+          deliveryId: payment.deliveryId ? payment.deliveryId.toString() : undefined,
+          rideId: payment.rideId ? payment.rideId.toString() : undefined,
           customerId: customer._id.toString(),
           reference: reference,
           environment: IS_PRODUCTION ? "production" : "development",
@@ -979,24 +982,59 @@ export const verifyBankTransferManually = async (req, res) => {
 export const initiateBankTransfer = async (req, res) => {
   try {
     const customer = req.user;
-    const { deliveryId } = req.body;
+    const { deliveryId, rideId } = req.body;
 
-    // Find delivery
-    const delivery = await Delivery.findOne({
-      _id: deliveryId,
-      customerId: customer._id,
-    });
+    // Works for a delivery ({ deliveryId }) or a ride ({ rideId }).
+    let delivery = null;
+    let ride = null;
+    let amount, platformFee, companyAmount;
 
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found",
+    if (rideId) {
+      ride = await Ride.findOne({ _id: rideId, customerId: customer._id });
+      if (!ride) {
+        return res.status(404).json({ success: false, message: "Ride not found" });
+      }
+      if (ride.status !== "searching" || ride.payment?.method !== "bank_transfer") {
+        return res.status(400).json({ success: false, message: "This ride isn't waiting for a bank transfer" });
+      }
+      if (ride.payment?.status === "paid") {
+        return res.status(400).json({ success: false, message: "This ride is already paid" });
+      }
+      // Reuse the transfer details if they were already generated.
+      const existing = await Payment.findOne({ rideId: ride._id, status: { $in: ["pending", "processing"] } });
+      if (existing?.metadata?.bankTransferDetails) {
+        return res.status(200).json({
+          success: true,
+          message: "Bank transfer details",
+          data: {
+            paymentId: existing._id,
+            reference: existing.paystackReference,
+            amount: existing.amount,
+            bankDetails: existing.metadata.bankTransferDetails,
+            transferType: existing.metadata.transferType,
+            polling: { url: `/api/payments/status/${existing.paystackReference}`, intervalSeconds: 5, timeoutMinutes: 30 },
+          },
+        });
+      }
+      amount = ride.estimatedFare;
+      ({ platformFee, companyAmount } = splitAmount(amount, "ride"));
+    } else {
+      delivery = await Delivery.findOne({
+        _id: deliveryId,
+        customerId: customer._id,
       });
-    }
 
-    const amount = delivery.fare.totalFare;
-    const platformFee = Math.round((amount * PLATFORM_FEE_PCT) / 100);
-    const companyAmount = amount - platformFee;
+      if (!delivery) {
+        return res.status(404).json({
+          success: false,
+          message: "Delivery not found",
+        });
+      }
+
+      amount = delivery.fare.totalFare;
+      platformFee = Math.round((amount * PLATFORM_FEE_PCT) / 100);
+      companyAmount = amount - platformFee;
+    }
 
     const reference = `RIDERR-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
@@ -1054,7 +1092,7 @@ export const initiateBankTransfer = async (req, res) => {
 
     // Create payment record
     const payment = new Payment({
-      deliveryId: delivery._id,
+      ...(ride ? { rideId: ride._id } : { deliveryId: delivery._id }),
       customerId: customer._id,
       amount: amount,
       currency: "NGN",
@@ -1080,12 +1118,16 @@ export const initiateBankTransfer = async (req, res) => {
 
     await payment.save();
 
-    delivery.payment.status = "pending_payment";
-    delivery.payment.reference = reference;
-    await delivery.save();
+    if (ride) {
+      await Ride.updateOne({ _id: ride._id }, { $set: { "payment.reference": reference } });
+    } else {
+      delivery.payment.status = "pending_payment";
+      delivery.payment.reference = reference;
+      await delivery.save();
+    }
 
     console.log(
-      ` Bank transfer initiated (${bankDetails.type}) for delivery ${deliveryId}`,
+      ` Bank transfer initiated (${bankDetails.type}) for ${ride ? `ride ${rideId}` : `delivery ${deliveryId}`}`,
     );
 
     res.status(200).json({
@@ -1099,8 +1141,8 @@ export const initiateBankTransfer = async (req, res) => {
         transferType: bankDetails.type,
         paymentBreakdown: {
           totalAmount: `${amount.toLocaleString()}`,
-          platformFee: `${platformFee.toLocaleString()} (10%)`,
-          companyReceives: `${companyAmount.toLocaleString()} (90%)`,
+          platformFee: `${platformFee.toLocaleString()}`,
+          companyReceives: `${companyAmount.toLocaleString()}`,
           escrowStatus: "Payment held securely until delivery completion",
         },
         nextSteps: [
@@ -1426,10 +1468,11 @@ export const completeAndSettlePayment = async (req, res) => {
       " [SETTLEMENT] Initiating automatic transfer to company...",
     );
 
-    const settlementResult = await settlePaymentToCompany(
-      payment,
-      delivery.companyId,
-    );
+    // Company riders are paid via their company; individual riders (no
+    // company) are paid straight to their own verified bank account.
+    const settlementResult = delivery.companyId
+      ? await settlePaymentToCompany(payment, delivery.companyId)
+      : await settlePaymentToDriver(payment, delivery.driverId);
 
     if (settlementResult.success) {
       //  Transfer successful - update payment record
@@ -2013,7 +2056,7 @@ export const checkPaymentStatus = async (req, res) => {
 
     const payment = await Payment.findOne({
       paystackReference: reference,
-    }).select("status amount paidAt failureReason deliveryId metadata");
+    }).select("status amount paidAt failureReason deliveryId rideId metadata");
 
     if (!payment) {
       return res.status(404).json({
@@ -2030,6 +2073,7 @@ export const checkPaymentStatus = async (req, res) => {
         paidAt: payment.paidAt,
         failureReason: payment.failureReason,
         deliveryId: payment.deliveryId,
+        rideId: payment.rideId,
         reference: reference,
         escrowStatus: payment.metadata?.escrowStatus || "pending",
       },
@@ -4967,6 +5011,7 @@ async function ensureCompanyBankCode(company) {
 export const refundPayment = async (
   paymentId,
   reason = "Delivery cancelled",
+  amountOverride = null, // refund less than the full amount (e.g. keep a cancellation fee)
 ) => {
   try {
     console.log(` [REFUND] Initiating refund for payment ${paymentId}`);
@@ -5023,9 +5068,15 @@ export const refundPayment = async (
         );
       }
 
+      const refundAmount =
+        amountOverride != null ? Math.max(0, Math.min(payment.amount, Math.round(amountOverride))) : payment.amount;
+      if (refundAmount === 0) {
+        return { success: true, noRefundNeeded: true, reason: "Nothing to refund" };
+      }
+
       const refundResult = await initiateRefund({
         flwRef,
-        amount: payment.amount,
+        amount: refundAmount,
         comments: reason,
       });
 
@@ -5033,7 +5084,7 @@ export const refundPayment = async (
         payment.refund = {
           status: "refunded",
           refundId: refundResult.data.refundId,
-          amount: payment.amount,
+          amount: refundAmount,
           refundedAt: new Date(),
           reason,
         };
@@ -5043,7 +5094,7 @@ export const refundPayment = async (
           timestamp: new Date(),
           details: {
             refundId: refundResult.data.refundId,
-            amount: payment.amount,
+            amount: refundAmount,
             reason,
           },
         });
@@ -5056,7 +5107,7 @@ export const refundPayment = async (
         return {
           success: true,
           refundId: refundResult.data.refundId,
-          amount: payment.amount,
+          amount: refundAmount,
           refundedAt: payment.refund.refundedAt,
         };
       } else {

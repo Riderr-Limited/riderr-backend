@@ -84,3 +84,57 @@ Customer ratings weren't being saved to riders before this change:
 - Rating a ride wrote to fields that don't exist, so it was silently lost.
 
 Both now update `rating.average`, `rating.totalRatings` and `rating.breakdown` properly.
+
+---
+
+# Ride payments, pricing and cancellations
+
+## Pricing uses road distance (maps routing)
+
+`POST /api/rides/quote` `{ pickupLat, pickupLng, dropoffLat, dropoffLng, vehicleType? }` returns the road distance, travel time and a fare for each vehicle type. Booking uses the same route (cached for 15 minutes), so the fare matches the quote. Send the quoted fare as `expectedFare` when booking; if the price has moved by more than ₦50 you get `FARE_CHANGED` and should re-quote.
+
+The route comes from the first provider that's configured:
+
+| Env var | Provider | Notes |
+|---|---|---|
+| `GOOGLE_MAPS_API_KEY` | Google **Routes API** | Most accurate in Nigeria, traffic-aware. Enable "Routes API" in Google Cloud. Paid per request |
+| `MAPBOX_ACCESS_TOKEN` | Mapbox Directions | Free tier: 100k requests a month |
+| `OSRM_URL` | Self-hosted OSRM | Free, but you run the server |
+| none | Estimate | Straight line × `ROUTING_FALLBACK_FACTOR` (1.3) |
+
+If a provider fails, the next one is tried, and the estimate is the last resort, so bookings never break. The fare is fixed at booking: a rider can't change it at the end.
+
+## Payments are in the app, so the commission is always collected
+
+| `paymentMethod` | Flow |
+|---|---|
+| `card` (default) | The booking response includes `payment.reference`. Charge it with the existing `POST /api/payments/charge-card { reference, cardDetails }`, then `/submit-otp` or `/submit-pin` as for deliveries |
+| `bank_transfer` (or `transfer`) | `POST /api/payments/initiate-bank-transfer { rideId }` returns the account to pay into. It's confirmed by the Flutterwave webhook |
+| `cash` | **Off by default.** Turn it on with `RIDE_ALLOW_CASH=true`. The rider collects the fare, and a Payment record with `metadata.commissionStatus: "owed"` tracks the commission they owe |
+
+- **The ride isn't sent to riders until it's paid.** The dispatch job picks it up within about 10 seconds of payment.
+- Unpaid rides are cancelled after `RIDE_PAYMENT_WINDOW_MINUTES` (default 10).
+- Commission: `RIDE_PLATFORM_FEE_PERCENTAGE`, or `PLATFORM_FEE_PERCENTAGE` if that isn't set.
+
+**Payout when the ride completes:** the fare minus the commission is transferred automatically, by Flutterwave transfer:
+- **Company riders:** paid to the company's bank account.
+- **Individual riders:** paid to their own bank account. They add it with `PUT /api/driver/bank-account { bankCode, accountNumber, bankName }`. Flutterwave looks up the account, and **the account name must match the rider's NIN name**. If no account is set up yet, the payout waits, the rider is told to add one, and it's sent automatically as soon as they do. `GET /api/driver/bank-account` shows the saved account, masked.
+
+Each payout can only happen once.
+
+This also fixes **delivery** payouts for individual riders: they used to fail, because settlement only knew how to pay companies.
+
+## Cancellations
+
+| Who / when | What happens |
+|---|---|
+| **Rider** cancels after accepting (before the trip starts) | The ride goes back to `searching` and is **offered to other riders**, never to the rider who cancelled. The customer gets "Finding you another rider" (`ride:redispatched` socket event). The payment stays held. The cancellation counts against that rider's reliability score. After `RIDE_MAX_REDISPATCHES` (3), the ride is cancelled and fully refunded |
+| **Customer** cancels before a rider accepts | Full refund |
+| **Customer** cancels after a rider accepts | Refund minus `RIDE_CANCELLATION_FEE` (₦200) |
+| Nobody accepts within 5 minutes | Cancelled and fully refunded |
+| Trip already started | Can't be cancelled (`TRIP_IN_PROGRESS`); complete it or contact support |
+
+## Security fixes in this change
+
+- The Flutterwave webhook **accepted any request when `FLW_SECRET_HASH` was missing**, so anyone could mark a payment as paid. In production it now rejects all webhooks if the hash isn't set.
+- `initiateTransfer` logged the first 10 characters of `FLW_SECRET_KEY` on every payout. Removed.

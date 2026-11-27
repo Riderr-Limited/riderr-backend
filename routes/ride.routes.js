@@ -16,7 +16,8 @@ import {
   getAllRides,
   getRideStatistics,
   getNearbyRideRequests,
-  rejectRide
+  rejectRide,
+  getRideQuote
 } from '../controllers/ride.controller.js';
 import { authenticate, authorize } from '../middlewares/auth.middleware.js';
 
@@ -59,6 +60,7 @@ const router = express.Router();
  *       201:
  *         description: Ride created
  */
+router.post('/quote', authenticate, authorize('customer'), getRideQuote);
 router.post('/', authenticate, authorize('customer'), createRide);
 
 /**

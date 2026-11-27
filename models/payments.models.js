@@ -4,11 +4,20 @@ import mongoose from "mongoose";
 const paymentSchema = new mongoose.Schema(
   {
     // Reference IDs
+    // A payment belongs to either a delivery or a ride.
     deliveryId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Delivery",
-      required: true,
+      required: function () {
+        return !this.rideId;
+      },
       index: true,
+    },
+    rideId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Ride",
+      index: true,
+      default: null,
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -296,6 +305,30 @@ paymentSchema.pre("save", async function () {
   }
   if (this.metadata?.companySubaccount && !this.escrowDetails?.subaccountCode) {
     this.escrowDetails.subaccountCode = this.metadata.companySubaccount;
+  }
+});
+
+// When a ride's payment succeeds (card, OTP, PIN, webhook, verify... every
+// path saves the Payment), mark the ride as paid so dispatch can start.
+paymentSchema.pre("save", function () {
+  this.$locals.becameSuccessful = this.isModified("status") && this.status === "successful";
+  this.$locals.becameRefunded = this.isModified("status") && this.status === "refunded";
+});
+
+paymentSchema.post("save", async function (doc) {
+  if (!doc.rideId) return;
+  try {
+    const Ride = mongoose.model("Ride");
+    if (doc.$locals.becameSuccessful) {
+      await Ride.updateOne(
+        { _id: doc.rideId, "payment.status": { $ne: "paid" } },
+        { $set: { "payment.status": "paid", "payment.paidAt": doc.paidAt || new Date(), "payment.transactionId": doc.paystackReference } }
+      );
+    } else if (doc.$locals.becameRefunded) {
+      await Ride.updateOne({ _id: doc.rideId }, { $set: { "payment.status": "refunded", "payment.refundedAt": new Date() } });
+    }
+  } catch (e) {
+    console.error("Payment -> ride sync failed:", e.message);
   }
 });
 

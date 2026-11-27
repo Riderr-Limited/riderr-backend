@@ -18,6 +18,7 @@ import Delivery from "../../models/delivery.models.js";
 import Ride from "../../models/ride.model.js";
 import Driver from "../../models/riders.models.js";
 import { sendNotification, NotificationTemplates } from "../../utils/notification.js";
+import { refundRide } from "../payments/ridePayment.service.js";
 
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== "" && v != null ? Number(v) : d);
 
@@ -142,11 +143,19 @@ export const getDriverHistory = async (driverIds) => {
           }
         }
       }
-    ])
+    ]),
+  ]);
+
+  // Rides a rider accepted and then cancelled (the ride itself went to someone else).
+  const rideCancels = await Ride.aggregate([
+    { $match: { "driverCancellations.driverId": { $in: ids }, createdAt: { $gte: since } } },
+    { $unwind: "$driverCancellations" },
+    { $match: { "driverCancellations.driverId": { $in: ids } } },
+    { $group: { _id: "$driverCancellations.driverId", driverCancelled: { $sum: 1 } } }
   ]);
 
   const merged = new Map();
-  for (const row of [...deliveries, ...rides]) {
+  for (const row of [...deliveries, ...rides, ...rideCancels]) {
     const key = String(row._id);
     const cur = merged.get(key) || { ratingSum: 0, ratingCount: 0, completed: 0, failed: 0, driverCancelled: 0 };
     for (const f of Object.keys(cur)) cur[f] += row[f] || 0;
@@ -266,8 +275,8 @@ const KINDS = {
       return { lat: c[1], lng: c[0] };
     },
     vehicleTypeOf: (r) => r.vehicleType,
-    // Rides are paid at the end (cash) as before, so they go out straight away.
-    isPayable: () => true,
+    // Card/transfer rides go out once paid; cash rides (if enabled) straight away.
+    isPayable: (r) => r.payment?.method === "cash" || r.payment?.status === "paid",
     notify: async (ride, r, io) => {
       await safeNotify({
         userId: r.driver.userId._id,
@@ -448,32 +457,85 @@ const expireUnacceptedRides = async (io) => {
     );
     if (!ride) continue;
     expired++;
+    let refundNote = "";
+    if (ride.payment?.status === "paid") {
+      const refund = await refundRide(ride._id, "No rider accepted the ride");
+      refundNote = refund.success ? " Your payment has been refunded." : " We'll refund your payment shortly.";
+    }
     await safeNotify({
       userId: ride.customerId,
-      ...NotificationTemplates.RIDE_CANCELLED(ride._id, "system", "No rider was available nearby. Please try again.")
+      ...NotificationTemplates.RIDE_CANCELLED(ride._id, "system", `No rider was available nearby. Please try again.${refundNote}`)
     });
     io?.to(`user_${ride.customerId}`).emit("ride:no_driver", { rideId: ride._id });
   }
   return expired;
 };
 
-/** Background tick: start paid deliveries, push due waves, expire stale rides. */
+/** Cancel card/transfer rides the customer didn't pay for in time. */
+const expireUnpaidRides = async (io) => {
+  const stale = await Ride.find({
+    status: "searching",
+    driverId: null,
+    "payment.method": { $ne: "cash" },
+    "payment.status": { $nin: ["paid", "refunded"] },
+    paymentExpiresAt: { $ne: null, $lte: new Date() }
+  })
+    .select("_id")
+    .limit(100)
+    .lean();
+  let expired = 0;
+  for (const { _id } of stale) {
+    const ride = await Ride.findOneAndUpdate(
+      { _id, status: "searching", driverId: null, "payment.status": { $nin: ["paid", "refunded"] } },
+      {
+        $set: {
+          status: "cancelled",
+          cancelledAt: new Date(),
+          "cancellation.cancelledBy": "system",
+          "cancellation.reason": "Payment not completed in time"
+        }
+      },
+      { new: true }
+    );
+    if (!ride) continue;
+    expired++;
+    await safeNotify({
+      userId: ride.customerId,
+      ...NotificationTemplates.RIDE_CANCELLED(ride._id, "system", "Payment wasn't completed in time, so the ride was cancelled.")
+    });
+    io?.to(`user_${ride.customerId}`).emit("ride:cancelled", { rideId: ride._id, reason: "payment_timeout" });
+  }
+  return expired;
+};
+
+/** Put a ride back out to riders after the assigned rider cancels. */
+export const redispatchRide = async (rideId, io) => {
+  const ride = await Ride.findById(rideId);
+  if (!ride) return null;
+  return start(KINDS.ride, ride, io);
+};
+
+/** Background tick: start paid jobs, push due waves, expire stale rides. */
 export const processDispatchQueue = async (io) => {
   const cfg = dispatchConfig();
   if (!cfg.enabled) return { started: 0, waves: 0, expiredRides: 0 };
 
-  // 1. Card/transfer deliveries that have just been paid.
-  const waiting = await Delivery.find({
-    status: "created",
-    driverId: null,
-    "dispatch.enabled": true,
-    "dispatch.startedAt": null,
-    "payment.status": "paid"
-  }).limit(50);
+  // 1. Card/transfer deliveries and rides that have just been paid.
   let started = 0;
-  for (const d of waiting) {
-    const r = await startDispatch(d, io);
-    if (r.notifiedCount || r.candidateCount === 0) started++;
+  for (const [kind, paidFilter] of [
+    [KINDS.delivery, { "payment.status": "paid" }],
+    [KINDS.ride, { "payment.status": "paid" }]
+  ]) {
+    const waiting = await kind.Model.find({
+      ...kind.open,
+      ...paidFilter,
+      "dispatch.enabled": true,
+      "dispatch.startedAt": null
+    }).limit(50);
+    for (const d of waiting) {
+      const r = await start(kind, d, io);
+      if (r.notifiedCount || r.candidateCount === 0) started++;
+    }
   }
 
   // 2. Waves that are due, for both kinds.
@@ -492,8 +554,8 @@ export const processDispatchQueue = async (io) => {
     for (const d of due) if (await nextWave(kind, d._id, io)) waves++;
   }
 
-  // 3. Rides nobody took.
-  const expiredRides = await expireUnacceptedRides(io);
+  // 3. Rides nobody took, and card/transfer rides never paid for.
+  const expiredRides = (await expireUnacceptedRides(io)) + (await expireUnpaidRides(io));
 
   return { started, waves, expiredRides };
 };

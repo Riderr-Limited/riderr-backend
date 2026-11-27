@@ -201,6 +201,7 @@ const RideSchema = new mongoose.Schema(
         default: 'pending'
       },
       transactionId: String,
+      reference: String,      // Payment.paystackReference for card/transfer rides
       paidAt: Date,
       refundedAt: Date,
       refundReason: String
@@ -254,6 +255,22 @@ const RideSchema = new mongoose.Schema(
         ratedAt: Date
       }
     },
+
+    // Card/transfer rides that aren't paid by this time are cancelled.
+    paymentExpiresAt: { type: Date, default: null },
+
+    // Riders who accepted and then cancelled. The ride goes back out to other
+    // riders (up to RIDE_MAX_REDISPATCHES times) and this counts against the
+    // rider's reliability score.
+    driverCancellations: [
+      {
+        _id: false,
+        driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+        reason: String,
+        at: { type: Date, default: Date.now }
+      }
+    ],
+    redispatchCount: { type: Number, default: 0 },
 
     // Riders who declined this request (so it isn't offered to them again)
     rejectedByDrivers: [
