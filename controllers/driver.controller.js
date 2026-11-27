@@ -5,6 +5,7 @@ import Company from "../models/company.models.js";
 import mongoose from "mongoose";
 import { validationResult } from "express-validator";
 import { sendNotification } from "../utils/notification.js";
+import { visibleToDriverFilter, isOfferedTo, onDriverRejected } from "../services/dispatch/dispatch.service.js";
 
 /**
  * UTILITY FUNCTIONS
@@ -1090,6 +1091,7 @@ export const getDeliveryRequests = async (req, res) => {
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
+      ...visibleToDriverFilter(driver._id),
     })
       .populate("customerId", "name rating")
       .sort({ createdAt: -1 })
@@ -1250,6 +1252,17 @@ export const acceptDelivery = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Delivery is no longer available",
+      });
+    }
+
+    // Priority dispatch: only riders this request was offered to can take it.
+    if (!isOfferedTo(delivery, driver._id)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({
+        success: false,
+        message: "This request was offered to other riders first. It will open to you if they don't accept.",
+        code: "NOT_OFFERED_YET",
       });
     }
 
@@ -3022,6 +3035,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
+      ...visibleToDriverFilter(driver._id),
     })
       .populate("customerId", "name phone avatarUrl rating")
       .sort({ createdAt: -1 })
@@ -3162,6 +3176,7 @@ export const rejectDelivery = async (req, res) => {
     // Update driver stats
     driver.totalRequests = (driver.totalRequests || 0) + 1;
     await driver.save();
+    await onDriverRejected(deliveryId);
 
     console.log(` Driver ${driver._id} rejected delivery ${deliveryId}: ${reason || 'No reason'}`);
 

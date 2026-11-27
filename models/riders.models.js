@@ -544,28 +544,25 @@ DriverSchema.methods.goOffline = async function() {
   await this.save();
 };
 
-// Update rating
-DriverSchema.methods.addRating = async function(ratingValue) {
-  if (ratingValue < 1 || ratingValue > 5) {
+// Update rating. Pass { save: false, session } to save it yourself (e.g. in a transaction).
+DriverSchema.methods.applyRating = function(ratingValue) {
+  ratingValue = Number(ratingValue);
+  if (!Number.isFinite(ratingValue) || ratingValue < 1 || ratingValue > 5) {
     throw new Error('Rating must be between 1 and 5');
   }
-  
-  // Update breakdown
-  this.rating.breakdown[ratingValue] += 1;
-  
-  // Update total ratings
-  this.rating.totalRatings += 1;
-  
-  // Calculate new average
-  const totalPoints = 
-    (this.rating.breakdown[5] * 5) +
-    (this.rating.breakdown[4] * 4) +
-    (this.rating.breakdown[3] * 3) +
-    (this.rating.breakdown[2] * 2) +
-    (this.rating.breakdown[1] * 1);
-  
-  this.rating.average = (totalPoints / this.rating.totalRatings).toFixed(2);
-  
+  const star = Math.round(ratingValue);
+  const r = this.rating;
+  r.breakdown[star] = (r.breakdown[star] || 0) + 1;
+  // Running average over the actual values given (supports half stars).
+  const prevTotal = r.totalRatings || 0;
+  const prevAvg = prevTotal > 0 ? r.average : 0;
+  r.totalRatings = prevTotal + 1;
+  r.average = Math.round(((prevAvg * prevTotal + ratingValue) / r.totalRatings) * 100) / 100;
+  return this.rating;
+};
+
+DriverSchema.methods.addRating = async function(ratingValue) {
+  this.applyRating(ratingValue);
   await this.save();
   return this.rating;
 };

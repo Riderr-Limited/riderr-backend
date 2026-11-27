@@ -820,14 +820,9 @@ export const rateRide = async (req, res) => {
     if (ride.driverId) {
       const driver = await Driver.findById(ride.driverId).session(session);
       if (driver) {
-        // Calculate new average rating
-        const totalRatings = driver.ratingCount || 0;
-        const currentRating = driver.averageRating || 0;
-        const newRatingCount = totalRatings + 1;
-        const newAverageRating = ((currentRating * totalRatings) + rating) / newRatingCount;
-        
-        driver.averageRating = parseFloat(newAverageRating.toFixed(1));
-        driver.ratingCount = newRatingCount;
+        // averageRating/ratingCount don't exist on Driver, so ratings were
+        // silently dropped. Use the real rating fields.
+        driver.applyRating(rating);
         await driver.save({ session });
       }
     }

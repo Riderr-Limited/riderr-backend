@@ -14,6 +14,7 @@ import supportSocket from "./socket/supportSocket.js";
 import adminChatSocket from "./socket/adminChatSocket.js";
 import startAutoExpireJob from "./jobs/autoExpireDeliveries.js";
 import startNotifyUnassignedPartnerDeliveriesJob from "./jobs/notifyUnassignedPartnerDeliveries.js";
+import startDispatchWavesJob from "./jobs/dispatchWaves.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
@@ -140,6 +141,7 @@ const startServer = async () => {
     // Start background jobs
     startAutoExpireJob();
     startNotifyUnassignedPartnerDeliveriesJob();
+    startDispatchWavesJob(() => app.get("io"));
 
     // Store io instance BEFORE server starts so controllers can access it
     app.set("io", io);

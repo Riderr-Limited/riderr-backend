@@ -239,6 +239,31 @@ const deliverySchema = new mongoose.Schema({
     addedAt: Date,
   },
 
+  // Priority dispatch (services/dispatch/dispatch.service.js). Best-ranked
+  // riders nearby are offered the job first, in waves. Deliveries without
+  // dispatch.enabled (older ones) stay visible to every nearby rider.
+  dispatch: {
+    enabled: { type: Boolean, default: false },
+    startedAt: { type: Date, default: null },
+    wave: { type: Number, default: 0 },
+    nextWaveAt: { type: Date, default: null },
+    openToAll: { type: Boolean, default: false },
+    notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Driver" }],
+    // Snapshot of the latest ranking, for admins to see why a rider got it.
+    lastRanking: [
+      {
+        _id: false,
+        driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver" },
+        score: Number,
+        distanceKm: Number,
+        rating: Number,
+        ratingCount: Number,
+        reliability: Number,
+        wave: Number,
+      },
+    ],
+  },
+
   // Created and updated timestamps
   createdAt: {
     type: Date,
@@ -259,6 +284,7 @@ deliverySchema.index({ createdAt: -1 });
 //  NEW: Index for rejection filtering
 deliverySchema.index({ 'rejectedByDrivers.driverId': 1 });
 deliverySchema.index({ partnerId: 1, status: 1 });
+deliverySchema.index({ status: 1, "dispatch.enabled": 1, "dispatch.nextWaveAt": 1 });
 
 // Generate reference ID before saving
 deliverySchema.pre("save", async function () {

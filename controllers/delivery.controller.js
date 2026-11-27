@@ -9,6 +9,7 @@ import { sendNotification, NotificationTemplates } from "../utils/notification.j
 import crypto from "crypto";
 import { smartReverseGeocode } from "../utils/geocoding.js";
 import Payment from '../models/payments.models.js'
+import { startDispatch, dispatchConfig, visibleToDriverFilter, isOfferedTo, onDriverRejected } from "../services/dispatch/dispatch.service.js";
 
 // Notify all admin users
 const notifyAdmins = async (title, message, data = {}) => {
@@ -365,6 +366,7 @@ export const getNearbyDeliveryRequests = async (req, res) => {
     const deliveries = await Delivery.find({
       status: "created",
       driverId: { $exists: false },
+      ...visibleToDriverFilter(driver._id),
     })
       .populate("customerId", "name phone avatarUrl rating")
       .sort({ createdAt: -1 })
@@ -603,6 +605,17 @@ export const acceptDelivery = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "This delivery request no longer exists or has been cancelled",
+      });
+    }
+
+    // Priority dispatch: only riders this request was offered to can take it.
+    if (!isOfferedTo(delivery, driver._id)) {
+      await session.abortTransaction();
+      await session.endSession();
+      return res.status(403).json({
+        success: false,
+        message: "This request was offered to other riders first. It will open to you if they don't accept.",
+        code: "NOT_OFFERED_YET",
       });
     }
 
@@ -1342,6 +1355,7 @@ export const rejectDelivery = async (req, res) => {
     });
 
     await delivery.save();
+    await onDriverRejected(delivery._id);
 
     // Update driver stats
     await Driver.findByIdAndUpdate(driver._id, {
@@ -1664,20 +1678,9 @@ export const rateDelivery = async (req, res) => {
     if (delivery.driverId) {
       const driver = await Driver.findById(delivery.driverId);
       if (driver) {
-        const totalRatings = driver.totalRatings || 0;
-        const currentRating = driver.rating || 0;
-        const newTotalRatings = totalRatings + 1;
-        const newRating =
-          (currentRating * totalRatings + rating) / newTotalRatings;
-
-        driver.rating = newRating;
-        driver.totalRatings = newTotalRatings;
-
-        if (tip && tip > 0) {
-          driver.earnings = (driver.earnings || 0) + tip;
-        }
- 
-        await driver.save();
+        // rating is an object { average, totalRatings, breakdown } on Driver.
+        // (Previously this assigned a number to it, so the save always failed.)
+        await driver.addRating(rating);
 
         const driverUser = await User.findById(driver.userId);
         if (driverUser) {
@@ -2595,6 +2598,8 @@ export const createDeliveryRequest = async (req, res) => {
         : null,
 
       status: "created",
+
+      dispatch: { enabled: dispatchConfig().enabled },
     };
 
     const delivery = new Delivery(deliveryData);
@@ -2675,59 +2680,17 @@ export const createDeliveryRequest = async (req, res) => {
       }
     }
 
-    const nearbyDrivers = await Driver.find({
-      isOnline: true,
-      isActive: true,
-      approvalStatus: { $ne: "rejected" },
-      $and: [
-        {
-          $or: [
-            { currentDeliveryId: { $exists: false } },
-            { currentDeliveryId: null },
-          ],
-        },
-        {
-          $or: [
-            { "location.coordinates": { $exists: true, $ne: [0, 0] } },
-            { "currentLocation.lat": { $exists: true } },
-          ],
-        },
-      ],
-    }).populate("userId", "name phone avatarUrl");
-
-    const driversNearPickup = nearbyDrivers.filter((driver) => {
-      let driverLat, driverLng;
-
-      if (
-        driver.location &&
-        driver.location.coordinates &&
-        driver.location.coordinates.length >= 2
-      ) {
-        driverLng = driver.location.coordinates[0];
-        driverLat = driver.location.coordinates[1];
-      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-        driverLat = driver.currentLocation.lat;
-        driverLng = driver.currentLocation.lng;
-      } else if (driver.lat && driver.lng) {
-        driverLat = driver.lat;
-        driverLng = driver.lng;
-      } else {
-        return false;
-      }
-
-      const distanceToPickup = calculateDistance(
-        pickup.lat,
-        pickup.lng,
-        driverLat,
-        driverLng
-      );
-      return distanceToPickup <= 10;
-    });
-
-    console.log(` Notifying ${driversNearPickup.length} nearby drivers`);
+    // Priority dispatch: best-ranked nearby riders get the request first,
+    // then more riders in waves (see services/dispatch/dispatch.service.js).
+    // Card/transfer deliveries are dispatched by the job once they're paid.
+    const dispatchResult = await startDispatch(delivery, req.app.get("io"));
+    console.log(
+      ` ${dispatchResult.candidateCount} rider(s) nearby, ${dispatchResult.notifiedCount} notified` +
+        (dispatchResult.deferred ? " (waiting for payment)" : "")
+    );
 
     //  NO DRIVERS FOUND  notify admin instead of showing company list
-    if (driversNearPickup.length === 0) {
+    if (dispatchResult.candidateCount === 0) {
       await notifyAdmins(
         "No Drivers Available",
         `Delivery #${delivery.referenceId} has no available drivers nearby. Customer: ${delivery.customerName}. Pickup: ${delivery.pickup.address || "N/A"}. Fare: ${delivery.fare.totalFare.toLocaleString()}`,
@@ -2751,63 +2714,6 @@ export const createDeliveryRequest = async (req, res) => {
           },
         },
       });
-    }
-
-    for (const driver of driversNearPickup) {
-      if (!driver.userId) continue;
-
-      let driverLat, driverLng;
-      
-      if (
-        driver.location &&
-        driver.location.coordinates &&
-        driver.location.coordinates.length >= 2
-      ) {
-        driverLng = driver.location.coordinates[0];
-        driverLat = driver.location.coordinates[1];
-      } else if (driver.currentLocation?.lat && driver.currentLocation?.lng) {
-        driverLat = driver.currentLocation.lat;
-        driverLng = driver.currentLocation.lng;
-      } else if (driver.lat && driver.lng) {
-        driverLat = driver.lat;
-        driverLng = driver.lng;
-      }
-
-      const distanceToPickup = calculateDistance(
-        pickup.lat,
-        pickup.lng,
-        driverLat,
-        driverLng
-      );
-
-      const template = NotificationTemplates.NEW_DELIVERY_REQUEST(
-        delivery._id,
-        distanceToPickup,
-        delivery.fare.totalFare
-      );
-      
-      await sendNotification({
-        userId: driver.userId._id,
-        ...template,
-      });
-    }
-
-    // Also emit socket event so drivers get real-time ping even if push is delayed
-    const io = req.app.get("io");
-    if (io) {
-      for (const driver of driversNearPickup) {
-        if (driver.userId) {
-          io.to(`user_${driver.userId._id}`).emit("delivery:new_request", {
-            deliveryId: delivery._id,
-            referenceId: delivery.referenceId,
-            pickup: delivery.pickup,
-            dropoff: delivery.dropoff,
-            fare: delivery.fare,
-            payment: delivery.payment,
-            itemDetails: delivery.itemDetails,
-          });
-        }
-      }
     }
 
     res.status(201).json({
@@ -2835,8 +2741,8 @@ export const createDeliveryRequest = async (req, res) => {
           ? paymentMethod === "transfer"
             ? "Please complete bank transfer to confirm your delivery"
             : "Please complete card payment to confirm your delivery"
-          : driversNearPickup.length > 0
-          ? `${driversNearPickup.length} nearby driver${driversNearPickup.length !== 1 ? "s" : ""} notified!`
+          : dispatchResult.notifiedCount > 0
+          ? `${dispatchResult.notifiedCount} nearby driver${dispatchResult.notifiedCount !== 1 ? "s" : ""} notified!`
           : "Request created. Searching for available drivers...",
       },
     });
