@@ -773,6 +773,10 @@ async function getActive({ user, app }) {
   return result.ok ? result.body.data : null;
 }
 
+// getCustomerActiveDelivery can return an empty driverDetails object before a
+// rider accepts, so only treat it as assigned when it carries a name.
+const assignedRider = (d) => (d?.driverDetails?.name ? d.driverDetails : null);
+
 async function trackDelivery(ctx) {
   const { from } = ctx;
   const d = await getActive(ctx);
@@ -780,7 +784,7 @@ async function trackDelivery(ctx) {
     return wa.sendButtons(from, "You don't have an active delivery right now.", [{ id: "book", title: "📦 Send a package" }]);
   }
 
-  const driver = d.driverDetails;
+  const driver = assignedRider(d);
   const vehicle = driver?.vehicle
     ? [driver.vehicle.make, driver.vehicle.model, driver.vehicle.plateNumber && `(${driver.vehicle.plateNumber})`].filter(Boolean).join(" ")
     : "";
@@ -854,11 +858,12 @@ async function paymentStatus(ctx) {
 async function startChat(ctx) {
   const { from, session } = ctx;
   const d = await getActive(ctx);
-  if (!d?.driverDetails) {
+  const rider = d && assignedRider(d);
+  if (!rider) {
     return wa.sendText(from, d ? "No rider has accepted your delivery yet. We'll let you know as soon as one does." : "You don't have an active delivery.");
   }
-  await saveState(session, "chat_message", { deliveryId: String(d._id), driverName: d.driverDetails.name });
-  return wa.sendText(from, `💬 Type your message for *${d.driverDetails.name}* (or *cancel*).`);
+  await saveState(session, "chat_message", { deliveryId: String(d._id), driverName: rider.name });
+  return wa.sendText(from, `💬 Type your message for *${rider.name}* (or *cancel*).`);
 }
 
 async function handleChatMessage({ from, session, user, app, input }) {
