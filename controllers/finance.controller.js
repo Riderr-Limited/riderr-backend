@@ -46,7 +46,7 @@ export const listRefunds = async (req, res) => {
       data: {
         refunds: items.map((p) => ({
           paymentId: p._id,
-          job: p.rideId ? { type: "ride", id: p.rideId } : { type: "delivery", id: p.deliveryId },
+          job: p.purpose === "commission" ? { type: "commission_overpayment", driverId: p.driverId } : p.rideId ? { type: "ride", id: p.rideId } : { type: "delivery", id: p.deliveryId },
           customer: p.customerId
             ? { id: p.customerId._id, name: p.customerId.name, email: p.customerId.email, phone: p.customerId.phone }
             : null,

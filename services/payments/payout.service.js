@@ -4,6 +4,7 @@
 // (payment.companyAmount) goes to:
 //   - the rider's company, if they belong to one (Company.bankAccount), or
 //   - the rider themself, for individual riders (Driver.bankDetails).
+import mongoose from "mongoose";
 import Payment from "../../models/payments.models.js";
 import Company from "../../models/company.models.js";
 import Driver from "../../models/riders.models.js";
@@ -24,7 +25,10 @@ export const splitAmount = (amount, kind = "delivery") => {
 
 /** Who gets paid for a job done by this rider, and their bank details. */
 export const resolvePayee = async (driverOrId, { companyId } = {}) => {
-  const driver = driverOrId?._id ? driverOrId : await Driver.findById(driverOrId);
+  // An ObjectId also has an _id (pointing to itself), so check for a real
+  // rider record before using it as one.
+  const isDoc = driverOrId && typeof driverOrId === "object" && !(driverOrId instanceof mongoose.Types.ObjectId) && "userId" in driverOrId;
+  const driver = isDoc ? driverOrId : driverOrId ? await Driver.findById(driverOrId) : null;
   if (!driver && !companyId) return { error: "Rider not found" };
 
   // A job that belongs to a company (e.g. a delivery the company accepted)
@@ -73,7 +77,7 @@ export const payoutPayment = async (paymentId, driverOrId, { companyId } = {}) =
   );
   if (!payment) return { success: false, skipped: true, error: "Not eligible for payout (unpaid, cash, or already paid out)" };
 
-  const driverId = payment.driverId || driverOrId?._id || driverOrId;
+  const driverId = payment.driverId || (driverOrId instanceof mongoose.Types.ObjectId ? driverOrId : driverOrId?._id || driverOrId);
   let deducted = 0;
 
   const fail = async (error, requiresAction) => {

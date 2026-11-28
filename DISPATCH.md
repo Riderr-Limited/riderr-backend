@@ -165,6 +165,30 @@ With cash, the rider keeps the whole fare, so Riderr's commission (`PLATFORM_FEE
 | `GET /api/admin/commissions` | Admin | Riders who owe commission, most owed first, plus the total |
 | `GET /api/admin/commissions/:driverId` | Admin | One rider's breakdown |
 | `POST /api/admin/commissions/:driverId/settle { amount, note }` | Admin | Record commission a rider paid Riderr directly (e.g. by transfer). Capped at what they owe |
+| `POST /api/driver/commission/pay { method, amount? }` | Rider | Pay what they owe in the app (see below) |
+
+### Limit on what a rider can owe
+
+Once a rider owes more than `COMMISSION_OWED_LIMIT` (default ₦5,000; `0` turns it off):
+- They're taken offline right away and told why.
+- They can't go online, accept rides or deliveries, or be offered jobs by dispatch. The error code is `COMMISSION_LIMIT_REACHED`, with the amount owed and the limit.
+- They can work again once they've paid enough to be at or under the limit. A payout deduction or an admin-recorded payment also counts.
+
+### Riders paying in the app
+
+`POST /api/driver/commission/pay` takes `{ method: "card" | "bank_transfer", amount? }`. The amount defaults to everything owed; the minimum is ₦100.
+- **Card:** returns a `reference`. Charge it with the usual `POST /api/payments/charge-card { reference, cardDetails }`, then `/submit-otp` or `/submit-pin` if asked.
+- **Bank transfer:** returns a one-off Flutterwave account to transfer into. There's no fallback account: if Flutterwave can't create one, the rider is asked to pay by card instead.
+- **Confirmation:** check `GET /api/payments/status/:reference`, or `GET /api/driver/commission`. However the payment is confirmed (webhook, OTP, PIN), it's applied once, and the rider is notified.
+- **Overpayment:** if the rider pays more than they still owe (for example, a payout deduction cleared some of it in the meantime), the extra goes to the manual refund queue.
+
+## Payouts are safe against double payment
+
+Delivery settlement now records the customer's confirmation first, and only then sends money. Every payout (rides and deliveries) goes through one function, which claims the payment before transferring. So the money can't be sent twice, even if two requests arrive together or something fails after the transfer.
+- If the transfer fails, the delivery still completes, and the customer sees "the payout will be completed shortly".
+- `GET /api/admin/payouts?status=failed` lists failed payouts. `POST /api/admin/payouts/:paymentId/retry` sends one again.
+- A payout stuck in `processing` (the server stopped mid-payout) is only resent with `{ confirmedNotSent: true }`, after you've checked in Flutterwave that no transfer went out.
+- Individual riders' failed payouts are also retried automatically when they add a bank account.
 
 ## Security fixes in this change
 
