@@ -35,6 +35,31 @@ export const isOverCommissionLimit = (owed) => {
   return limit > 0 && Math.round(owed || 0) > limit;
 };
 
+/**
+ * Individual riders are paid straight to their own bank account, so they must
+ * add (and verify) one before they can work. Company riders are paid through
+ * their company. Returns null if OK, otherwise the 403 body to send.
+ */
+export const bankAccountBlock = (driver) => {
+  if (!driver || driver.companyId) return null;
+  const b = driver.bankDetails || {};
+  if (b.accountNumber && b.bankCode && b.verified) return null;
+  return {
+    success: false,
+    code: "BANK_ACCOUNT_REQUIRED",
+    message: "Add your bank account so we can pay you, then go online.",
+    addBankAccountUrl: "/api/driver/bank-account"
+  };
+};
+
+/** Filter for riders who can be paid: company riders, or individuals with a verified account. */
+export const payableRiderFilter = () => ({
+  $or: [{ companyId: { $ne: null } }, { "bankDetails.verified": true }]
+});
+
+/** Single check used by go-online and accept endpoints. */
+export const workBlock = (driver) => bankAccountBlock(driver) || commissionBlock(driver);
+
 /** Mongo filter for riders still under the limit (used by dispatch). */
 export const underCommissionLimitFilter = () => {
   const limit = commissionLimit();

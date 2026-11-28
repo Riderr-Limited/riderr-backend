@@ -1,6 +1,6 @@
 import Driver from "../models/riders.models.js";
 import { recordCashDelivery } from "../services/payments/commission.service.js";
-import { commissionBlock } from "../services/payments/commission.service.js";
+import { workBlock } from "../services/payments/commission.service.js";
 import User from "../models/user.models.js";
 import Delivery from "../models/delivery.models.js";
 import Company from "../models/company.models.js";
@@ -528,7 +528,7 @@ export const toggleDriverOnlineStatus = async (req, res) => {
 
     // Riders who owe too much cash commission must pay before working again.
     if (isOnline) {
-      const block = commissionBlock(driver);
+      const block = workBlock(driver);
       if (block) return res.status(403).json(block);
     }
 
@@ -1233,7 +1233,7 @@ export const acceptDelivery = async (req, res) => {
       });
     }
 
-    const commissionStop = commissionBlock(driver);
+    const commissionStop = workBlock(driver);
     if (commissionStop) {
       await session.abortTransaction();
       session.endSession();

@@ -151,8 +151,12 @@ export const getStatus = async (userId) => {
   const k = driver.kyc;
   const { requiredGuarantors, maxNinAttempts, maxFaceAttempts } = kycConfig();
 
+  // Individual riders are paid to their own account, so it's part of onboarding
+  // (it needs the NIN name, so it comes after the NIN check).
+  const hasBank = !!(driver.bankDetails?.accountNumber && driver.bankDetails?.verified);
+
   let nextStep = null;
-  if (k.status === "approved") nextStep = null;
+  if (k.status === "approved") nextStep = hasBank ? null : "add_bank_account";
   else if (k.status === "rejected") nextStep = "contact_support";
   else if (!["passed", "manual_review"].includes(k.nin.status)) nextStep = "submit_nin";
   else if (!["passed", "manual_review"].includes(k.face.status)) nextStep = "submit_selfie";
@@ -163,10 +167,11 @@ export const getStatus = async (userId) => {
     onboardingType: "individual",
     required: true,
     status: k.status,
-    canWork: driver.isKycCleared(),
+    canWork: driver.isKycCleared() && hasBank,
     nextStep,
     rejectionReason: k.status === "rejected" ? k.rejectionReason : undefined,
     checks: {
+      bankAccount: { status: hasBank ? "passed" : "not_started", endpoint: "/api/driver/bank-account" },
       nin: {
         status: k.nin.status,
         last4: k.nin.last4,

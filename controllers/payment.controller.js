@@ -39,6 +39,30 @@ import Ride from "../models/ride.model.js";
  */
 
 /**
+ * Riderr's own bank account for manual transfers (used only when Flutterwave
+ * can't create a one-off account). Returns null unless PLATFORM_BANK_NAME,
+ * PLATFORM_ACCOUNT_NUMBER and PLATFORM_ACCOUNT_NAME are all set to a real
+ * account, so customers are never shown a placeholder account to pay into.
+ */
+const PLACEHOLDER_ACCOUNTS = new Set(["1012345678", "0123456789", "1234567890", "0000000000"]);
+export function platformBankAccount() {
+  const accountNumber = String(process.env.PLATFORM_ACCOUNT_NUMBER || "").trim();
+  const bankName = String(process.env.PLATFORM_BANK_NAME || "").trim();
+  const accountName = String(process.env.PLATFORM_ACCOUNT_NAME || "").trim();
+  if (!/^\d{10}$/.test(accountNumber) || PLACEHOLDER_ACCOUNTS.has(accountNumber) || !bankName || !accountName) {
+    return null;
+  }
+  return { bankName, accountNumber, accountName };
+}
+
+function transferUnavailableError() {
+  const e = new Error("Bank transfer is unavailable right now. Please pay by card or try again shortly.");
+  e.code = "TRANSFER_UNAVAILABLE";
+  e.status = 503;
+  return e;
+}
+
+/**
  * Helper: Generate bank transfer details with priority handling
  */
 async function generateBankTransferDetails(
@@ -96,33 +120,16 @@ async function generateBankTransferDetails(
       console.warn(" Dedicated account failed:", err.message);
     }
 
-    // Priority 2: Use company bank account
-    if (!bankDetails && delivery.companyId?.bankAccount?.accountNumber) {
-      console.log(" Using company bank account");
-      bankDetails = {
-        type: "company_account",
-        bankName: delivery.companyId.bankAccount.bankName || "Company Bank",
-        accountNumber: delivery.companyId.bankAccount.accountNumber,
-        accountName:
-          delivery.companyId.bankAccount.accountName || delivery.companyId.name,
-        reference: reference,
-        amount: amount,
-        formatted: `${amount.toLocaleString()}`,
-        narration: `Riderr-${reference}`,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      };
-      paymentMethod = "company_bank_transfer";
-      priority = "medium";
-    }
-
-    // Priority 3: Use platform account (always succeeds)
+    // Fallback: Riderr's own account, confirmed manually by the team.
+    // (Customers are never sent to the company's account: that skipped
+    // Riderr's commission, and the company was then paid again at settlement.)
     if (!bankDetails) {
+      const platform = platformBankAccount();
+      if (!platform) throw transferUnavailableError();
       console.log(" Using platform fallback account");
       bankDetails = {
         type: "platform_account",
-        bankName: process.env.PLATFORM_BANK_NAME || "Zenith Bank",
-        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER || "1012345678",
-        accountName: process.env.PLATFORM_ACCOUNT_NAME || "RIDERR TECHNOLOGIES LTD",
+        ...platform,
         reference: reference,
         amount: amount,
         formatted: `${amount.toLocaleString()}`,
@@ -255,10 +262,10 @@ export const initializeDeliveryPayment = async (req, res) => {
           data: formatTransferResponse(existingPayment, delivery),
         });
       } catch (err) {
-        return res.status(500).json({
+        return res.status(err.status || 500).json({
           success: false,
           message: err.message || "Failed to generate bank transfer details",
-          code: "TRANSFER_INIT_ERROR",
+          code: err.code || "TRANSFER_INIT_ERROR",
         });
       }
     }
@@ -373,10 +380,10 @@ async function handleTransferInitialization(
     });
   } catch (error) {
     console.error(" Transfer initialization error:", error);
-    return res.status(500).json({
+    return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Failed to generate transfer details",
-      code: "TRANSFER_INIT_ERROR",
+      code: error.code || "TRANSFER_INIT_ERROR",
       fallback: "Please try card payment instead",
       error: IS_PRODUCTION ? undefined : error.message,
     });
@@ -1074,10 +1081,16 @@ export const initiateBankTransfer = async (req, res) => {
       }
     } catch (vaError) {
       console.warn(" Virtual account failed, using manual method:", vaError.message);
+      const platform = platformBankAccount();
+      if (!platform) {
+        return res.status(503).json({
+          success: false,
+          code: "TRANSFER_UNAVAILABLE",
+          message: "Bank transfer is unavailable right now. Please pay by card or try again shortly.",
+        });
+      }
       bankDetails = {
-        bankName: process.env.PLATFORM_BANK_NAME || process.env.FALLBACK_BANK_NAME || "Zenith Bank",
-        accountNumber: process.env.PLATFORM_ACCOUNT_NUMBER || process.env.FALLBACK_ACCOUNT_NUMBER || "1012345678",
-        accountName: process.env.PLATFORM_ACCOUNT_NAME || process.env.FALLBACK_ACCOUNT_NAME || "RIDERR NIG LTD",
+        ...platform,
         reference: reference,
         amount: amount,
         type: "manual_transfer",

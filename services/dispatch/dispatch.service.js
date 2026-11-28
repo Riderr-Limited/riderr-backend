@@ -20,7 +20,7 @@ import Driver from "../../models/riders.models.js";
 import { sendNotification, NotificationTemplates } from "../../utils/notification.js";
 import { refundRide } from "../payments/ridePayment.service.js";
 import { pendingRefundMessage } from "../payments/refund.service.js";
-import { underCommissionLimitFilter } from "../payments/commission.service.js";
+import { underCommissionLimitFilter, payableRiderFilter } from "../payments/commission.service.js";
 
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== "" && v != null ? Number(v) : d);
 
@@ -95,6 +95,7 @@ const eligibleDriverQuery = (vehicleType) => ({
     { $or: [{ currentDeliveryId: { $exists: false } }, { currentDeliveryId: null }] },
     { $or: [{ currentTripId: { $exists: false } }, { currentTripId: null }] },
     { $or: [{ onboardingType: { $ne: "individual" } }, { "kyc.status": "approved" }] },
+    payableRiderFilter(),
     {
       $or: [
         { "location.coordinates": { $exists: true, $ne: [0, 0] } },
