@@ -158,6 +158,13 @@ const paymentSchema = new mongoose.Schema(
       reason: String,
       error: String,
       paystackResponse: mongoose.Schema.Types.Mixed,
+      // Manual refunds: an admin pays the customer back (Flutterwave
+      // dashboard or bank transfer), then records it here.
+      cancellationFee: Number,
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      processedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      reference: String,
+      note: String,
     },
 
     // Error Tracking

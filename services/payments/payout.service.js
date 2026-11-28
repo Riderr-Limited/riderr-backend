@@ -8,6 +8,7 @@ import Payment from "../../models/payments.models.js";
 import Company from "../../models/company.models.js";
 import Driver from "../../models/riders.models.js";
 import { initiateTransfer } from "../../utils/flutterwave.js";
+import { reserveCommission, releaseCommission, allocateRecovered } from "./commission.service.js";
 
 export const platformFeePercent = (kind = "delivery") => {
   const specific = kind === "ride" ? parseFloat(process.env.RIDE_PLATFORM_FEE_PERCENTAGE) : NaN;
@@ -59,14 +60,20 @@ export const payoutPayment = async (paymentId, driverOrId) => {
       status: "successful",
       paymentMethod: { $ne: "cash" },
       "escrowDetails.settledToCompany": { $ne: true },
-      "metadata.payoutStatus": { $nin: ["processing", "paid"] }
+      "metadata.payoutStatus": { $nin: ["processing", "paid"] },
+      // Never pay out a payment that is being refunded to the customer.
+      "refund.status": { $nin: ["pending", "processing", "refunded"] }
     },
     { $set: { "metadata.payoutStatus": "processing", "metadata.payoutStartedAt": new Date() } },
     { new: true }
   );
   if (!payment) return { success: false, skipped: true, error: "Not eligible for payout (unpaid, cash, or already paid out)" };
 
+  const driverId = payment.driverId || driverOrId?._id || driverOrId;
+  let deducted = 0;
+
   const fail = async (error, requiresAction) => {
+    if (deducted) await releaseCommission(driverId, deducted);
     await Payment.updateOne(
       { _id: payment._id },
       {
@@ -82,17 +89,28 @@ export const payoutPayment = async (paymentId, driverOrId) => {
     return fail(payee.error || "No payee", payee.type === "driver" ? "rider_add_bank_account" : "company_add_bank_account");
   }
 
+  // Take any commission the rider owes from cash jobs out of this payout.
+  deducted = await reserveCommission(driverId, payment.companyAmount);
+  const transferAmount = payment.companyAmount - deducted;
+
   const reference = `PAYOUT-${payment.paystackReference || payment._id}-${Date.now()}`;
   const job = payment.rideId ? `ride ${payment.rideId}` : `delivery ${payment.deliveryId}`;
-  const result = await initiateTransfer({
-    accountBank: payee.bank.bankCode,
-    accountNumber: payee.bank.accountNumber,
-    amount: payment.companyAmount,
-    beneficiaryName: payee.bank.accountName,
-    reference,
-    reason: `Riderr payout for ${job}`
-  });
-  if (!result.success) return fail(result.message || "Transfer failed");
+  let result;
+  if (transferAmount > 0) {
+    result = await initiateTransfer({
+      accountBank: payee.bank.bankCode,
+      accountNumber: payee.bank.accountNumber,
+      amount: transferAmount,
+      beneficiaryName: payee.bank.accountName,
+      reference,
+      reason: `Riderr payout for ${job}`
+    });
+    if (!result.success) return fail(result.message || "Transfer failed");
+  } else {
+    // The whole share went to paying off cash commission: nothing to send.
+    result = { success: true, data: { transferCode: null, reference: null, status: "not_needed" } };
+  }
+  if (deducted) await allocateRecovered(driverId, deducted, "payout", { payoutPaymentId: payment._id });
 
   await Payment.updateOne(
     { _id: payment._id },
@@ -105,13 +123,15 @@ export const payoutPayment = async (paymentId, driverOrId) => {
         "metadata.payoutError": null,
         "metadata.settlementReference": result.data.reference,
         "metadata.settlementStatus": result.data.status,
-        "metadata.payee": { type: payee.type, id: payee.id }
+        "metadata.payee": { type: payee.type, id: payee.id },
+        "metadata.commissionDeducted": deducted,
+        "metadata.amountTransferred": transferAmount
       },
       $push: {
         auditLog: {
           action: payee.type === "company" ? "settled_to_company" : "settled_to_driver",
           timestamp: new Date(),
-          details: { transferId: result.data.transferCode, amount: payment.companyAmount, payee: payee.type }
+          details: { transferId: result.data.transferCode, amount: transferAmount, commissionDeducted: deducted, payee: payee.type }
         }
       }
     }
@@ -122,7 +142,8 @@ export const payoutPayment = async (paymentId, driverOrId) => {
     status: result.data.status,
     transferId: result.data.transferCode,
     transferReference: result.data.reference,
-    amount: payment.companyAmount,
+    amount: transferAmount,
+    commissionDeducted: deducted,
     settledAt: new Date(),
     payee: payee.type
   };
@@ -133,7 +154,7 @@ export const payoutPayment = async (paymentId, driverOrId) => {
  * (no company), called from completeAndSettlePayment() inside its transaction,
  * which records the result itself. Same result shape as settlePaymentToCompany().
  */
-export const settlePaymentToDriver = async (payment, driverOrId) => {
+export const settlePaymentToDriver = async (payment, driverOrId, amount = payment.companyAmount) => {
   const payee = await resolvePayee(driverOrId);
   if (payee.error || !payee.bank) {
     return { success: false, error: payee.error || "No payee", requiresAction: "rider_add_bank_account" };
@@ -141,7 +162,7 @@ export const settlePaymentToDriver = async (payment, driverOrId) => {
   const result = await initiateTransfer({
     accountBank: payee.bank.bankCode,
     accountNumber: payee.bank.accountNumber,
-    amount: payment.companyAmount,
+    amount,
     beneficiaryName: payee.bank.accountName,
     reference: `SETTLE-${payment.paystackReference || payment._id}-${Date.now()}`,
     reason: `Riderr payout for delivery ${payment.deliveryId}`
@@ -151,7 +172,7 @@ export const settlePaymentToDriver = async (payment, driverOrId) => {
     success: true,
     transferId: result.data.transferCode,
     transferReference: result.data.reference,
-    amount: payment.companyAmount,
+    amount,
     settledAt: new Date(),
     status: result.data.status
   };

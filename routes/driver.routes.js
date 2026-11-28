@@ -27,6 +27,7 @@ import {
 
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import { getMyBankAccount, setMyBankAccount } from '../controllers/payout.controller.js';
+import { getMyCommission } from '../controllers/finance.controller.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
 
 const router = express.Router();
@@ -171,5 +172,6 @@ router.put('/settings', updateDriverSettings);
 // Payout bank account (individual riders are paid here for card/transfer jobs)
 router.get('/bank-account', getMyBankAccount);
 router.put('/bank-account', setMyBankAccount);
+router.get('/commission', getMyCommission);
 
 export default router;

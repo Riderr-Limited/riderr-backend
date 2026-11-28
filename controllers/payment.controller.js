@@ -24,6 +24,8 @@ import crypto from "crypto";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
 import { settlePaymentToDriver, splitAmount } from "../services/payments/payout.service.js";
+import { recordCashCommission, recordCashDelivery, reserveCommission, allocateRecovered } from "../services/payments/commission.service.js";
+import { markRefundPending } from "../services/payments/refund.service.js";
 import Ride from "../models/ride.model.js";
 
 /**
@@ -1403,6 +1405,13 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
+    // Cash deliveries completed before cash was recorded at drop-off: record
+    // the collected cash (and the rider's commission) now.
+    if (delivery.payment?.method === "cash" && delivery.driverId) {
+      const hasCash = await Payment.exists({ deliveryId: delivery._id, paymentMethod: "cash", status: "successful" }).session(session);
+      if (!hasCash) await recordCashDelivery(delivery, delivery.driverId, { session });
+    }
+
     // Find payment
     const payment = await Payment.findOne({
       deliveryId: delivery._id,
@@ -1422,6 +1431,12 @@ export const completeAndSettlePayment = async (req, res) => {
         code: anyPayment ? "PAYMENT_NOT_CONFIRMED" : "PAYMENT_NOT_FOUND",
         paymentStatus: anyPayment?.status,
       });
+    }
+
+    if (payment.paymentMethod === "cash" && payment.metadata?.customerVerified) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, message: "This delivery has already been verified" });
     }
 
     // Check if already settled
@@ -1461,6 +1476,43 @@ export const completeAndSettlePayment = async (req, res) => {
     delivery.payment.status = "completed";
     await delivery.save({ session });
 
+    const riderId = delivery.driverId?._id || delivery.driverId;
+
+    // Cash delivery: the rider already has the money. Nothing to transfer;
+    // record Riderr's commission as owed by the rider instead (it comes out
+    // of their next in-app payout).
+    if (payment.paymentMethod === "cash") {
+      const commission = riderId
+        ? await recordCashCommission(payment._id, riderId, "delivery", { session })
+        : { charged: false };
+      if (riderId) {
+        await Driver.updateOne(
+          { _id: riderId },
+          { $inc: { totalDeliveries: 1 }, $set: { lastDeliveryDate: new Date() } },
+          { session },
+        );
+      }
+      await session.commitTransaction();
+      session.endSession();
+      const owedNow = riderId ? (await Driver.findById(riderId).select("commission").lean())?.commission?.owed : 0;
+      return res.status(200).json({
+        success: true,
+        message: "Delivery verified",
+        data: {
+          deliveryId: delivery._id,
+          paymentId: payment._id,
+          status: "completed",
+          review,
+          settlement: {
+            method: "cash",
+            commissionOwed: commission.commission ?? payment.metadata?.commissionOwed ?? 0,
+            riderTotalOwed: owedNow || 0,
+            message: "Paid in cash. Riderr's commission will be deducted from the rider's next in-app payout.",
+          },
+        },
+      });
+    }
+
     // 
     // AUTOMATIC SETTLEMENT - This is where money moves!
     // 
@@ -1468,11 +1520,18 @@ export const completeAndSettlePayment = async (req, res) => {
       " [SETTLEMENT] Initiating automatic transfer to company...",
     );
 
+    // First take any commission the rider owes from cash jobs out of this
+    // payout. Inside the transaction, so a failed transfer puts it back.
+    const commissionDeducted = await reserveCommission(riderId, payment.companyAmount, { session });
+    const transferAmount = payment.companyAmount - commissionDeducted;
+
     // Company riders are paid via their company; individual riders (no
     // company) are paid straight to their own verified bank account.
-    const settlementResult = delivery.companyId
-      ? await settlePaymentToCompany(payment, delivery.companyId)
-      : await settlePaymentToDriver(payment, delivery.driverId);
+    const settlementResult = transferAmount <= 0
+      ? { success: true, transferId: null, transferReference: null, amount: 0, settledAt: new Date(), status: "not_needed" }
+      : delivery.companyId
+        ? await settlePaymentToCompany(payment, delivery.companyId, transferAmount)
+        : await settlePaymentToDriver(payment, delivery.driverId, transferAmount);
 
     if (settlementResult.success) {
       //  Transfer successful - update payment record
@@ -1485,8 +1544,13 @@ export const completeAndSettlePayment = async (req, res) => {
         settlementStatus: settlementResult.status, // 'success', 'pending', 'failed'
         settlementReference: settlementResult.transferReference,
         settledAt: settlementResult.settledAt,
+        commissionDeducted,
+        amountTransferred: transferAmount,
       };
       payment.markModified("metadata");
+      if (commissionDeducted) {
+        await allocateRecovered(riderId, commissionDeducted, "payout", { payoutPaymentId: payment._id }, { session });
+      }
 
       // Add to audit log
       payment.auditLog.push({
@@ -1494,7 +1558,8 @@ export const completeAndSettlePayment = async (req, res) => {
         timestamp: new Date(),
         details: {
           transferId: settlementResult.transferId,
-          amount: payment.companyAmount,
+          amount: transferAmount,
+          commissionDeducted,
           status: settlementResult.status,
         },
       });
@@ -1544,7 +1609,7 @@ export const completeAndSettlePayment = async (req, res) => {
               delivery.companyId.ownerId ||
               delivery.companyId.owner,
             title: " Payment Received",
-            message: `${payment.companyAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}`,
+            message: `${transferAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}${commissionDeducted ? ` (${commissionDeducted.toLocaleString()} cash commission deducted)` : ""}`,
             data: {
               type: "payment_settled",
               deliveryId: delivery._id,
@@ -1596,7 +1661,8 @@ export const completeAndSettlePayment = async (req, res) => {
           review: review,
           settlement: {
             success: true,
-            companyReceived: `${payment.companyAmount.toLocaleString()}`,
+            companyReceived: `${transferAmount.toLocaleString()}`,
+            commissionDeducted,
             platformFee: `${payment.platformFee.toLocaleString()}`,
             settledAt: payment.escrowDetails.settlementDate,
             transferId: settlementResult.transferId,
@@ -1666,12 +1732,12 @@ export const completeAndSettlePayment = async (req, res) => {
   }
 };
 
-async function settlePaymentToCompany(payment, company) {
+async function settlePaymentToCompany(payment, company, amount = amount) {
   try {
     console.log(
       ` [SETTLEMENT] Starting settlement for payment ${payment._id}`,
     );
-    console.log(`   Amount: ${payment.companyAmount.toLocaleString()}`);
+    console.log(`   Amount: ${amount.toLocaleString()}`);
     console.log(`   Company: ${company.name}`);
 
     // 
@@ -1716,13 +1782,13 @@ async function settlePaymentToCompany(payment, company) {
     if (provider === "flutterwave") {
       // Flutterwave: transfer directly using account details (no recipient code)
       console.log(
-        ` Initiating Flutterwave transfer of ${payment.companyAmount.toLocaleString()}...`,
+        ` Initiating Flutterwave transfer of ${amount.toLocaleString()}...`,
       );
 
       const transferResult = await initiateTransfer({
         accountBank: company.bankAccount.bankCode,
         accountNumber: company.bankAccount.accountNumber,
-        amount: payment.companyAmount,
+        amount: amount,
         beneficiaryName: company.bankAccount.accountName,
         reference: transferReference,
         reason: `Settlement for delivery ${payment.deliveryId}`,
@@ -1745,7 +1811,7 @@ async function settlePaymentToCompany(payment, company) {
         success: true,
         transferId: transferResult.data.transferCode,
         transferReference: transferResult.data.reference,
-        amount: payment.companyAmount,
+        amount: amount,
         settledAt: new Date(),
         status: transferResult.data.status,
       };
@@ -1801,11 +1867,11 @@ async function settlePaymentToCompany(payment, company) {
     // STEP 3: Initiate Paystack transfer
     // 
     console.log(
-      ` Initiating Paystack transfer of ${payment.companyAmount.toLocaleString()}...`,
+      ` Initiating Paystack transfer of ${amount.toLocaleString()}...`,
     );
 
     const transferResult = await initiateTransfer({
-      amount: payment.companyAmount,
+      amount: amount,
       recipientCode: company.paystackRecipientCode,
       reference: transferReference,
       reason: `Settlement for delivery ${payment.deliveryId}`,
@@ -1836,7 +1902,7 @@ async function settlePaymentToCompany(payment, company) {
       success: true,
       transferId: transferResult.data.transferCode,
       transferReference: transferResult.data.reference,
-      amount: payment.companyAmount,
+      amount: amount,
       settledAt: new Date(),
       status: transferResult.data.status,
     };
@@ -5057,6 +5123,28 @@ export const refundPayment = async (
       };
     }
 
+    // Refunds are processed manually by the Riderr team (see
+    // services/payments/refund.service.js). Set REFUND_MODE=auto to have
+    // Flutterwave refund automatically instead.
+    if (process.env.REFUND_MODE !== "auto") {
+      const pending = markRefundPending(payment, {
+        amount: amountOverride != null ? amountOverride : payment.amount,
+        cancellationFee: amountOverride != null ? Math.max(0, payment.amount - Math.round(amountOverride)) : 0,
+        reason,
+      });
+      if (pending.noRefundNeeded) {
+        return { success: true, noRefundNeeded: true, reason: "Nothing to refund" };
+      }
+      if (pending.alreadyRefunded) return { success: true, alreadyRefunded: true, amount: pending.amount };
+      if (pending.pending) await payment.save();
+      return {
+        success: true,
+        refundPending: true,
+        requiresManualRefund: true,
+        amount: pending.amount,
+      };
+    }
+
     //  Initiate Flutterwave refund
     try {
       // Need the flw_ref stored during payment for Flutterwave refunds
@@ -5118,7 +5206,7 @@ export const refundPayment = async (
 
       payment.refund = {
         status: "pending",
-        amount: payment.amount,
+        amount: amountOverride != null ? Math.max(0, Math.min(payment.amount, Math.round(amountOverride))) : payment.amount,
         requestedAt: new Date(),
         reason,
         error: refundError.message,

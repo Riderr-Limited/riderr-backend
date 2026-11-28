@@ -1,4 +1,5 @@
 import Driver from "../models/riders.models.js";
+import { recordCashDelivery } from "../services/payments/commission.service.js";
 import User from "../models/user.models.js";
 import Delivery from "../models/delivery.models.js";
 import Company from "../models/company.models.js";
@@ -1594,7 +1595,18 @@ export const completeDelivery = async (req, res) => {
     driver.isAvailable = true;
     driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
 
-    await Promise.all([delivery.save({ session }), driver.save({ session })]);
+    // Cash delivery: the rider has collected the fare, so record the cash
+    // payment and Riderr's commission (owed by the rider, deducted from their
+    // next in-app payout).
+    let cashCommission = null;
+    if (delivery.payment?.method === 'cash') {
+      cashCommission = await recordCashDelivery(delivery, driver, { session });
+      delivery.payment.status = 'paid';
+      delivery.payment.paidAt = delivery.payment.paidAt || new Date();
+    }
+
+    await delivery.save({ session });
+    await driver.save({ session });
 
     // Notify customer
     const customer = await User.findById(delivery.customerId);

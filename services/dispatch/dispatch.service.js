@@ -19,6 +19,7 @@ import Ride from "../../models/ride.model.js";
 import Driver from "../../models/riders.models.js";
 import { sendNotification, NotificationTemplates } from "../../utils/notification.js";
 import { refundRide } from "../payments/ridePayment.service.js";
+import { pendingRefundMessage } from "../payments/refund.service.js";
 
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== "" && v != null ? Number(v) : d);
 
@@ -460,7 +461,7 @@ const expireUnacceptedRides = async (io) => {
     let refundNote = "";
     if (ride.payment?.status === "paid") {
       const refund = await refundRide(ride._id, "No rider accepted the ride");
-      refundNote = refund.success ? " Your payment has been refunded." : " We'll refund your payment shortly.";
+      refundNote = refund.refundPending ? ` ${pendingRefundMessage(refund.refundAmount)}` : "";
     }
     await safeNotify({
       userId: ride.customerId,

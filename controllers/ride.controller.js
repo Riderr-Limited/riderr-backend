@@ -25,6 +25,7 @@ import {
   recordCashRideCommission,
   RIDE_PAYMENT_WINDOW_MINUTES,
 } from "../services/payments/ridePayment.service.js";
+import { pendingRefundMessage } from "../services/payments/refund.service.js";
 
 /**
  * Calculate fare based on distance and vehicle type
@@ -888,7 +889,7 @@ export const completeRide = async (req, res) => {
         payout = { method: 'cash', commissionOwed: cash?.platformFee ?? null };
       } else {
         const r = await payoutRide(ride._id, driver);
-        payout = { method: ride.payment?.method, status: r.success ? 'paid' : 'pending', amount: r.amount, error: r.success ? undefined : r.error, requiresAction: r.requiresAction };
+        payout = { method: ride.payment?.method, status: r.success ? 'paid' : 'pending', amount: r.amount, commissionDeducted: r.commissionDeducted || 0, error: r.success ? undefined : r.error, requiresAction: r.requiresAction };
         if (!r.success && r.requiresAction === 'rider_add_bank_account') {
           await sendNotification({
             userId: driverUser._id,
@@ -1048,7 +1049,7 @@ export const cancelRide = async (req, res) => {
       const refund = await refundRide(ride._id, `Ride cancelled by rider: ${reason}`);
       await sendNotification({
         userId: ride.customerId,
-        ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'driver', `We couldn't keep a rider for this trip.${refund.refundAmount ? " Your payment has been refunded." : ""}`)
+        ...NotificationTemplates.RIDE_CANCELLED(ride._id, 'driver', `We couldn't keep a rider for this trip.${refund.refundPending ? ` ${pendingRefundMessage(refund.refundAmount)}` : ""}`)
       }).catch(() => {});
       return res.status(200).json({ success: true, message: "Ride cancelled", data: { rideId: ride._id, redispatched: false } });
     }
@@ -1108,7 +1109,11 @@ export const cancelRide = async (req, res) => {
         cancellationFee: fee,
         refund: refund.noRefundNeeded
           ? null
-          : { amount: refund.refundAmount, status: refund.success ? "refunded" : "pending" }
+          : {
+              amount: refund.refundAmount,
+              status: refund.alreadyRefunded ? "refunded" : "pending",
+              message: pendingRefundMessage(refund.refundAmount)
+            }
       }
     });
   } catch (error) {

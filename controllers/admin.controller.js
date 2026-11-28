@@ -1,4 +1,5 @@
 import User from "../models/user.models.js";
+import { completeManualRefund } from "../services/payments/refund.service.js";
 import Driver from "../models/riders.models.js";
 import Company from "../models/company.models.js";
 import Delivery from "../models/delivery.models.js";
@@ -2448,71 +2449,27 @@ export const getPaymentById = async (req, res) => {
  * @access  Private (Admin)
  */
 export const issueRefund = async (req, res) => {
+  // Records a refund the team has paid back manually (same as
+  // POST /api/admin/refunds/:paymentId/complete). Body: { amount?, reason?, reference? }
   try {
     const { paymentId } = req.params;
-    const { amount, reason } = req.body;
-
-    const payment = await Payment.findById(paymentId).populate(
-      "customerId",
-      "name email"
-    );
-
-    if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: "Payment not found",
-      });
+    if (!mongoose.Types.ObjectId.isValid(paymentId)) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
     }
-
-    if (payment.status !== "successful") {
-      return res.status(400).json({
-        success: false,
-        message: "Can only refund successful payments",
-      });
+    const { amount, reason, reference } = req.body || {};
+    const r = await completeManualRefund(paymentId, {
+      adminUserId: req.user._id,
+      amount: amount != null ? Number(amount) : undefined,
+      note: reason,
+      reference,
+    });
+    if (!r.success) {
+      return res.status(r.status || 400).json({ success: false, message: r.error });
     }
-
-    if (payment.refundStatus === "refunded") {
-      return res.status(400).json({
-        success: false,
-        message: "Payment already refunded",
-      });
-    }
-
-    const refundAmount = amount || payment.amount;
-
-    if (refundAmount > payment.amount) {
-      return res.status(400).json({
-        success: false,
-        message: "Refund amount cannot exceed payment amount",
-      });
-    }
-
-    // Update payment record
-    payment.refundStatus = "refunded";
-    payment.refundAmount = refundAmount;
-    payment.refundReason = reason;
-    payment.refundedAt = new Date();
-    payment.refundedBy = req.user._id;
-    await payment.save();
-
-    // Notify customer
-    if (payment.customerId) {
-      await sendNotification({
-        userId: payment.customerId._id,
-        title: "Refund Processed",
-        message: `A refund of ${refundAmount} has been processed for your payment`,
-        type: "refund_processed",
-        data: {
-          paymentId: payment._id,
-          amount: refundAmount,
-        },
-      });
-    }
-
     res.status(200).json({
       success: true,
       message: "Refund processed successfully",
-      data: payment,
+      data: r.payment,
     });
   } catch (error) {
     console.error("Issue refund error:", error);

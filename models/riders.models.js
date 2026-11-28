@@ -307,6 +307,18 @@ const DriverSchema = new mongoose.Schema(
       }
     },
 
+    // Riderr's commission on cash jobs. The rider keeps the cash, so they owe
+    // the commission; it is taken out of their next in-app (card/transfer)
+    // payout, or settled with an admin.
+    commission: {
+      owed: { type: Number, default: 0, min: 0 },
+      totalCharged: { type: Number, default: 0 },
+      totalDeducted: { type: Number, default: 0 },
+      totalSettledManually: { type: Number, default: 0 },
+      lastChargedAt: Date,
+      lastDeductedAt: Date
+    },
+
     // Emergency Contact - Optional
     emergencyContact: {
       name: String,

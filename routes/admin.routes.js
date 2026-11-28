@@ -59,6 +59,13 @@ import {
 
 // Import middleware - using correct function names from auth.middleware.js
 import { protect, authorize } from "../middlewares/auth.middleware.js";
+import {
+  listRefunds,
+  completeRefund,
+  listCommissionOwed,
+  getDriverCommission,
+  settleDriverCommission,
+} from "../controllers/finance.controller.js";
 
 const router = express.Router();
 
@@ -187,6 +194,13 @@ router.delete("/deliveries/:deliveryId", deleteDelivery);
 router.get("/payments", getAllPayments);
 router.get("/payments/:paymentId", getPaymentById);
 router.post("/payments/:paymentId/refund", issueRefund);
+
+// Manual refunds and cash commission
+router.get("/refunds", listRefunds);
+router.post("/refunds/:paymentId/complete", completeRefund);
+router.get("/commissions", listCommissionOwed);
+router.get("/commissions/:driverId", getDriverCommission);
+router.post("/commissions/:driverId/settle", settleDriverCommission);
 
 /**
  * @swagger

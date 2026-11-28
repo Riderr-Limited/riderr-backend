@@ -7,6 +7,7 @@ import Payment from "../../models/payments.models.js";
 import Ride from "../../models/ride.model.js";
 import { refundPayment } from "../../controllers/payment.controller.js";
 import { splitAmount, payoutPayment, platformFeePercent } from "./payout.service.js";
+import { recordCashCommission } from "./commission.service.js";
 
 export const RIDE_PAYMENT_WINDOW_MINUTES = () => Number(process.env.RIDE_PAYMENT_WINDOW_MINUTES) || 10;
 
@@ -77,26 +78,30 @@ export const payoutRide = async (rideId, driver) => {
 
 /**
  * Cash rides (only if RIDE_ALLOW_CASH=true): the rider collects the whole
- * fare, so record the commission they owe Riderr.
+ * fare, so the commission is added to what they owe Riderr and comes out of
+ * their next in-app payout.
  */
 export const recordCashRideCommission = async (ride, driver) => {
-  const exists = await Payment.exists({ rideId: ride._id, paymentMethod: "cash" });
-  if (exists) return null;
-  const amount = ride.actualFare || ride.estimatedFare;
-  const { platformFee, companyAmount } = splitAmount(amount, "ride");
-  return Payment.create({
-    rideId: ride._id,
-    customerId: ride.customerId,
-    driverId: driver._id,
-    companyId: driver.companyId || null,
-    amount,
-    currency: "NGN",
-    status: "successful",
-    paidAt: new Date(),
-    paymentMethod: "cash",
-    paymentType: "cash",
-    companyAmount,
-    platformFee,
-    metadata: { kind: "ride", commissionOwed: platformFee, commissionStatus: "owed", collectedBy: "driver" }
-  });
+  let payment = await Payment.findOne({ rideId: ride._id, paymentMethod: "cash" });
+  if (!payment) {
+    const amount = ride.actualFare || ride.estimatedFare;
+    const { platformFee, companyAmount } = splitAmount(amount, "ride");
+    payment = await Payment.create({
+      rideId: ride._id,
+      customerId: ride.customerId,
+      driverId: driver._id,
+      companyId: driver.companyId || null,
+      amount,
+      currency: "NGN",
+      status: "successful",
+      paidAt: new Date(),
+      paymentMethod: "cash",
+      paymentType: "cash",
+      companyAmount,
+      platformFee,
+      metadata: { kind: "ride" }
+    });
+  }
+  await recordCashCommission(payment._id, driver._id, "ride");
+  return Payment.findById(payment._id);
 };

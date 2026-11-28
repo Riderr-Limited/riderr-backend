@@ -110,7 +110,7 @@ If a provider fails, the next one is tried, and the estimate is the last resort,
 |---|---|
 | `card` (default) | The booking response includes `payment.reference`. Charge it with the existing `POST /api/payments/charge-card { reference, cardDetails }`, then `/submit-otp` or `/submit-pin` as for deliveries |
 | `bank_transfer` (or `transfer`) | `POST /api/payments/initiate-bank-transfer { rideId }` returns the account to pay into. It's confirmed by the Flutterwave webhook |
-| `cash` | **Off by default.** Turn it on with `RIDE_ALLOW_CASH=true`. The rider collects the fare, and a Payment record with `metadata.commissionStatus: "owed"` tracks the commission they owe |
+| `cash` | **Off by default.** Turn it on with `RIDE_ALLOW_CASH=true`. The rider collects the fare; the commission is added to what they owe and deducted from their next in-app payout (see "Commission on cash jobs") |
 
 - **The ride isn't sent to riders until it's paid.** The dispatch job picks it up within about 10 seconds of payment.
 - Unpaid rides are cancelled after `RIDE_PAYMENT_WINDOW_MINUTES` (default 10).
@@ -133,6 +133,38 @@ This also fixes **delivery** payouts for individual riders: they used to fail, b
 | **Customer** cancels after a rider accepts | Refund minus `RIDE_CANCELLATION_FEE` (₦200) |
 | Nobody accepts within 5 minutes | Cancelled and fully refunded |
 | Trip already started | Can't be cancelled (`TRIP_IN_PROGRESS`); complete it or contact support |
+
+"Refund" in this table means a refund request for the team to process manually (see below).
+
+## Refunds are processed manually
+
+Refunds are not sent automatically. When a paid ride or delivery is cancelled, its payment is marked **refund pending**, with the amount to return and any cancellation fee kept. The customer is told their refund will be processed within `REFUND_PROCESSING_TIME` (default "3 working days").
+
+The team's steps:
+1. `GET /api/admin/refunds` lists pending refunds, oldest first. Each entry has the customer's name and phone, the amount to refund, the fee kept, and the transaction reference to find it in the Flutterwave dashboard. Use `?status=refunded` for completed refunds, or `?status=all`.
+2. Pay the customer back: refund the card from the Flutterwave dashboard, or send a bank transfer.
+3. `POST /api/admin/refunds/:paymentId/complete { reference, note }` records the refund, marks the payment (and the ride or delivery) as refunded, and notifies the customer. A refund can't be recorded twice.
+
+A payment with a pending refund is never paid out to a rider. A payment that has already been paid out can't be refunded through this endpoint; recover the money from the rider or company first.
+
+The older `POST /api/admin/payments/:paymentId/refund { amount, reason, reference }` does the same as `/complete`. Before, it silently saved nothing.
+
+To go back to automatic Flutterwave refunds, set `REFUND_MODE=auto`.
+
+## Commission on cash jobs
+
+With cash, the rider keeps the whole fare, so Riderr's commission (`PLATFORM_FEE_PERCENTAGE`) is added to what the rider owes (`Driver.commission.owed`):
+- **Cash deliveries:** recorded when the rider marks the delivery delivered. Before, the cash payment record failed to save (it used an invalid `paymentType`), so no commission was recorded and customers couldn't confirm cash deliveries.
+- **Cash rides** (only if `RIDE_ALLOW_CASH=true`): recorded when the ride completes.
+
+**The next time the rider is paid out for a card or transfer job, what they owe is deducted first.** If they owe more than that payout, the whole payout goes to the debt and the rest stays owed. If the transfer fails, the deduction is cancelled. Each cash job shows `metadata.commissionStatus` as `owed`, `partly_paid` or `paid`. For company riders, the deduction comes out of the company's payout for that rider's job.
+
+| Endpoint | Who | What |
+|---|---|---|
+| `GET /api/driver/commission` | Rider | What they owe and the cash jobs it comes from |
+| `GET /api/admin/commissions` | Admin | Riders who owe commission, most owed first, plus the total |
+| `GET /api/admin/commissions/:driverId` | Admin | One rider's breakdown |
+| `POST /api/admin/commissions/:driverId/settle { amount, note }` | Admin | Record commission a rider paid Riderr directly (e.g. by transfer). Capped at what they owe |
 
 ## Security fixes in this change
 

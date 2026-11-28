@@ -10,6 +10,9 @@ import crypto from "crypto";
 import { smartReverseGeocode } from "../utils/geocoding.js";
 import Payment from '../models/payments.models.js'
 import { startDispatch, dispatchConfig, visibleToDriverFilter, isOfferedTo, onDriverRejected } from "../services/dispatch/dispatch.service.js";
+import { splitAmount } from "../services/payments/payout.service.js";
+import { recordCashCommission, recordCashDelivery } from "../services/payments/commission.service.js";
+import { markRefundPending, pendingRefundMessage } from "../services/payments/refund.service.js";
 
 // Notify all admin users
 const notifyAdmins = async (title, message, data = {}) => {
@@ -710,9 +713,8 @@ export const acceptDelivery = async (req, res) => {
             currency: 'NGN',
             status: 'pending',
             paymentMethod: 'cash',
-            companyAmount: delivery.fare.totalFare,
-            platformFee: 0,
-            paymentType: 'cash_on_delivery',
+            ...splitAmount(delivery.fare.totalFare, 'delivery'),
+            paymentType: 'cash',
             metadata: {
               paymentType: 'cash',
               requiresCashCollection: true,
@@ -1070,7 +1072,18 @@ export const completeDelivery = async (req, res) => {
     driver.currentDeliveryId = null;
     driver.isAvailable = true;
 
-    await Promise.all([delivery.save({ session }), driver.save({ session })]);
+    // Cash delivery: the rider has collected the fare, so record the cash
+    // payment and Riderr's commission (owed by the rider, deducted from their
+    // next in-app payout).
+    let cashCommission = null;
+    if (delivery.payment?.method === 'cash') {
+      cashCommission = await recordCashDelivery(delivery, driver, { session });
+      delivery.payment.status = 'paid';
+      delivery.payment.paidAt = delivery.payment.paidAt || new Date();
+    }
+
+    await delivery.save({ session });
+    await driver.save({ session });
 
     const customer = await User.findById(delivery.customerId);
     if (customer) {
@@ -3170,9 +3183,8 @@ export const confirmCashCollection = async (req, res) => {
         currency: 'NGN',
         status: 'successful',
         paymentMethod: 'cash',
-        companyAmount: delivery.fare.totalFare, // Full amount to company for now
-        platformFee: 0,
-        paymentType: 'cash_on_delivery',
+        ...splitAmount(delivery.fare.totalFare, 'delivery'),
+        paymentType: 'cash',
         paidAt: new Date(),
         verifiedAt: new Date(),
         metadata: {
@@ -3198,6 +3210,10 @@ export const confirmCashCollection = async (req, res) => {
     // Save both
     await delivery.save({ session });
     await payment.save({ session });
+
+    // The rider now holds the cash, so they owe Riderr's commission. It comes
+    // out of their next in-app (card/transfer) payout.
+    const commission = await recordCashCommission(payment._id, driver._id, 'delivery', { session });
 
     await session.commitTransaction();
     session.endSession();
@@ -3260,8 +3276,10 @@ export const confirmCashCollection = async (req, res) => {
           _id: payment._id,
           amount: payment.amount,
           status: payment.status,
-          requiresSettlement: true,
-          settlementStatus: 'pending',
+          // Riderr's commission on this job, now owed by the rider and
+          // deducted from their next in-app payout.
+          commissionOwed: commission?.commission ?? 0,
+          riderTotalOwed: (await Driver.findById(driver._id).select('commission').lean())?.commission?.owed || 0,
         },
       },
     });
@@ -3711,84 +3729,24 @@ export const cancelDeliveryWithRefund = async (req, res) => {
 
       console.log(` Refund amount: ${refundAmount}`);
 
-      // Initiate refund via Paystack
-      try {
-        refundResult = await initiateRefund({
-          transaction: payment.paystackReference,
-          amount: refundAmount, // Partial or full refund
-          deliveryId: delivery._id,
-          customer_note: `Your delivery was cancelled. Refund of ${refundAmount.toLocaleString()} has been initiated.${cancellationFee > 0 ? ` Cancellation fee: ${cancellationFee.toLocaleString()}` : ''}`,
-          merchant_note: `Delivery ${delivery.referenceId} cancelled by ${user.role}. Reason: ${reason}`,
-        });
-
-        if (refundResult.success) {
-          console.log(` Refund initiated successfully`);
-          console.log(`   Refund ID: ${refundResult.data.refundId}`);
-
-          // Update payment record
-          payment.status = 'refunded';
-          payment.metadata = {
-            ...payment.metadata,
-            refundStatus: 'processing',
-            refundId: refundResult.data.refundId,
-            refundAmount: refundAmount,
-            cancellationFee: cancellationFee,
-            refundInitiatedAt: new Date(),
-            refundExpectedAt: refundResult.data.expectedAt,
-            cancelledBy: user._id,
-            cancellationReason: reason,
-          };
-          payment.markModified('metadata');
-          
-          payment.auditLog.push({
-            action: 'refund_initiated',
-            timestamp: new Date(),
-            details: {
-              refundId: refundResult.data.refundId,
-              refundAmount,
-              cancellationFee,
-              reason,
-            },
-          });
-
-          await payment.save({ session });
-
-          refundInfo = {
-            refunded: true,
-            refundAmount,
-            cancellationFee,
-            refundId: refundResult.data.refundId,
-            expectedAt: refundResult.data.expectedAt,
-            message: cancellationFee > 0
-              ? `Refund of ${refundAmount.toLocaleString()} initiated (${cancellationFee.toLocaleString()} cancellation fee deducted). Expect refund in 5-10 business days.`
-              : `Full refund of ${refundAmount.toLocaleString()} initiated. Expect refund in 5-10 business days.`,
-          };
-        } else {
-          throw new Error(refundResult.message || 'Refund failed');
-        }
-      } catch (refundError) {
-        console.error(` Refund failed:`, refundError.message);
-        
-        // Mark for manual refund
-        payment.metadata = {
-          ...payment.metadata,
-          refundStatus: 'failed',
-          refundError: refundError.message,
-          requiresManualRefund: true,
-          cancelledBy: user._id,
-          cancellationReason: reason,
-        };
-        payment.markModified('metadata');
-        await payment.save({ session });
-
-        refundInfo = {
-          refunded: false,
-          error: refundError.message,
-          requiresManualProcessing: true,
-          message: 'Automatic refund failed. Our support team will process your refund manually within 24 hours.',
-          supportContact: process.env.SUPPORT_EMAIL || 'support@riderr.com',
-        };
-      }
+      // Refunds are processed manually by the Riderr team: mark it pending.
+      const pending = markRefundPending(payment, {
+        amount: refundAmount,
+        cancellationFee,
+        reason: `Delivery ${delivery.referenceId} cancelled by ${user.role}: ${reason}`,
+        requestedBy: user._id,
+      });
+      if (pending.pending) await payment.save({ session });
+      refundResult = pending;
+      refundInfo = {
+        refunded: false,
+        refundPending: !pending.noRefundNeeded && !pending.alreadyRefunded,
+        refundAmount: pending.amount,
+        cancellationFee,
+        message: pending.noRefundNeeded
+          ? 'Nothing to refund'
+          : `${pendingRefundMessage(pending.amount)}${cancellationFee > 0 ? ` A cancellation fee of ₦${cancellationFee.toLocaleString()} was kept.` : ''}`,
+      };
     } else if (isCashPayment) {
       console.log(` Cash payment - No refund needed`);
       refundInfo = {
@@ -3819,6 +3777,8 @@ export const cancelDeliveryWithRefund = async (req, res) => {
     // Update payment status in delivery
     if (refundInfo?.refunded) {
       delivery.payment.status = 'refunded';
+    } else if (refundInfo?.refundPending) {
+      delivery.payment.status = 'refund_pending';
     } else if (delivery.payment.status === 'paid') {
       delivery.payment.status = 'cancelled';
     }
@@ -3859,7 +3819,7 @@ export const cancelDeliveryWithRefund = async (req, res) => {
       await sendNotification({
         userId: delivery.customerId._id,
         title: ' Delivery Cancelled',
-        message: refundInfo?.refunded
+        message: refundInfo?.refunded || refundInfo?.refundPending
           ? `Your delivery has been cancelled. ${refundInfo.message}`
           : `Your delivery has been cancelled. Reason: ${reason}`,
         data: {
