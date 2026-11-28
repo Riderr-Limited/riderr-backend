@@ -315,6 +315,7 @@ const DriverSchema = new mongoose.Schema(
       totalCharged: { type: Number, default: 0 },
       totalDeducted: { type: Number, default: 0 },
       totalSettledManually: { type: Number, default: 0 },
+      totalPaidByRider: { type: Number, default: 0 },
       lastChargedAt: Date,
       lastDeductedAt: Date
     },

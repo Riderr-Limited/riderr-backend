@@ -26,6 +26,7 @@ import {
   RIDE_PAYMENT_WINDOW_MINUTES,
 } from "../services/payments/ridePayment.service.js";
 import { pendingRefundMessage } from "../services/payments/refund.service.js";
+import { commissionBlock } from "../services/payments/commission.service.js";
 
 /**
  * Calculate fare based on distance and vehicle type
@@ -469,6 +470,8 @@ export const getNearbyRideRequests = async (req, res) => {
     if (!driver.isKycCleared()) {
       return res.status(403).json({ success: false, message: "Complete identity verification first", code: "KYC_REQUIRED" });
     }
+    const commissionStop = commissionBlock(driver);
+    if (commissionStop) return res.status(403).json(commissionStop);
     if (!driver.isOnline || !driver.isAvailable || driver.currentTripId || driver.currentDeliveryId) {
       return res.status(400).json({ success: false, message: "Go online and finish any current job to see ride requests" });
     }
@@ -546,6 +549,8 @@ export const acceptRide = async (req, res) => {
     if (!driver.isKycCleared()) {
       return res.status(403).json({ success: false, message: "Complete identity verification first", code: "KYC_REQUIRED" });
     }
+    const commissionStop = commissionBlock(driver);
+    if (commissionStop) return res.status(403).json(commissionStop);
 
     const ride = await Ride.findById(rideId);
     if (!ride) {

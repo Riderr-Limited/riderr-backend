@@ -23,12 +23,15 @@ export const splitAmount = (amount, kind = "delivery") => {
 };
 
 /** Who gets paid for a job done by this rider, and their bank details. */
-export const resolvePayee = async (driverOrId) => {
+export const resolvePayee = async (driverOrId, { companyId } = {}) => {
   const driver = driverOrId?._id ? driverOrId : await Driver.findById(driverOrId);
-  if (!driver) return { error: "Rider not found" };
+  if (!driver && !companyId) return { error: "Rider not found" };
 
-  if (driver.companyId) {
-    const company = await Company.findById(driver.companyId?._id || driver.companyId);
+  // A job that belongs to a company (e.g. a delivery the company accepted)
+  // is paid to that company.
+  const payCompanyId = companyId || driver?.companyId;
+  if (payCompanyId) {
+    const company = await Company.findById(payCompanyId?._id || payCompanyId);
     if (!company) return { error: "Company not found" };
     const b = company.bankAccount || {};
     if (!b.accountNumber || !b.bankCode || !b.accountName) {
@@ -52,13 +55,14 @@ export const resolvePayee = async (driverOrId) => {
  * more than once: only the first call moves money.
  * Returns { success, status, transferId, transferReference, error, requiresAction }.
  */
-export const payoutPayment = async (paymentId, driverOrId) => {
+export const payoutPayment = async (paymentId, driverOrId, { companyId } = {}) => {
   // Claim the payout atomically so two calls can't both transfer.
   const payment = await Payment.findOneAndUpdate(
     {
       _id: paymentId,
       status: "successful",
       paymentMethod: { $ne: "cash" },
+      purpose: { $ne: "commission" },
       "escrowDetails.settledToCompany": { $ne: true },
       "metadata.payoutStatus": { $nin: ["processing", "paid"] },
       // Never pay out a payment that is being refunded to the customer.
@@ -84,7 +88,7 @@ export const payoutPayment = async (paymentId, driverOrId) => {
     return { success: false, error, requiresAction };
   };
 
-  const payee = await resolvePayee(driverOrId || payment.driverId);
+  const payee = await resolvePayee(driverOrId || payment.driverId, { companyId: companyId || payment.companyId });
   if (payee.error || !payee.bank) {
     return fail(payee.error || "No payee", payee.type === "driver" ? "rider_add_bank_account" : "company_add_bank_account");
   }
@@ -146,34 +150,5 @@ export const payoutPayment = async (paymentId, driverOrId) => {
     commissionDeducted: deducted,
     settledAt: new Date(),
     payee: payee.type
-  };
-};
-
-/**
- * Transfer only: no database writes. For deliveries done by individual riders
- * (no company), called from completeAndSettlePayment() inside its transaction,
- * which records the result itself. Same result shape as settlePaymentToCompany().
- */
-export const settlePaymentToDriver = async (payment, driverOrId, amount = payment.companyAmount) => {
-  const payee = await resolvePayee(driverOrId);
-  if (payee.error || !payee.bank) {
-    return { success: false, error: payee.error || "No payee", requiresAction: "rider_add_bank_account" };
-  }
-  const result = await initiateTransfer({
-    accountBank: payee.bank.bankCode,
-    accountNumber: payee.bank.accountNumber,
-    amount,
-    beneficiaryName: payee.bank.accountName,
-    reference: `SETTLE-${payment.paystackReference || payment._id}-${Date.now()}`,
-    reason: `Riderr payout for delivery ${payment.deliveryId}`
-  });
-  if (!result.success) return { success: false, error: result.message || "Transfer failed" };
-  return {
-    success: true,
-    transferId: result.data.transferCode,
-    transferReference: result.data.reference,
-    amount,
-    settledAt: new Date(),
-    status: result.data.status
   };
 };

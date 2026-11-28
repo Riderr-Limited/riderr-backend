@@ -12,6 +12,7 @@ import Payment from '../models/payments.models.js'
 import { startDispatch, dispatchConfig, visibleToDriverFilter, isOfferedTo, onDriverRejected } from "../services/dispatch/dispatch.service.js";
 import { splitAmount } from "../services/payments/payout.service.js";
 import { recordCashCommission, recordCashDelivery } from "../services/payments/commission.service.js";
+import { commissionBlock } from "../services/payments/commission.service.js";
 import { markRefundPending, pendingRefundMessage } from "../services/payments/refund.service.js";
 
 // Notify all admin users
@@ -578,6 +579,14 @@ export const acceptDelivery = async (req, res) => {
         success: false,
         message: "Your driver profile wasn't found. Please contact support",
       });
+    }
+
+    // Riders who owe too much cash commission must pay before taking jobs.
+    const commissionStop = commissionBlock(driver);
+    if (commissionStop) {
+      await session.abortTransaction();
+      await session.endSession();
+      return res.status(403).json(commissionStop);
     }
 
     if (!driver.isOnline || !driver.isAvailable || driver.currentDeliveryId) {

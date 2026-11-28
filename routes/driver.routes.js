@@ -27,7 +27,7 @@ import {
 
 import { protect, authorize } from '../middlewares/auth.middleware.js';
 import { getMyBankAccount, setMyBankAccount } from '../controllers/payout.controller.js';
-import { getMyCommission } from '../controllers/finance.controller.js';
+import { getMyCommission, payMyCommission } from '../controllers/finance.controller.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
 
 const router = express.Router();
@@ -173,5 +173,6 @@ router.put('/settings', updateDriverSettings);
 router.get('/bank-account', getMyBankAccount);
 router.put('/bank-account', setMyBankAccount);
 router.get('/commission', getMyCommission);
+router.post('/commission/pay', payMyCommission);
 
 export default router;

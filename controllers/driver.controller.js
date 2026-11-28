@@ -1,5 +1,6 @@
 import Driver from "../models/riders.models.js";
 import { recordCashDelivery } from "../services/payments/commission.service.js";
+import { commissionBlock } from "../services/payments/commission.service.js";
 import User from "../models/user.models.js";
 import Delivery from "../models/delivery.models.js";
 import Company from "../models/company.models.js";
@@ -523,6 +524,12 @@ export const toggleDriverOnlineStatus = async (req, res) => {
         code: "KYC_REQUIRED",
         kycStatus: driver.kyc?.status || "not_started",
       });
+    }
+
+    // Riders who owe too much cash commission must pay before working again.
+    if (isOnline) {
+      const block = commissionBlock(driver);
+      if (block) return res.status(403).json(block);
     }
 
     // Validate if driver can go online
@@ -1224,6 +1231,13 @@ export const acceptDelivery = async (req, res) => {
         success: false,
         message: "Driver profile not found",
       });
+    }
+
+    const commissionStop = commissionBlock(driver);
+    if (commissionStop) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json(commissionStop);
     }
 
     // Check if driver is available

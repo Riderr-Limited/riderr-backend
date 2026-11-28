@@ -9,8 +9,16 @@ const paymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Delivery",
       required: function () {
-        return !this.rideId;
+        return !this.rideId && this.purpose !== "commission";
       },
+      index: true,
+    },
+    // "job": a customer paying for a delivery/ride (default).
+    // "commission": a rider paying Riderr the commission they owe from cash jobs.
+    purpose: {
+      type: String,
+      enum: ["job", "commission"],
+      default: "job",
       index: true,
     },
     rideId: {
@@ -323,6 +331,17 @@ paymentSchema.pre("save", function () {
 });
 
 paymentSchema.post("save", async function (doc) {
+  if (doc.purpose === "commission") {
+    if (doc.$locals.becameSuccessful) {
+      try {
+        const { applyCommissionPayment } = await import("../services/payments/commission.service.js");
+        await applyCommissionPayment(doc._id);
+      } catch (e) {
+        console.error("Commission payment apply failed:", e.message);
+      }
+    }
+    return;
+  }
   if (!doc.rideId) return;
   try {
     const Ride = mongoose.model("Ride");

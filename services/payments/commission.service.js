@@ -13,8 +13,48 @@
 import Payment from "../../models/payments.models.js";
 import Driver from "../../models/riders.models.js";
 import { splitAmount } from "./payout.service.js";
+import { markRefundPending } from "./refund.service.js";
+import { sendNotification } from "../../utils/notification.js";
 
 const OPEN = ["owed", "partly_paid"];
+const naira = (n) => `₦${Math.round(n || 0).toLocaleString()}`;
+
+/**
+ * Riders who owe more than this (in naira) can't go online or take jobs until
+ * they pay. COMMISSION_OWED_LIMIT, default 5000. Set 0 to turn the limit off.
+ */
+export const commissionLimit = () => {
+  const v = process.env.COMMISSION_OWED_LIMIT;
+  if (v === undefined || v === "") return 5000;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+export const isOverCommissionLimit = (owed) => {
+  const limit = commissionLimit();
+  return limit > 0 && Math.round(owed || 0) > limit;
+};
+
+/** Mongo filter for riders still under the limit (used by dispatch). */
+export const underCommissionLimitFilter = () => {
+  const limit = commissionLimit();
+  return limit > 0 ? { "commission.owed": { $not: { $gt: limit } } } : {};
+};
+
+/**
+ * For go-online and accept endpoints: null if the rider may work, otherwise
+ * the 403 body to send.
+ */
+export const commissionBlock = (driver) => {
+  const owed = Math.round(driver?.commission?.owed || 0);
+  if (!isOverCommissionLimit(owed)) return null;
+  return {
+    success: false,
+    code: "COMMISSION_LIMIT_REACHED",
+    message: `You owe ${naira(owed)} in commission from cash jobs, which is over the ${naira(commissionLimit())} limit. Pay it in the app to go back online.`,
+    commission: { owed, limit: commissionLimit(), payUrl: "/api/driver/commission/pay" }
+  };
+};
 
 /**
  * Record the commission on a cash payment as owed by its rider. Safe to call
@@ -51,17 +91,30 @@ export const recordCashCommission = async (paymentId, driverId, kind = "delivery
   );
   if (!claimed.modifiedCount) return { charged: false, alreadyRecorded: true };
 
+  let overLimit = false;
   if (platformFee > 0) {
-    await Driver.updateOne(
+    const d = await Driver.findOneAndUpdate(
       { _id: driverId },
       {
         $inc: { "commission.owed": platformFee, "commission.totalCharged": platformFee },
         $set: { "commission.lastChargedAt": new Date() }
       },
-      { session }
+      { session, new: true, projection: { commission: 1, userId: 1 } }
     );
+    // Over the limit: take them offline until they pay.
+    if (d && isOverCommissionLimit(d.commission?.owed)) {
+      overLimit = true;
+      await Driver.updateOne({ _id: driverId }, { $set: { isOnline: false, currentStatus: "offline" } }, { session });
+      sendNotification({
+        userId: d.userId,
+        type: "payment",
+        title: "Pay your commission to keep working",
+        message: `You owe ${naira(d.commission.owed)} in commission from cash jobs. You've been taken offline until you pay it in the app.`,
+        data: { type: "commission_limit_reached", owed: d.commission.owed, limit: commissionLimit() }
+      }).catch(() => {});
+    }
   }
-  return { charged: true, commission: platformFee };
+  return { charged: true, commission: platformFee, overLimit };
 };
 
 /**
@@ -195,8 +248,12 @@ export const getCommissionSummary = async (driverId) => {
     .sort({ createdAt: 1 })
     .select("amount deliveryId rideId createdAt metadata.commissionOwed metadata.commissionPaid metadata.commissionStatus")
     .lean();
+  const owed = Math.round(driver?.commission?.owed || 0);
   return {
-    owed: Math.round(driver?.commission?.owed || 0),
+    owed,
+    limit: commissionLimit(),
+    overLimit: isOverCommissionLimit(owed),
+    totalPaidByRider: driver?.commission?.totalPaidByRider || 0,
     totalCharged: driver?.commission?.totalCharged || 0,
     totalDeducted: driver?.commission?.totalDeducted || 0,
     totalSettledManually: driver?.commission?.totalSettledManually || 0,
@@ -210,4 +267,50 @@ export const getCommissionSummary = async (driverId) => {
       date: p.createdAt
     }))
   };
+};
+
+/**
+ * A rider's own commission payment (card or transfer) succeeded: reduce what
+ * they owe. Runs once per payment (called from the Payment model hook, so it
+ * works for every way a payment can be confirmed). If they paid more than
+ * they now owe (e.g. a payout deduction cleared it meanwhile), the extra goes
+ * to the manual refund queue.
+ */
+export const applyCommissionPayment = async (paymentId) => {
+  const claimed = await Payment.findOneAndUpdate(
+    { _id: paymentId, purpose: "commission", status: "successful", "metadata.commissionApplied": { $ne: true } },
+    { $set: { "metadata.commissionApplied": true, "metadata.commissionAppliedAt": new Date() } },
+    { new: true }
+  );
+  if (!claimed) return { applied: false };
+
+  const driverId = claimed.driverId;
+  const take = await reserveCommission(driverId, claimed.amount);
+  if (take > 0) {
+    // reserveCommission counted it as a payout deduction; it was paid by the rider.
+    await Driver.updateOne(
+      { _id: driverId },
+      { $inc: { "commission.totalDeducted": -take, "commission.totalPaidByRider": take } }
+    );
+    await allocateRecovered(driverId, take, "rider_payment", { paymentId: claimed._id });
+  }
+  const surplus = claimed.amount - take;
+  if (surplus > 0) {
+    const p = await Payment.findById(claimed._id);
+    markRefundPending(p, { amount: surplus, reason: "Rider paid more commission than they owed" });
+    await p.save();
+  }
+  await Payment.updateOne({ _id: claimed._id }, { $set: { "metadata.commissionCleared": take, "metadata.commissionSurplus": surplus } });
+
+  const d = await Driver.findById(driverId).select("commission userId").lean();
+  sendNotification({
+    userId: d.userId,
+    type: "payment",
+    title: "Commission payment received",
+    message: `We received ${naira(take)}. You now owe ${naira(d.commission?.owed)}.${
+      isOverCommissionLimit(d.commission?.owed) ? "" : " You can go online."
+    }${surplus > 0 ? ` The extra ${naira(surplus)} will be refunded to you.` : ""}`,
+    data: { type: "commission_paid", amount: take, owed: d.commission?.owed || 0 }
+  }).catch(() => {});
+  return { applied: true, amount: take, surplus, owed: d.commission?.owed || 0 };
 };

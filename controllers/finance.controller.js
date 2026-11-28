@@ -1,10 +1,13 @@
 // controllers/finance.controller.js
 // Manual refunds and cash commission (admin), and the rider's own commission view.
 import mongoose from "mongoose";
+import crypto from "crypto";
 import Payment from "../models/payments.models.js";
 import Driver from "../models/riders.models.js";
 import { completeManualRefund } from "../services/payments/refund.service.js";
 import { getCommissionSummary, settleCommissionManually } from "../services/payments/commission.service.js";
+import { payoutPayment } from "../services/payments/payout.service.js";
+import { createDedicatedVirtualAccount } from "../utils/flutterwave.js";
 
 const page = (q) => {
   const limit = Math.min(100, Math.max(1, parseInt(q.limit) || 20));
@@ -195,12 +198,189 @@ export const getMyCommission = async (req, res) => {
       data: {
         ...summary,
         message: summary.owed
-          ? `You owe ₦${summary.owed.toLocaleString()} in commission from cash jobs. It will be deducted from your next card or transfer job.`
+          ? `You owe ₦${summary.owed.toLocaleString()} in commission from cash jobs. Pay it in the app, or it will be deducted from your next card or transfer job.${
+              summary.overLimit ? ` You're over the ₦${summary.limit.toLocaleString()} limit, so you can't go online until you pay.` : ""
+            }`
           : "You don't owe any commission."
       }
     });
   } catch (error) {
     console.error("Get my commission error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * @route  POST /api/driver/commission/pay
+ * @body   { method: "card" | "bank_transfer", amount? }   (amount defaults to everything owed)
+ * The rider pays Riderr the commission they owe from cash jobs.
+ *   card          -> returns a reference; charge it with the usual
+ *                    POST /api/payments/charge-card { reference, cardDetails }
+ *                    (then /submit-otp or /submit-pin if asked).
+ *   bank_transfer -> returns a one-off account to transfer into; it's
+ *                    confirmed automatically by the Flutterwave webhook.
+ * Poll GET /api/payments/status/:reference, or GET /api/driver/commission.
+ */
+export const payMyCommission = async (req, res) => {
+  try {
+    const driver = await Driver.findOne({ userId: req.user._id }).select("_id commission");
+    if (!driver) return res.status(404).json({ success: false, message: "Driver profile not found" });
+
+    const raw = String(req.body?.method || "").toLowerCase();
+    const method = ["transfer", "bank", "bank_transfer"].includes(raw) ? "bank_transfer" : raw;
+    if (!["card", "bank_transfer"].includes(method)) {
+      return res.status(400).json({ success: false, message: 'method must be "card" or "bank_transfer"' });
+    }
+
+    const owed = Math.round(driver.commission?.owed || 0);
+    if (owed <= 0) return res.status(400).json({ success: false, message: "You don't owe any commission" });
+    const amount = req.body?.amount != null ? Math.round(Number(req.body.amount)) : owed;
+    const minimum = Math.min(owed, 100);
+    if (!(amount >= minimum) || amount > owed) {
+      return res.status(400).json({ success: false, message: `Amount must be between ₦${minimum} and ₦${owed.toLocaleString()}` });
+    }
+
+    // Reuse an unfinished payment for the same amount and method.
+    const existing = await Payment.findOne({
+      purpose: "commission",
+      driverId: driver._id,
+      status: "pending",
+      amount,
+      paymentMethod: method === "card" ? "card" : "bank_transfer_dedicated",
+      createdAt: { $gt: new Date(Date.now() - 60 * 60 * 1000) }
+    }).sort({ createdAt: -1 });
+    if (existing) return res.status(200).json({ success: true, message: "Payment details", data: commissionPaymentResponse(existing) });
+
+    const reference = `RIDERR-COMM-${Date.now()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+    let bankDetails = null;
+    if (method === "bank_transfer") {
+      const va = await createDedicatedVirtualAccount({ email: req.user.email, amount, metadata: { reference, amount } });
+      if (!va.success || !va.data?.accountNumber) {
+        // No fallback account: money sent somewhere we can't match
+        // automatically would never be credited to the rider.
+        return res.status(503).json({ success: false, message: "Bank transfer is unavailable right now. Please pay by card or try again shortly." });
+      }
+      bankDetails = {
+        bankName: va.data.bankName,
+        accountNumber: va.data.accountNumber,
+        accountName: va.data.accountName,
+        amount,
+        reference,
+        expiresAt: va.data.expiresAt,
+        instructions: [`Transfer exactly ₦${amount.toLocaleString()}`, "Payment is confirmed automatically"]
+      };
+    }
+
+    const payment = await Payment.create({
+      purpose: "commission",
+      driverId: driver._id,
+      customerId: req.user._id, // the payer (lets the existing card endpoints find it)
+      amount,
+      currency: "NGN",
+      gateway: "flutterwave",
+      gatewayReference: reference,
+      paystackReference: reference,
+      status: "pending",
+      paymentMethod: method === "card" ? "card" : "bank_transfer_dedicated",
+      paymentType: "direct",
+      platformFee: amount,
+      companyAmount: 0,
+      metadata: {
+        kind: "commission",
+        owedAtStart: owed,
+        ...(bankDetails ? { bankTransferDetails: bankDetails, transferType: "flutterwave_virtual" } : {})
+      }
+    });
+
+    res.status(201).json({ success: true, message: "Payment created", data: commissionPaymentResponse(payment) });
+  } catch (error) {
+    console.error("Pay commission error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+const commissionPaymentResponse = (p) => ({
+  paymentId: p._id,
+  reference: p.paystackReference,
+  amount: p.amount,
+  method: p.paymentMethod === "card" ? "card" : "bank_transfer",
+  ...(p.paymentMethod === "card"
+    ? { next: { endpoint: "POST /api/payments/charge-card", body: { reference: p.paystackReference, cardDetails: "{ number, cvv, expiry_month, expiry_year, pin? }" } } }
+    : { bankDetails: p.metadata?.bankTransferDetails }),
+  polling: { url: `/api/payments/status/${p.paystackReference}`, intervalSeconds: 5 }
+});
+
+/**
+ * @route  GET /api/admin/payouts?status=failed|processing
+ * Payouts that need attention. "processing" ones older than a few minutes may
+ * have been interrupted: check Flutterwave before retrying them.
+ */
+export const listPayouts = async (req, res) => {
+  try {
+    const { limit, page: p, skip } = page(req.query);
+    const status = req.query.status === "processing" ? "processing" : "failed";
+    const filter = { "metadata.payoutStatus": status };
+    const [items, total] = await Promise.all([
+      Payment.find(filter).sort({ updatedAt: 1 }).skip(skip).limit(limit).lean(),
+      Payment.countDocuments(filter)
+    ]);
+    res.status(200).json({
+      success: true,
+      data: {
+        payouts: items.map((x) => ({
+          paymentId: x._id,
+          job: x.rideId ? { type: "ride", id: x.rideId } : { type: "delivery", id: x.deliveryId },
+          driverId: x.driverId,
+          companyId: x.companyId,
+          amount: x.companyAmount,
+          status: x.metadata?.payoutStatus,
+          error: x.metadata?.payoutError || null,
+          requiresAction: x.metadata?.payoutRequiresAction || null,
+          startedAt: x.metadata?.payoutStartedAt
+        })),
+        pagination: { page: p, limit, total, pages: Math.ceil(total / limit) }
+      }
+    });
+  } catch (error) {
+    console.error("List payouts error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * @route  POST /api/admin/payouts/:paymentId/retry
+ * @body   { confirmedNotSent? }  required for a payout stuck in "processing":
+ *         only send it after checking in Flutterwave that no transfer went out.
+ */
+export const retryPayout = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.paymentId)) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+    const payment = await Payment.findById(req.params.paymentId);
+    if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+    const status = payment.metadata?.payoutStatus;
+    if (status === "paid" || payment.escrowDetails?.settledToCompany) {
+      return res.status(400).json({ success: false, message: "This payout has already been sent" });
+    }
+    if (status === "processing") {
+      if (req.body?.confirmedNotSent !== true) {
+        return res.status(409).json({
+          success: false,
+          code: "PAYOUT_IN_PROGRESS",
+          message: "This payout may already have been sent. Check Flutterwave, then retry with { confirmedNotSent: true } if no transfer went out."
+        });
+      }
+      await Payment.updateOne(
+        { _id: payment._id, "metadata.payoutStatus": "processing" },
+        { $set: { "metadata.payoutStatus": "failed" }, $push: { auditLog: { action: "payout_reset", performedBy: req.user._id, timestamp: new Date() } } }
+      );
+    }
+    const r = await payoutPayment(payment._id, payment.driverId, { companyId: payment.companyId });
+    if (!r.success) return res.status(400).json({ success: false, message: r.error, requiresAction: r.requiresAction || null });
+    res.status(200).json({ success: true, message: "Payout sent", data: r });
+  } catch (error) {
+    console.error("Retry payout error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

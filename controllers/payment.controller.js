@@ -23,8 +23,8 @@ import crypto from "crypto";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
-import { settlePaymentToDriver, splitAmount } from "../services/payments/payout.service.js";
-import { recordCashCommission, recordCashDelivery, reserveCommission, allocateRecovered } from "../services/payments/commission.service.js";
+import { splitAmount, payoutPayment } from "../services/payments/payout.service.js";
+import { recordCashCommission, recordCashDelivery } from "../services/payments/commission.service.js";
 import { markRefundPending } from "../services/payments/refund.service.js";
 import Ride from "../models/ride.model.js";
 
@@ -1439,8 +1439,8 @@ export const completeAndSettlePayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "This delivery has already been verified" });
     }
 
-    // Check if already settled
-    if (payment.escrowDetails?.settledToCompany) {
+    // Check if already settled (or a payout is already in progress)
+    if (payment.escrowDetails?.settledToCompany || ["processing", "paid"].includes(payment.metadata?.payoutStatus)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1464,6 +1464,9 @@ export const completeAndSettlePayment = async (req, res) => {
     // Set company ID if not set
     if (!payment.companyId && delivery.companyId) {
       payment.companyId = delivery.companyId._id;
+    }
+    if (!payment.driverId && delivery.driverId) {
+      payment.driverId = delivery.driverId._id || delivery.driverId;
     }
 
     await payment.save({ session });
@@ -1513,210 +1516,120 @@ export const completeAndSettlePayment = async (req, res) => {
       });
     }
 
-    // 
-    // AUTOMATIC SETTLEMENT - This is where money moves!
-    // 
-    console.log(
-      " [SETTLEMENT] Initiating automatic transfer to company...",
-    );
+    // Commit the verification BEFORE any money moves. The payout below claims
+    // the payment atomically (payoutPayment), so the money can only be sent
+    // once: if anything fails after the transfer, the payment stays marked
+    // as being paid out and is never sent again. If the transfer itself
+    // fails, the payout is marked failed and can be retried
+    // (POST /api/admin/payouts/:paymentId/retry, or automatically when an
+    // individual rider adds their bank account).
+    await session.commitTransaction();
+    session.endSession();
 
-    // First take any commission the rider owes from cash jobs out of this
-    // payout. Inside the transaction, so a failed transfer puts it back.
-    const commissionDeducted = await reserveCommission(riderId, payment.companyAmount, { session });
-    const transferAmount = payment.companyAmount - commissionDeducted;
+    if (riderId) {
+      await Driver.updateOne(
+        { _id: riderId },
+        { $inc: { totalDeliveries: 1 }, $set: { lastDeliveryDate: new Date() } },
+      ).catch((e) => console.error(" Driver stats update failed:", e.message));
+    }
 
-    // Company riders are paid via their company; individual riders (no
-    // company) are paid straight to their own verified bank account.
-    const settlementResult = transferAmount <= 0
-      ? { success: true, transferId: null, transferReference: null, amount: 0, settledAt: new Date(), status: "not_needed" }
-      : delivery.companyId
-        ? await settlePaymentToCompany(payment, delivery.companyId, transferAmount)
-        : await settlePaymentToDriver(payment, delivery.driverId, transferAmount);
+    // Pays the delivery's company, or the individual rider's own account,
+    // after deducting any cash commission the rider owes.
+    const companyId = delivery.companyId?._id || delivery.companyId || null;
+    const payout = await payoutPayment(payment._id, riderId, { companyId });
 
-    if (settlementResult.success) {
-      //  Transfer successful - update payment record
-      payment.escrowDetails.settledToCompany = true;
-      payment.escrowDetails.settlementDate = new Date();
-      payment.escrowDetails.paystackTransferId = settlementResult.transferId;
-
-      payment.metadata = {
-        ...payment.metadata,
-        settlementStatus: settlementResult.status, // 'success', 'pending', 'failed'
-        settlementReference: settlementResult.transferReference,
-        settledAt: settlementResult.settledAt,
-        commissionDeducted,
-        amountTransferred: transferAmount,
-      };
-      payment.markModified("metadata");
-      if (commissionDeducted) {
-        await allocateRecovered(riderId, commissionDeducted, "payout", { payoutPaymentId: payment._id }, { session });
-      }
-
-      // Add to audit log
-      payment.auditLog.push({
-        action: "settled_to_company",
-        timestamp: new Date(),
-        details: {
-          transferId: settlementResult.transferId,
-          amount: transferAmount,
-          commissionDeducted,
-          status: settlementResult.status,
-        },
-      });
-
-      await payment.save({ session });
-
-      // Update company stats
-      if (delivery.companyId) {
-        const company = await Company.findById(delivery.companyId._id).session(
-          session,
-        );
-        if (company) {
-          company.totalEarnings =
-            (company.totalEarnings || 0) + payment.companyAmount;
-          company.totalDeliveries = (company.totalDeliveries || 0) + 1;
-          company.lastPaymentReceived = new Date();
-          await company.save({ session });
-        }
-      }
-
-      // Update driver stats
-      if (delivery.driverId) {
-        const driver = await Driver.findById(delivery.driverId._id).session(
-          session,
-        );
-        if (driver) {
-          driver.totalDeliveries = (driver.totalDeliveries || 0) + 1;
-          driver.lastDeliveryDate = new Date();
-          await driver.save({ session });
-        }
-      }
-
-      await session.commitTransaction();
-      session.endSession();
-
-      console.log(` [SETTLEMENT COMPLETE] Transfer successful!`);
-      console.log(`   Transfer ID: ${settlementResult.transferId}`);
-      console.log(`   Amount: ${payment.companyAmount.toLocaleString()}`);
-      console.log(`   Status: ${settlementResult.status}`);
-
-      // Notify company
-      try {
-        if (delivery.companyId) {
-          await sendNotification({
-            userId:
-              delivery.companyId.userId ||
-              delivery.companyId.ownerId ||
-              delivery.companyId.owner,
-            title: " Payment Received",
-            message: `${transferAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}${commissionDeducted ? ` (${commissionDeducted.toLocaleString()} cash commission deducted)` : ""}`,
-            data: {
-              type: "payment_settled",
-              deliveryId: delivery._id,
-              paymentId: payment._id,
-              amount: payment.companyAmount,
-              transferId: settlementResult.transferId,
-            },
-          });
-        }
-      } catch (notificationError) {
-        console.error(
-          " Notification error (non-critical):",
-          notificationError,
-        );
-      }
-
-      // Notify driver
-      try {
-        if (delivery.driverId) {
-          const driver = await Driver.findById(delivery.driverId._id).populate(
-            "userId",
-          );
-          if (driver && driver.userId) {
-            await sendNotification({
-              userId: driver.userId._id,
-              title: " Delivery Completed & Payment Settled",
-              message: `Delivery completed! Company received payment for delivery #${delivery.referenceId}`,
-              data: {
-                type: "delivery_completed",
-                deliveryId: delivery._id,
-              },
-            });
-          }
-        }
-      } catch (notificationError) {
-        console.error(
-          " Notification error (non-critical):",
-          notificationError,
-        );
-      }
-
+    if (!payout.success) {
+      console.error(" [SETTLEMENT FAILED]", payout.error);
       return res.status(200).json({
         success: true,
-        message: "Delivery verified and payment settled successfully!",
+        message: "Delivery verified. The payout to the rider will be completed shortly.",
         data: {
           deliveryId: delivery._id,
           paymentId: payment._id,
           status: "completed",
-          review: review,
-          settlement: {
-            success: true,
-            companyReceived: `${transferAmount.toLocaleString()}`,
-            commissionDeducted,
-            platformFee: `${payment.platformFee.toLocaleString()}`,
-            settledAt: payment.escrowDetails.settlementDate,
-            transferId: settlementResult.transferId,
-            transferStatus: settlementResult.status,
-            settled: payment.escrowDetails.settledToCompany,
-          },
-        },
-      });
-    } else {
-      //  Transfer failed - rollback and notify
-      await session.abortTransaction();
-      session.endSession();
-
-      console.error(" [SETTLEMENT FAILED]", settlementResult.error);
-
-      // Update payment with failure info (don't mark as settled)
-      payment.metadata = {
-        ...payment.metadata,
-        settlementAttempted: true,
-        settlementFailedAt: new Date(),
-        settlementError: settlementResult.error,
-        requiresManualSettlement: true,
-      };
-      payment.markModified("metadata");
-
-      payment.auditLog.push({
-        action: "settlement_failed",
-        timestamp: new Date(),
-        details: {
-          error: settlementResult.error,
-          amount: payment.companyAmount,
-        },
-      });
-
-      await payment.save();
-
-      return res.status(500).json({
-        success: false,
-        message: "Delivery verified but automatic settlement failed",
-        error: settlementResult.error,
-        data: {
-          deliveryId: delivery._id,
-          paymentId: payment._id,
-          deliveryStatus: "completed",
-          review: review,
+          review,
           settlement: {
             success: false,
-            error: settlementResult.error,
-            companyAmount: payment.companyAmount,
-            requiresAction: "Contact support to complete manual settlement",
+            status: "pending",
+            error: payout.error,
+            requiresAction: payout.requiresAction || null,
           },
         },
       });
     }
+
+    if (companyId) {
+      await Company.updateOne(
+        { _id: companyId },
+        { $inc: { totalEarnings: payment.companyAmount, totalDeliveries: 1 }, $set: { lastPaymentReceived: new Date() } },
+      ).catch((e) => console.error(" Company stats update failed:", e.message));
+    }
+
+    const transferAmount = payout.amount;
+    const commissionDeducted = payout.commissionDeducted || 0;
+
+    // Notify company
+    try {
+      if (delivery.companyId) {
+        await sendNotification({
+          userId:
+            delivery.companyId.userId ||
+            delivery.companyId.ownerId ||
+            delivery.companyId.owner,
+          title: " Payment Received",
+          message: `${transferAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}${commissionDeducted ? ` (${commissionDeducted.toLocaleString()} cash commission deducted)` : ""}`,
+          data: {
+            type: "payment_settled",
+            deliveryId: delivery._id,
+            paymentId: payment._id,
+            amount: transferAmount,
+            transferId: payout.transferId,
+          },
+        });
+      }
+    } catch (notificationError) {
+      console.error(" Notification error (non-critical):", notificationError);
+    }
+
+    // Notify driver
+    try {
+      if (riderId) {
+        const driver = await Driver.findById(riderId).populate("userId");
+        if (driver && driver.userId) {
+          await sendNotification({
+            userId: driver.userId._id,
+            title: " Delivery Completed & Payment Settled",
+            message: companyId
+              ? `Delivery completed! Company received payment for delivery #${delivery.referenceId}`
+              : `Delivery completed! ${transferAmount.toLocaleString()} has been sent to your bank account${commissionDeducted ? ` (${commissionDeducted.toLocaleString()} cash commission deducted)` : ""}.`,
+            data: { type: "delivery_completed", deliveryId: delivery._id },
+          });
+        }
+      }
+    } catch (notificationError) {
+      console.error(" Notification error (non-critical):", notificationError);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Delivery verified and payment settled successfully!",
+      data: {
+        deliveryId: delivery._id,
+        paymentId: payment._id,
+        status: "completed",
+        review: review,
+        settlement: {
+          success: true,
+          companyReceived: `${transferAmount.toLocaleString()}`,
+          commissionDeducted,
+          platformFee: `${payment.platformFee.toLocaleString()}`,
+          settledAt: payout.settledAt,
+          transferId: payout.transferId,
+          transferStatus: payout.status,
+          settled: true,
+        },
+      },
+    });
   } catch (error) {
     if (session.inTransaction()) {
       await session.abortTransaction();
@@ -1732,188 +1645,6 @@ export const completeAndSettlePayment = async (req, res) => {
   }
 };
 
-async function settlePaymentToCompany(payment, company, amount = amount) {
-  try {
-    console.log(
-      ` [SETTLEMENT] Starting settlement for payment ${payment._id}`,
-    );
-    console.log(`   Amount: ${amount.toLocaleString()}`);
-    console.log(`   Company: ${company.name}`);
-
-    // 
-    // STEP 1: Validate company has account number (that's all we need!)
-    // 
-    if (!company.bankAccount?.accountNumber) {
-      console.error(" Company account number not configured");
-      return {
-        success: false,
-        error: "Company account number not configured",
-        requiresAction: "company_add_account_number",
-      };
-    }
-
-    if (!company.bankAccount?.accountName) {
-      console.error(" Company account name not configured");
-      return {
-        success: false,
-        error: "Company account name not configured",
-        requiresAction: "company_add_account_name",
-      };
-    }
-
-    if (!company.bankAccount?.bankCode) {
-      return {
-        success: false,
-        error:
-          "Company bank code not configured. Company must update bank details with their bank code.",
-        requiresAction: "company_add_bank_code",
-      };
-    }
-
-    console.log(` Account found: ${company.bankAccount.accountNumber}`);
-    console.log(`   Name: ${company.bankAccount.accountName}`);
-
-    // 
-    // STEP 2 & 3: Create recipient (Paystack) or transfer directly (Flutterwave)
-    // 
-    const transferReference = `SETTLE-${payment.paystackReference}-${Date.now()}`;
-    const provider = getGatewayProvider();
-
-    if (provider === "flutterwave") {
-      // Flutterwave: transfer directly using account details (no recipient code)
-      console.log(
-        ` Initiating Flutterwave transfer of ${amount.toLocaleString()}...`,
-      );
-
-      const transferResult = await initiateTransfer({
-        accountBank: company.bankAccount.bankCode,
-        accountNumber: company.bankAccount.accountNumber,
-        amount: amount,
-        beneficiaryName: company.bankAccount.accountName,
-        reference: transferReference,
-        reason: `Settlement for delivery ${payment.deliveryId}`,
-      });
-
-      if (!transferResult.success) {
-        console.error(
-          " Flutterwave transfer failed:",
-          transferResult.message,
-        );
-        return {
-          success: false,
-          error: transferResult.message,
-          flutterwaveError: transferResult.error,
-        };
-      }
-
-      console.log(` Flutterwave transfer successful!`);
-      return {
-        success: true,
-        transferId: transferResult.data.transferCode,
-        transferReference: transferResult.data.reference,
-        amount: amount,
-        settledAt: new Date(),
-        status: transferResult.data.status,
-      };
-    }
-
-    // Paystack: create recipient then transfer
-    if (!company.paystackRecipientCode) {
-      console.log(" Creating Paystack recipient (bank auto-detected)...");
-
-      const recipientResult = await createTransferRecipient({
-        accountName: company.bankAccount.accountName,
-        accountNumber: company.bankAccount.accountNumber,
-        bankCode: company.bankAccount.bankCode,
-        companyId: company._id.toString(),
-      });
-
-      if (!recipientResult.success) {
-        console.error(
-          " Failed to create recipient:",
-          recipientResult.message,
-        );
-        return {
-          success: false,
-          error: recipientResult.message,
-          paystackError: recipientResult.error,
-        };
-      }
-
-      // Save recipient code AND the bank info Paystack detected
-      company.paystackRecipientCode = recipientResult.data.recipientCode;
-
-      // Update bank details with what Paystack detected
-      company.bankAccount.bankName = recipientResult.data.bankName;
-      company.bankAccount.bankCode = recipientResult.data.bankCode;
-      company.bankAccount.verified = true;
-      company.bankAccount.verifiedAt = new Date();
-
-      await company.save();
-
-      console.log(
-        ` Recipient created: ${recipientResult.data.recipientCode}`,
-      );
-      console.log(
-        `   Bank detected by Paystack: ${recipientResult.data.bankName}`,
-      );
-    } else {
-      console.log(
-        ` Using existing recipient: ${company.paystackRecipientCode}`,
-      );
-    }
-
-    // 
-    // STEP 3: Initiate Paystack transfer
-    // 
-    console.log(
-      ` Initiating Paystack transfer of ${amount.toLocaleString()}...`,
-    );
-
-    const transferResult = await initiateTransfer({
-      amount: amount,
-      recipientCode: company.paystackRecipientCode,
-      reference: transferReference,
-      reason: `Settlement for delivery ${payment.deliveryId}`,
-    });
-
-    if (!transferResult.success) {
-      console.error(" Transfer failed:", transferResult.message);
-
-      // If "Recipient not found", clear recipient code so it recreates next time
-      if (transferResult.message?.includes("Recipient not found")) {
-        console.log(" Clearing invalid recipient code...");
-        company.paystackRecipientCode = null;
-        await company.save();
-      }
-
-      return {
-        success: false,
-        error: transferResult.message,
-        paystackError: transferResult.error,
-      };
-    }
-
-    console.log(` Transfer successful!`);
-    console.log(`   Transfer Code: ${transferResult.data.transferCode}`);
-    console.log(`   Status: ${transferResult.data.status}`);
-
-    return {
-      success: true,
-      transferId: transferResult.data.transferCode,
-      transferReference: transferResult.data.reference,
-      amount: amount,
-      settledAt: new Date(),
-      status: transferResult.data.status,
-    };
-  } catch (error) {
-    console.error(" Settlement error:", error);
-    return {
-      success: false,
-      error: error.message,
-    };
-  }
-}
 
 /**
  * @desc    Mobile payment callback handler

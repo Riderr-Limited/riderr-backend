@@ -65,6 +65,8 @@ import {
   listCommissionOwed,
   getDriverCommission,
   settleDriverCommission,
+  listPayouts,
+  retryPayout,
 } from "../controllers/finance.controller.js";
 
 const router = express.Router();
@@ -201,6 +203,8 @@ router.post("/refunds/:paymentId/complete", completeRefund);
 router.get("/commissions", listCommissionOwed);
 router.get("/commissions/:driverId", getDriverCommission);
 router.post("/commissions/:driverId/settle", settleDriverCommission);
+router.get("/payouts", listPayouts);
+router.post("/payouts/:paymentId/retry", retryPayout);
 
 /**
  * @swagger
