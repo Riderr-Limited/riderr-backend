@@ -2,7 +2,8 @@ import Company from "../models/company.models.js";
 import User from "../models/user.models.js";
 import mongoose from "mongoose";
 import { validationResult } from "express-validator";
-import Notification from "../models/notificaton.models.js";  
+import Notification from "../models/notification.model.js";
+import Driver from "../models/riders.models.js";  
 
 /**
  * @desc    Get company profile

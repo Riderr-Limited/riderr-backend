@@ -31,6 +31,7 @@ import {
   reopenKyc,
   getKycSelfie
 } from "../controllers/kyc.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 // Selfies stay in memory; the service re-encodes and stores them privately.
 const selfieUpload = multer({
@@ -64,6 +65,7 @@ const limiter = (limit, windowMinutes = 15) =>
 
 // ======================= rider (mounted at /api/kyc) =======================
 export const riderKycRouter = express.Router();
+validateObjectIds(riderKycRouter);
 riderKycRouter.use(protect, authorize("driver"));
 
 /**
@@ -140,6 +142,7 @@ riderKycRouter.delete("/guarantors/:guarantorId", removeGuarantor);
 
 // ================= guarantor, public (mounted at /api/guarantors) =================
 export const guarantorRouter = express.Router();
+validateObjectIds(guarantorRouter);
 guarantorRouter.use(limiter(30));
 
 /**
@@ -168,6 +171,7 @@ guarantorRouter.post("/:token/respond", limiter(10), respondAsGuarantor);
 
 // ===================== admin (mounted at /api/admin/kyc) =====================
 export const adminKycRouter = express.Router();
+validateObjectIds(adminKycRouter);
 adminKycRouter.use(protect, authorize("admin"));
 
 /**

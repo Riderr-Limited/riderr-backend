@@ -1,6 +1,7 @@
 // controllers/rider.controller.js
 import Rider from "../models/rider.model.js";
 import Driver from "../models/riders.models.js"; // Make sure this exports Driver model
+import { workBlock } from "../services/payments/commission.service.js";
 import Delivery from "../models/delivery.models.js";
 
 /**
@@ -459,6 +460,20 @@ export const toggleDriverOnlineStatus = async (req, res) => {
         success: false,
         message: "Driver profile not found"
       });
+    }
+
+    // Same rules as POST /api/driver/online-status.
+    if (isOnline && !driver.isKycCleared()) {
+      return res.status(403).json({
+        success: false,
+        message: "Complete identity verification before going online",
+        code: "KYC_REQUIRED",
+        kycStatus: driver.kyc?.status || "not_started",
+      });
+    }
+    if (isOnline) {
+      const block = workBlock(driver);
+      if (block) return res.status(403).json(block);
     }
 
     try {

@@ -14,8 +14,10 @@ import {
   activatePartner,
   regeneratePartnerSecret,
 } from "../controllers/partnerAdmin.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 router.use(authenticate, adminOnly);
 

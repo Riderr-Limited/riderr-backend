@@ -84,6 +84,12 @@ app.set("trust proxy", true);
  */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// Express 5 leaves req.body undefined when a request has no body (e.g. most
+// DELETE calls), and many handlers destructure it. Default it to {}.
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 /**
  * Data Sanitization

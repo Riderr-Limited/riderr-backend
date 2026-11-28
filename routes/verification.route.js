@@ -8,8 +8,10 @@ import {
   checkVerificationStatus
 } from "../controllers/verification.controller.js";
 import authorize from "../middlewares/authorize.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // Public routes
 router.post("/send-phone", sendPhoneVerification);

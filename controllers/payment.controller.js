@@ -22,11 +22,20 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+/** Did the gateway confirm the full amount, in naira? */
+const paidInFull = (payment, gatewayData) => {
+  if (!gatewayData) return false;
+  const amount = Number(gatewayData.amount);
+  const currency = String(gatewayData.currency || "NGN").toUpperCase();
+  return Number.isFinite(amount) && amount >= Math.round(payment.amount) && currency === "NGN";
+};
 const PLATFORM_FEE_PCT = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE) || 10;
 import { splitAmount, payoutPayment } from "../services/payments/payout.service.js";
 import { recordCashCommission, recordCashDelivery } from "../services/payments/commission.service.js";
 import { markRefundPending } from "../services/payments/refund.service.js";
 import Ride from "../models/ride.model.js";
+import { findCompanyAdminUser } from "../utils/companyUser.js";
 
 /**
  * MOBILE-FIRST PAYMENT FLOW
@@ -1274,6 +1283,23 @@ export const verifyDeliveryPayment = async (req, res) => {
       });
     }
 
+    // The gateway says paid: make sure it was the full amount.
+    if (!paidInFull(payment, paymentData)) {
+      payment.metadata = {
+        ...payment.metadata,
+        amountMismatch: { expected: payment.amount, received: paymentData.amount, currency: paymentData.currency, at: new Date() },
+      };
+      payment.markModified("metadata");
+      await payment.save({ session });
+      await session.commitTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        code: "AMOUNT_MISMATCH",
+        message: `We received ${paymentData.amount} but ${payment.amount} was due. Please contact support.`,
+      });
+    }
+
     //  Payment successful - Update payment record
     payment.status = "successful";
     payment.paidAt = new Date();
@@ -1583,12 +1609,10 @@ export const completeAndSettlePayment = async (req, res) => {
 
     // Notify company
     try {
-      if (delivery.companyId) {
+      const companyUser = delivery.companyId ? await findCompanyAdminUser(delivery.companyId) : null;
+      if (companyUser) {
         await sendNotification({
-          userId:
-            delivery.companyId.userId ||
-            delivery.companyId.ownerId ||
-            delivery.companyId.owner,
+          userId: companyUser._id,
           title: " Payment Received",
           message: `${transferAmount.toLocaleString()} has been transferred to your bank account for delivery #${delivery.referenceId}${commissionDeducted ? ` (${commissionDeducted.toLocaleString()} cash commission deducted)` : ""}`,
           data: {
@@ -1929,6 +1953,25 @@ export const handlePaystackWebhook = async (req, res) => {
         (await Payment.findOne({ gatewayReference: txRef })) ||
         (await Payment.findOne({ paystackReference: txRef }));
 
+      // Don't trust the webhook body alone: ask Flutterwave for the
+      // transaction and check the full amount was paid (a bank transfer can
+      // be for less than the fare).
+      let verified = null;
+      if (payment && payment.status !== "successful") {
+        const v = await verifyPayment(txRef);
+        verified = v.success && v.data?.status === "success" ? v.data : null;
+        if (!paidInFull(payment, verified)) {
+          console.warn(` Webhook for ${txRef} not accepted: expected ${payment.amount}, verified ${verified?.amount ?? "none"}`);
+          payment.metadata = {
+            ...payment.metadata,
+            amountMismatch: { expected: payment.amount, received: verified?.amount ?? event.data?.amount ?? null, currency: verified?.currency, at: new Date() },
+          };
+          payment.markModified("metadata");
+          await payment.save();
+          return res.status(200).json({ success: true });
+        }
+      }
+
       if (payment && payment.status !== "successful") {
         payment.status = "successful";
         payment.paidAt = new Date();
@@ -2068,13 +2111,18 @@ export const getPaymentDetails = async (req, res) => {
       });
     }
 
+    // Only the payer, the rider on the job, its company, and admins. (Before,
+    // every rider could read every payment, and the company check used a
+    // role name that doesn't exist.)
     const isCustomer =
-      user._id.toString() === payment.customerId._id.toString();
-    const isDriver = user.role === "driver";
+      String(user._id) === String(payment.customerId?._id || payment.customerId || "");
+    const isDriver =
+      user.role === "driver" &&
+      String(payment.driverId?.userId?._id || payment.driverId?.userId || "") === String(user._id);
     const isCompanyOwner =
-      user.role === "company" &&
-      payment.companyId &&
-      payment.companyId.ownerId?.toString() === user._id.toString();
+      user.role === "company_admin" &&
+      !!payment.companyId &&
+      String(payment.companyId?._id || payment.companyId) === String(user.companyId);
     const isAdmin = user.role === "admin";
 
     if (!isCustomer && !isDriver && !isCompanyOwner && !isAdmin) {
@@ -2500,7 +2548,6 @@ export const getCompanySettlementDetails = async (req, res) => {
 
     // Get settlement transaction details
     const settlementDetails = {
-      transferId: payment.metadata?.settlementTransferId,
       status: payment.escrowDetails?.settledToCompany ? "settled" : "held",
       settledAt: payment.escrowDetails?.settlementDate,
       transferId: payment.escrowDetails?.paystackTransferId,
@@ -3967,9 +4014,7 @@ export const requestCashSettlement = async (req, res) => {
       const company = await Company.findById(payment.companyId);
       if (company) {
         // Find company owner/user to notify
-        const companyUser = await User.findOne({
-          $or: [{ _id: company.ownerId }, { email: company.email }],
-        });
+        const companyUser = await findCompanyAdminUser(company._id);
 
         if (companyUser) {
           await sendNotification({
@@ -4031,7 +4076,8 @@ export const markCashPaymentAsSettled = async (req, res) => {
       });
     }
 
-    const company = await Company.findOne({ ownerId: companyUser._id });
+    // Companies have no ownerId field: the admin user carries the companyId.
+    const company = companyUser.companyId ? await Company.findById(companyUser.companyId) : null;
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -4411,29 +4457,38 @@ export const getPaymentForDelivery = async (req, res) => {
  * @route   GET /api/payments/banks
  * @access  Public
  */
+// The bank list rarely changes: cache it for a day, and if Flutterwave is
+// unreachable, keep serving the last list we got.
+let bankListCache = { banks: null, at: 0 };
+const BANK_LIST_TTL_MS = 24 * 60 * 60 * 1000;
+
 export const getNigerianBanks = async (req, res) => {
   try {
-    console.log(" Fetching Nigerian banks from Paystack...");
+    let banks = bankListCache.banks && Date.now() - bankListCache.at < BANK_LIST_TTL_MS ? bankListCache.banks : null;
 
-    const result = await getBankList();
-
-    if (!result.success) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to fetch bank list",
-        error: result.message,
-      });
+    if (!banks) {
+      const result = await getBankList();
+      if (result.success && Array.isArray(result.data) && result.data.length) {
+        // Format for frontend dropdown
+        banks = result.data.map((bank) => ({
+          code: bank.code,
+          name: bank.name,
+          slug: bank.slug,
+          country: bank.country,
+          currency: bank.currency,
+          type: bank.type,
+        }));
+        bankListCache = { banks, at: Date.now() };
+      } else if (bankListCache.banks) {
+        banks = bankListCache.banks; // stale but usable
+      } else {
+        return res.status(503).json({
+          success: false,
+          message: "The bank list is unavailable right now. Please try again shortly.",
+          code: "BANK_LIST_UNAVAILABLE",
+        });
+      }
     }
-
-    // Format for frontend dropdown
-    const banks = result.data.map((bank) => ({
-      code: bank.code,
-      name: bank.name,
-      slug: bank.slug,
-      country: bank.country,
-      currency: bank.currency,
-      type: bank.type,
-    }));
 
     console.log(` Fetched ${banks.length} Nigerian banks`);
 

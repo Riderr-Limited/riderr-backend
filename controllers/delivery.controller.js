@@ -13,6 +13,7 @@ import { startDispatch, dispatchConfig, visibleToDriverFilter, isOfferedTo, onDr
 import { splitAmount } from "../services/payments/payout.service.js";
 import { recordCashCommission, recordCashDelivery } from "../services/payments/commission.service.js";
 import { workBlock } from "../services/payments/commission.service.js";
+import { findCompanyAdminUser } from "../utils/companyUser.js";
 import { markRefundPending, pendingRefundMessage } from "../services/payments/refund.service.js";
 
 // Notify all admin users
@@ -1346,6 +1347,15 @@ export const rejectDelivery = async (req, res) => {
       });
     }
 
+    // Only open requests can be declined (not jobs already taken by a rider).
+    if (delivery.status !== "created" || delivery.driverId) {
+      return res.status(400).json({
+        success: false,
+        message: "This request is no longer open",
+        code: "NOT_OPEN",
+      });
+    }
+
     // Check if already rejected by this driver
     if (delivery.rejectedByDrivers && Array.isArray(delivery.rejectedByDrivers)) {
       const alreadyRejected = delivery.rejectedByDrivers.some(
@@ -1414,6 +1424,26 @@ export const rejectDelivery = async (req, res) => {
 /**
  *  FIXED: Get delivery details with complete driver and company info
  */
+// Who may see or act on a delivery: its customer, the rider assigned to it
+// (or any rider for an open request, when allowOpenToRiders), the company it
+// belongs to, and admins. Before, every rider passed this check.
+const deliveryAccess = async (user, delivery, { allowOpenToRiders = false } = {}) => {
+  const id = (v) => String(v?._id || v || "");
+  const isCustomer = id(delivery.customerId) === String(user._id);
+  const isAdmin = user.role === "admin";
+  const isCompany = user.role === "company_admin" && !!delivery.companyId && id(delivery.companyId) === String(user.companyId);
+  let isDriver = false;
+  if (user.role === "driver") {
+    const me = await Driver.findOne({ userId: user._id }).select("_id").lean();
+    if (me) {
+      isDriver = delivery.driverId
+        ? id(delivery.driverId) === String(me._id)
+        : allowOpenToRiders && delivery.status === "created";
+    }
+  }
+  return { isCustomer, isDriver, isCompany, isAdmin, allowed: isCustomer || isDriver || isCompany || isAdmin };
+};
+
 export const getDeliveryDetails = async (req, res) => {
   try {
     const user = req.user;
@@ -1430,11 +1460,9 @@ export const getDeliveryDetails = async (req, res) => {
       });
     }
 
-    const isCustomer = user._id.toString() === delivery.customerId._id.toString();
-    const isDriver = user.role === "driver" && delivery.driverId;
-    const isAdmin = user.role === "admin";
+    const { isCustomer, isDriver, isAdmin, allowed } = await deliveryAccess(user, delivery, { allowOpenToRiders: true });
 
-    if (!isCustomer && !isDriver && !isAdmin) {
+    if (!allowed) {
       return res.status(403).json({
         success: false,
         message: "Access denied",
@@ -1466,7 +1494,7 @@ export const trackDelivery = async (req, res) => {
     const { deliveryId } = req.params;
 
     const delivery = await Delivery.findById(deliveryId)
-      .select("status pickup dropoff driverId driverDetails companyDetails customerId estimatedPickupTime recipientName recipientPhone fare createdAt assignedAt pickedUpAt deliveredAt")
+      .select("status pickup dropoff driverId driverDetails companyId companyDetails customerId estimatedPickupTime recipientName recipientPhone fare createdAt assignedAt pickedUpAt deliveredAt")
       .lean();
 
     if (!delivery) {
@@ -1476,11 +1504,9 @@ export const trackDelivery = async (req, res) => {
       });
     }
 
-    const isCustomer = user._id.toString() === delivery.customerId.toString();
-    const isDriver = user.role === "driver";
-    const isAdmin = user.role === "admin";
+    const { isCustomer, isDriver, isAdmin, allowed } = await deliveryAccess(user, delivery);
 
-    if (!isCustomer && !isDriver && !isAdmin) {
+    if (!allowed) {
       return res.status(403).json({
         success: false,
         message: "Access denied",
@@ -1570,11 +1596,9 @@ export const cancelDelivery = async (req, res) => {
       });
     }
 
-    const isCustomer = user._id.toString() === delivery.customerId.toString();
-    const isDriver = user.role === "driver" && delivery.driverId;
-    const isAdmin = user.role === "admin";
+    const { isCustomer, isDriver, isAdmin, allowed } = await deliveryAccess(user, delivery);
 
-    if (!isCustomer && !isDriver && !isAdmin) {
+    if (!allowed) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to cancel this delivery",
@@ -1764,7 +1788,7 @@ export const getDeliveryUpdates = async (req, res) => {
     const { deliveryId } = req.params;
 
     const delivery = await Delivery.findById(deliveryId)
-      .select("status pickup dropoff driverId driverDetails tracking estimatedPickupTime pickedUpAt")
+      .select("status pickup dropoff customerId companyId driverId driverDetails tracking estimatedPickupTime pickedUpAt")
       .lean();
 
     if (!delivery) {
@@ -1774,11 +1798,9 @@ export const getDeliveryUpdates = async (req, res) => {
       });
     }
 
-    const isCustomer = user._id.toString() === delivery.customerId.toString();
-    const isDriver = user.role === "driver" && delivery.driverId;
-    const isAdmin = user.role === "admin";
+    const { isCustomer, isDriver, isAdmin, allowed } = await deliveryAccess(user, delivery);
 
-    if (!isCustomer && !isDriver && !isAdmin) {
+    if (!allowed) {
       return res.status(403).json({
         success: false,
         message: "Access denied",
@@ -3247,12 +3269,7 @@ export const confirmCashCollection = async (req, res) => {
     if (delivery.companyId) {
       const company = await Company.findById(delivery.companyId);
       if (company) {
-        const companyUser = await User.findOne({
-          $or: [
-            { _id: company.ownerId },
-            { email: company.email }
-          ]
-        });
+        const companyUser = await findCompanyAdminUser(company._id);
 
         if (companyUser) {
           await sendNotification({

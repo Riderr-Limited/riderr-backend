@@ -41,7 +41,9 @@ export const isOverCommissionLimit = (owed) => {
  * their company. Returns null if OK, otherwise the 403 body to send.
  */
 export const bankAccountBlock = (driver) => {
-  if (!driver || driver.companyId) return null;
+  // Same rule as KYC: only riders onboarded as individuals. (Checking
+  // companyId alone misfires when the company is populated and missing.)
+  if (!driver || driver.onboardingType !== "individual") return null;
   const b = driver.bankDetails || {};
   if (b.accountNumber && b.bankCode && b.verified) return null;
   return {
@@ -54,7 +56,7 @@ export const bankAccountBlock = (driver) => {
 
 /** Filter for riders who can be paid: company riders, or individuals with a verified account. */
 export const payableRiderFilter = () => ({
-  $or: [{ companyId: { $ne: null } }, { "bankDetails.verified": true }]
+  $or: [{ onboardingType: { $ne: "individual" } }, { "bankDetails.verified": true }]
 });
 
 /** Single check used by go-online and accept endpoints. */

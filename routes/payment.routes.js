@@ -37,8 +37,10 @@ import {
   updateCompanyBankAccount,
   deleteCompanyBankAccount,
 } from '../controllers/payment.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // ============================================================
 // 1. WEBHOOK

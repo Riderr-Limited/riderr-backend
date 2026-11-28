@@ -14,8 +14,10 @@ import {
   cancelPartnerDelivery,
   listPartnerCompanies,
 } from "../controllers/partnerDelivery.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 const partnerRateLimit = rateLimit({
   windowMs: 60 * 1000,

@@ -7,8 +7,10 @@ import {
 } from "../controllers/companyRegistration.controller.js";
 import authorize from "../middlewares/authorize.js";
 import authorizeRole from "../middlewares/authorizeRole.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // Admin routes for company approvals
 router.get("/pending", authorize, authorizeRole(["admin"]), getPendingCompanies);

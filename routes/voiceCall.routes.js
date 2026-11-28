@@ -6,8 +6,10 @@ import {
   getCallHistory,
 } from "../controllers/voiceCall.controller.js";
 import { protect } from "../middlewares/auth.middleware.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 router.use(protect);
 

@@ -5,7 +5,7 @@ import Company from "../models/company.models.js";
 import Delivery from "../models/delivery.models.js";
 import Payment from "../models/payments.models.js";
 import SupportTicket from "../models/supportTicket.model.js";
-import Notification from "../models/notificaton.models.js";
+import Notification from "../models/notification.model.js";
 import ChatMessage from "../models/chat.model.js";
 import VoiceCall from "../models/voiceCall.model.js";
 import mongoose from "mongoose";

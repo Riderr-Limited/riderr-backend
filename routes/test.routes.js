@@ -1,7 +1,9 @@
 import express from 'express';
 import { sendVerificationEmail, sendPasswordResetEmail } from '../services/email.service.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 /**
  * @route   POST /api/test/send-email

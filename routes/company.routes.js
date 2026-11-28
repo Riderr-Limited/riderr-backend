@@ -45,8 +45,10 @@ import {
   companyUpdateDeliveryStatus,
   getCompanyDeliveryStats,
 } from '../controllers/companyDelivery.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // Protect all routes - only company admins can access
 router.use(protect);

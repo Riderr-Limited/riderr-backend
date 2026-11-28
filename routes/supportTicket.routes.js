@@ -15,8 +15,10 @@ import {
 } from "../controllers/supportTicket.controller.js";
 import { createSupportTicketValidator } from "../middlewares/supportTicket.validator.js";
 import authenticate from "../middlewares/authenticate.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 /**
  * @swagger

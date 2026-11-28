@@ -17,8 +17,10 @@ import {
   getManualRecordsSummary,
   getDriversForSelect,
 } from "../controllers/companyDashboard.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 router.use(authenticate, authorize("company_admin"));
 

@@ -22,8 +22,10 @@ import companyDashboardRoutes from "./companyDashboard.routes.js";
 import { riderKycRouter, guarantorRouter, adminKycRouter } from "./kyc.routes.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { getActiveCompanies } from "../controllers/company.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 /**
  * @route   GET /api/health

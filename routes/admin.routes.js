@@ -68,8 +68,10 @@ import {
   listPayouts,
   retryPayout,
 } from "../controllers/finance.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // Apply authentication middleware to all routes
 router.use(protect); // Authenticate user (protect is an alias for authenticate)

@@ -1408,6 +1408,10 @@ export const updateProfile = async (req, res) => {
  * @access  Public
  */
 export const testEndpoint = async (req, res) => {
+  // Public health check. Don't reveal mail-server settings in production.
+  if (process.env.NODE_ENV === "production") {
+    return res.status(200).json({ success: true, message: "Auth endpoint is working!", timestamp: new Date().toISOString() });
+  }
   res.status(200).json({
     success: true,
     message: "Auth endpoint is working!",

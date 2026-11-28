@@ -10,8 +10,10 @@ import {
   markConversationRead,
 } from "../controllers/adminChat.controller.js";
 import authenticate from "../middlewares/authenticate.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // User-facing
 router.get("/messages", authenticate, getMessages);

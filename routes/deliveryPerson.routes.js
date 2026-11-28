@@ -8,8 +8,10 @@ import {
   getProfile,
   updateServices
 } from '../controllers/deliveryPerson.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // Apply authentication to all routes
 router.use(authenticate);

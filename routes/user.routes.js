@@ -30,8 +30,10 @@ import {
 } from "../controllers/user.controller.js";
 import  authenticate  from "../middlewares/authenticate.js";
 import { validateUpdateProfile, validateCreateDriver } from "../middlewares/validation.middleware.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // ==================== PUBLIC ROUTES ====================
 /**

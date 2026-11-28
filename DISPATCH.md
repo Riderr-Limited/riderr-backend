@@ -182,6 +182,18 @@ Once a rider owes more than `COMMISSION_OWED_LIMIT` (default ₦5,000; `0` turns
 - **Confirmation:** check `GET /api/payments/status/:reference`, or `GET /api/driver/commission`. However the payment is confirmed (webhook, OTP, PIN), it's applied once, and the rider is notified.
 - **Overpayment:** if the rider pays more than they still owe (for example, a payout deduction cleared some of it in the meantime), the extra goes to the manual refund queue.
 
+## Individual riders must add a bank account
+
+Individual riders are paid straight to their own bank account, so they can't go online, accept jobs, or be offered jobs until they've added and verified one with `PUT /api/driver/bank-account`. The error code is `BANK_ACCOUNT_REQUIRED`. This comes after KYC: `GET /api/kyc/status` returns `nextStep: "add_bank_account"` and `canWork: false` until it's done. Company riders are paid through their company and aren't affected.
+
+## Bank transfers never show a placeholder account
+
+If Flutterwave can't create a one-off account, customers are shown Riderr's own account only when `PLATFORM_BANK_NAME`, `PLATFORM_ACCOUNT_NUMBER` and `PLATFORM_ACCOUNT_NAME` are all set to a real account. Otherwise they get `503 TRANSFER_UNAVAILABLE` ("please pay by card"). Placeholder numbers such as `1012345678` are refused. Customers are also no longer sent to the delivery company's own account, which skipped the commission and paid the company twice.
+
+## Payments are checked against the amount actually paid
+
+The Flutterwave webhook no longer trusts the request body alone. It looks the transaction up with Flutterwave and only marks the payment paid if the full amount was paid in naira. Manual verification (`GET /api/payments/verify/:reference`) does the same check. An underpayment is recorded in `metadata.amountMismatch`, and the job stays unpaid.
+
 ## Payouts are safe against double payment
 
 Delivery settlement now records the customer's confirmation first, and only then sends money. Every payout (rides and deliveries) goes through one function, which claims the payment before transferring. So the money can't be sent twice, even if two requests arrive together or something fails after the transfer.

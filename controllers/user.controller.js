@@ -2,6 +2,7 @@ import User from "../models/user.models.js";
 import Driver from "../models/riders.models.js";
 import Company from "../models/company.models.js";
 import Delivery from "../models/delivery.models.js";
+import Notification from "../models/notification.model.js";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { validationResult } from "express-validator";
@@ -695,12 +696,14 @@ export const getUserActivity = async (req, res) => {
       query.type = type;
     }
 
+    // There is no separate activity-log collection: the account's activity is
+    // the events it was notified about (jobs, payments, verification...).
     const [activities, total] = await Promise.all([
-      ActivityLog.find(query)
+      Notification.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
-      ActivityLog.countDocuments(query)
+      Notification.countDocuments(query)
     ]);
 
     res.status(200).json({

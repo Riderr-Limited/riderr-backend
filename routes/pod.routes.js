@@ -13,8 +13,10 @@ import {
   getPODDetails,
   listPODOrders,
 } from "../controllers/pod.controller.js";
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // All routes require authentication
 router.use(authenticate);

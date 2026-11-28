@@ -19,8 +19,10 @@ import {
   addTip,
   getNearbyDrivers
 } from '../controllers/newDelivery.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // ========== CREATE DELIVERY ==========
 

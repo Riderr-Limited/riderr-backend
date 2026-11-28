@@ -1,5 +1,6 @@
 import Driver from "../models/riders.models.js";
 import { recordCashDelivery } from "../services/payments/commission.service.js";
+import { getFileUrl, deleteFile } from "../middlewares/upload.middleware.js";
 import { workBlock } from "../services/payments/commission.service.js";
 import User from "../models/user.models.js";
 import Delivery from "../models/delivery.models.js";
@@ -3176,8 +3177,9 @@ export const rejectDelivery = async (req, res) => {
     }
 
     //  FIX: Store rejection in the delivery document
-    const delivery = await Delivery.findByIdAndUpdate(
-      deliveryId,
+    // Only open requests can be declined (not jobs already taken by a rider).
+    const delivery = await Delivery.findOneAndUpdate(
+      { _id: deliveryId, status: "created", $or: [{ driverId: null }, { driverId: { $exists: false } }] },
       {
         $push: {
           rejectedByDrivers: {
@@ -3195,7 +3197,7 @@ export const rejectDelivery = async (req, res) => {
     if (!delivery) {
       return res.status(404).json({
         success: false,
-        message: "Delivery not found",
+        message: "Delivery not found, or it's no longer open",
       });
     }
 

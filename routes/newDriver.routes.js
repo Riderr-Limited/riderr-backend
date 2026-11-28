@@ -18,8 +18,10 @@ import {
   suspendDriver,
   getDriverDeliveries
 } from '../controllers/newDriver.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 // ========== DRIVER STATUS & LOCATION ==========
 

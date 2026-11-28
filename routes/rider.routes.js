@@ -1,6 +1,6 @@
 // routes/rider.routes.js
 import express from 'express';
-import authorize from '../middlewares/authorize.js'; // Default import
+import { authenticate } from '../middlewares/auth.middleware.js';
 import {
   getNearbyRiders,
   getNearbyDrivers,
@@ -10,11 +10,14 @@ import {
   toggleDriverOnlineStatus,
   getRiderProfile
 } from '../controllers/rider.controller.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
-// Apply authentication to all routes
-router.use(authorize);
+// Apply authentication to all routes. (This used to be `router.use(authorize)`:
+// authorize is a factory, so every request hung and no login was checked.)
+router.use(authenticate);
 
 // ================== PROFILE ROUTES ==================
 router.get('/profile', getRiderProfile);

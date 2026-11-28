@@ -20,8 +20,10 @@ import {
   getRideQuote
 } from '../controllers/ride.controller.js';
 import { authenticate, authorize } from '../middlewares/auth.middleware.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 /**
  * @swagger

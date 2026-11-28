@@ -29,8 +29,10 @@ import { protect, authorize } from '../middlewares/auth.middleware.js';
 import { getMyBankAccount, setMyBankAccount } from '../controllers/payout.controller.js';
 import { getMyCommission, payMyCommission } from '../controllers/finance.controller.js';
 import upload, { handleUploadError } from '../middlewares/upload.middleware.js';
+import { validateObjectIds } from "../middlewares/validateObjectIds.js";
 
 const router = express.Router();
+validateObjectIds(router);
 
 router.use(protect);
 router.use(authorize('driver'));
